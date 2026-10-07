@@ -1,13 +1,7 @@
 # CI for nettls on GitHub. Runs on every push to main and on pull requests.
 #
-# WHERE `krypto` COMES FROM. The manifest carries both a path to a sibling
-# checkout and a registry entry, because that is how the two crates are developed
-# together. Neither is right for a runner, so each CI resolves the dependency from
-# the registry it can actually reach: this one from crates.io, the in-house one
-# from the private registry. That is not two different crates — it is the same
-# crate seen from two sides, and both answers are worth having. The private
-# registry is where a release can be tested before it goes anywhere; crates.io is
-# what everyone else will actually get.
+# WHERE `krypto` COMES FROM. crates.io, as the manifest says — the same crate
+# everyone else gets, so CI builds the checkout exactly as it is.
 #
 # The jobs run in a container rather than on the runner directly, for one reason:
 # key material is held in `krypto`'s locked buffers, which mlock their pages and
@@ -46,13 +40,6 @@ jobs:
       options: --ulimit memlock=-1:-1
     steps:
       - uses: actions/checkout@v7
-
-      # `cargo fetch` re-resolves conservatively: only the krypto entry changes
-      # source, everything else stays pinned — which `--locked` then guards.
-      - name: Resolve krypto from crates.io
-        run: |
-          sed -i 's|path = "\.\./krypto", ||' Cargo.toml
-          cargo fetch
 
       - name: Add clippy + rustfmt
         run: rustup component add clippy rustfmt
@@ -118,11 +105,9 @@ jobs:
         run: /tmp/venv/bin/python -m pytest python/test_ring.py -q
 
       # Finding a packaging problem here is cheap; finding it after a publish is
-      # not, since a version number can never be reused. `--allow-dirty` is
-      # required because the step above edits Cargo.toml by our own hand — the
-      # dirt is known and bounded to exactly that.
+      # not, since a version number can never be reused.
       - name: Package check
-        run: cargo package --locked --allow-dirty
+        run: cargo package --locked
 
   # Dependency audit: RustSec advisories, license allowlist, bans and source
   # control. The bans matter more here than in most crates — a second crypto
@@ -142,9 +127,6 @@ jobs:
             https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz
           tar -xzf /tmp/cd.tgz -C /tmp --strip-components=1
           install /tmp/cargo-deny /usr/local/bin/
-
-      - name: Resolve krypto from crates.io
-        run: sed -i 's|path = "\.\./krypto", ||' Cargo.toml
 
       - name: cargo deny check
         run: cargo deny check

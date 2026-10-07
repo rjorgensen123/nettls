@@ -499,6 +499,8 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 [[package]]
 name = "krypto"
 version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ffd5fe7473603e1d99890e0af529cb588f87b68c00ceaeb7ecbb04d013b2f726"
 dependencies = [
  "aegis",
  "aes-gcm",
@@ -559,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "nettls"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "aegis",
  "krypto",

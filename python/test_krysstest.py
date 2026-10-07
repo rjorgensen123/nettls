@@ -204,49 +204,24 @@ fn main() {
 
 
 def _krypto_dep() -> str:
-    """Path dep where the sibling directory exists, otherwise registry.
+    """nettls's own krypto dependency line, copied from its manifest.
 
-    Mirrors exactly what CI does with `nettls`'s own manifest (the `sed` that
-    fjerner path-en). Uten dette bygget broen mot
-    `{ROT}/../krypto`, which only exists on a developer machine — in CI only
-    `nettls` is checked out, and the cross-test failed with «No such file or
-    directory» after everything else had passed.
+    **The bridge must use the same krypto as nettls**, not merely one that is
+    available: if the two resolve it differently, two DIFFERENT krypto crates
+    end up in the same graph. `krypto::SecretString` from one is then not the
+    same type as from the other, and the bridge does not compile.
 
-    **And the choice must follow nettls's own**, not merely be available: if
-    the crate uses path-krypto while the bridge uses registry-krypto, two
-    DIFFERENT krypto crates end up in the same graph. `krypto::SecretString`
-    from one is then not the same type as from the other, and the bridge does
-    not compile.
+    So the line is copied, not written down here. A hardcoded version drifts
+    the first time nettls bumps its krypto dependency — that has happened: the
+    bridge said 0.5 while nettls 0.8.2 required 0.6, a failure only CI could
+    see. A guessed source (a sibling checkout, a registry) is the same mistake
+    one level down, and that has happened too.
     """
-    sosken = ROT.parent / "krypto"
-    if sosken.exists():
-        return f'krypto = {{ path = "{sosken}" }}'
-    # CI (no sibling): follow nettls's OWN dependency line, read from its
-    # manifest. BOTH the version and the registry are read rather than written
-    # down here, and both for the same reason.
-    #
-    # A hardcoded version drifts the first time nettls bumps its krypto
-    # dependency, and then TWO incompatible krypto crates land in the graph —
-    # that has happened: the bridge said 0.5 while nettls 0.8.2 required 0.6, a
-    # failure only CI could see.
-    #
-    # A hardcoded registry is the same mistake one level down, and it has also
-    # happened. A CI that resolves krypto from a public registry strips
-    # `registry = ...` from the manifest; a bridge that puts it back fails to
-    # PARSE — «registry index was not found in any configuration» — before a
-    # single test runs.
     manifest = (ROT / "Cargo.toml").read_text()
     line = re.search(r"^krypto\s*=.*$", manifest, re.M)
     if not line:
         raise AssertionError("could not find nettls's krypto dependency in Cargo.toml")
-    version = re.search(r'version\s*=\s*"([^"]+)"', line.group(0))
-    if not version:
-        raise AssertionError("could not read nettls's krypto version from Cargo.toml")
-    parts = [f'version = "{version.group(1)}"']
-    registry = re.search(r'registry\s*=\s*"([^"]+)"', line.group(0))
-    if registry:
-        parts.append(f'registry = "{registry.group(1)}"')
-    return "krypto = { " + ", ".join(parts) + " }"
+    return line.group(0)
 
 
 def _bridge_dir() -> Path:

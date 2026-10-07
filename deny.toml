@@ -25,10 +25,9 @@ deny = [{ name = "aws-lc-rs" }, { name = "aws-lc-sys" }, { name = "rsa" }]
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-# crates.io only. A private registry is infrastructure, and infrastructure does
-# not belong in a file that ships with the crate — an in-house CI appends its own
-# index here at runtime, from a secret, so the address lives where addresses
-# belong and not in a public repository.
+# crates.io only. Every dependency, krypto included, comes from there, and a
+# private registry is infrastructure that does not belong in a file that ships
+# with the crate.
 allow-registry = [
     "https://github.com/rust-lang/crates.io-index",
 ]

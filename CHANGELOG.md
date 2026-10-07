@@ -8,6 +8,32 @@ and the project follows [Semantic Versioning](https://semver.org/).
 > marked with the version it applies from, so a reader sees what holds for their version
 > without guessing.
 
+## [0.9.1] — 2026-10-07
+
+No functional change. Not one public signature moved; the round is about what
+someone who builds or downloads the crate meets.
+
+### Changed — `krypto` comes from crates.io, and only from there
+
+The manifest named krypto by a path to a sibling checkout, and both CI files
+stripped that path again before building. The dependency is now `krypto = "0.7"`,
+as published: no build depends on a local checkout, CI builds the tree exactly as
+it is checked out — so `cargo package` runs without `--allow-dirty` — and the
+cross-test bridge copies nettls's own dependency line instead of guessing where
+krypto lives. Building against a local krypto checkout is a command-line patch,
+shown next to the dependency in `Cargo.toml`.
+
+### Changed — CI configuration is no longer packaged
+
+`exclude` keeps `.gitea/` and `.github/` out of the published crate, and
+`publish = ["crates-io"]` refuses any other destination.
+
+### Fixed — stale words about a private registry
+
+`repository` pointed at `…/NetTLS`; the repository is `nettls`. Comments in
+`Cargo.toml`, `deny.toml` and both CI files still described a private registry
+the crate no longer uses, and one of them named an internal document.
+
 ## [0.9.0] — 2026-09-21 (the repository starts over)
 
 ### Note — the history starts here, on purpose

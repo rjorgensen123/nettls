@@ -24,9 +24,9 @@
 #      the cross-test (do they agree with EACH OTHER?) and the ring test (does it work
 #      when three nodes actually talk to each other over TLS?).
 #
-# PATH DEP (since 0.3.0): nettls consumes `krypto` from the Gitea registry. Up to 0.2.0
-# the crate was self-contained, and this file said so — right up until §6 gave it a
-# dependency on krypto's argon2id KDF and FAFN blob (SIKKERHETSMODELL §8.4). The comment
+# KRYPTO (since 0.3.0): nettls consumes `krypto` from crates.io, as the manifest says.
+# Up to 0.2.0 the crate was self-contained, and this file said so — right up until §6
+# gave it a dependency on krypto's argon2id KDF and FAFN blob, by design. The comment
 # about "no path deps" stayed after its premise broke, and CI failed on the first push.
 #
 # Lesson: a CI file that states a PREREQUISITE must be corrected in the same commit as
@@ -61,15 +61,6 @@ jobs:
           git -c http.extraheader="Authorization: basic ${AUTH}" \
               fetch -q --depth 1 origin "${GITHUB_SHA}"
           git checkout -q --detach FETCH_HEAD
-
-      # Path dep → pure registry dep (the sibling directory does not exist in CI).
-      # `cargo fetch` re-resolves conservatively: only the krypto entry in the lock
-      # gets a registry source; everything else stays pinned (and is guarded by
-      # --locked).
-      - name: Registry dep instead of path dep
-        run: |
-          sed -i 's|path = "\.\./krypto", ||' Cargo.toml
-          cargo fetch
 
       - name: Add clippy + rustfmt
         run: rustup component add clippy rustfmt
@@ -166,27 +157,11 @@ jobs:
       - name: Ring test (5 configurations + error injection)
         run: /tmp/venv/bin/python -m pytest python/test_ring.py -q
 
-      # The crate is published to the Gitea Cargo registry. Discovering a packaging
-      # problem here is cheap; discovering it after a `cargo publish` is not — a
-      # version number can never be reused.
-      #
-      # `--allow-dirty` MUST be included, and the reason is worth writing down.
-      #
-      # This used to say the flag was omitted "on purpose: the checkout above is
-      # always clean". That premise fell when the crate got its first dependency
-      # and we added the `sed` step: CI now changes Cargo.toml itself, and
-      # `cargo fetch` updates Cargo.lock. The tree IS dirty — by our own hand —
-      # and the step failed with «2 files in the working directory contain
-      # changes».
-      #
-      # The dirt is thus known and bounded: exactly the two files the sed step
-      # touches. The flag hides nothing we have not done ourselves.
-      #
-      # Nor can the step be moved BEFORE the sed: on a clean checkout the sibling
-      # directory `../krypto` does not exist, and cargo fails already while
-      # reading the manifest — that was the failure in run #13.
+      # The crate is published to crates.io. Discovering a packaging problem here
+      # is cheap; discovering it after a `cargo publish` is not — a version number
+      # can never be reused. No `--allow-dirty`: nothing in CI edits the tree.
       - name: Package check (as before publishing)
-        run: cargo package --locked --allow-dirty
+        run: cargo package --locked
 
   # Dependency audit (module round 0.8.2): RustSec advisories, license
   # allowlist, the aws-lc/rsa bans (the provider trap is this crate's whole
@@ -205,12 +180,6 @@ jobs:
           git -c http.extraheader="Authorization: basic ${AUTH}" \
               fetch -q --depth 1 origin "${GITHUB_SHA}"
           git checkout -q --detach FETCH_HEAD
-
-      # Same path-strip as build-test — the sibling dir does not exist in CI.
-      - name: Registry deps instead of path deps
-        run: |
-          sed -i 's|path = "\.\./krypto", ||' Cargo.toml
-          cargo fetch
 
       - name: Fetch cargo-deny
         run: |

@@ -1,14 +1,19 @@
 [package]
 name = "nettls"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2021"
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"
 description = "Shared TLS building block: self-signed certificates with SANs, PEM in and out, SHA-256 fingerprint pinning, and asynchronous certificate rotation with two-signature continuity."
-repository = "https://github.com/rjorgensen123/NetTLS"
+repository = "https://github.com/rjorgensen123/nettls"
 authors = ["Roger Jorgensen <rogerj@gmail.com>"]
 keywords = ["tls", "rustls", "pinning", "certificate", "rotation"]
 categories = ["cryptography", "network-programming", "authentication"]
+# CI configuration is not part of the crate, so it is never packaged.
+exclude = [".gitea/", ".github/"]
+# The crate is published on crates.io, and only there: the list refuses any other
+# destination outright.
+publish = ["crates-io"]
 
 [dependencies]
 # ── THE PROVIDER TRAP (read this before touching a single version line) ─────── #
@@ -53,18 +58,22 @@ x509-parser = "0.18.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Locking local state at rest (SIKKERHETSMODELL §8.4): argon2id as the KDF and
-# the FAFN blob format. A second at-rest format would mean two things to keep
-# correct, and one of them would never get reviewed.
-# The path entry is for local development, where both crates are checked out
-# side by side. The version and registry are what a publish resolves against.
+# Locking local state at rest: argon2id as the KDF and the FAFN blob format,
+# both from krypto, by design. A second at-rest format would mean two things to
+# keep correct, and one of them would never get reviewed.
+# It comes from crates.io, as published: no `path`, so no build depends on a local
+# checkout, and no `registry`, so the packaged crate names no other source. To
+# build against a local krypto checkout, patch it in from the command line:
+#     cargo test --config 'patch.crates-io.krypto.path="../krypto"'
+# That rewrites Cargo.lock to the local copy; restore the lockfile before a
+# commit (CI's `--locked` refuses it otherwise).
 # Since 0.5 krypto also carries ALL the primitives this crate used to pull in
 # itself: signatures (Ed25519 / ECDSA P-256), X25519 key agreement, canonical
 # hex, SHA-256, ct_eq and CSPRNG bytes. That is why there is no `ring` and no
 # `x25519-dalek` dependency here anymore — nettls implements no primitive of
 # its own, it owns formats (NETENV, the lockbox file, rotation proofs) and the
 # X.509/TLS domain.
-krypto = { path = "../krypto", version = "0.7" }
+krypto = "0.7"
 
 # AEGIS-256 as a TLS 1.3 record AEAD — OUR OWN suite, a deliberate deviation
 # (0.8.3, see `src/aegis.rs`): rustls has no AEGIS and no 32-byte IV, so the
@@ -86,7 +95,7 @@ time = { version = "0.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # The tests need SecretString to set a password on the Announcer.
-krypto = { path = "../krypto", version = "0.7" }
+krypto = "0.7"
 # Only for the smoke test: a real TLS handshake over a real TCP socket.
 # Note `default-features = false` here too — tokio-rustls' default is
 # ["logging", "tls12", "aws_lc_rs"], i.e. yet another way into the provider
