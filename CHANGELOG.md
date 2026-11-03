@@ -34,6 +34,15 @@ shown next to the dependency in `Cargo.toml`.
 `Cargo.toml`, `deny.toml` and both CI files still described a private registry
 the crate no longer uses, and one of them named an internal document.
 
+### Changed — the lockfile takes the fixed rustls, rustls-webpki and tokio
+
+`Cargo.lock` moves rustls to 0.23.46 (RUSTSEC-2026-0346, RUSTSEC-2026-0347,
+RUSTSEC-2026-0348, RUSTSEC-2026-0349), rustls-webpki to 0.103.16 (RUSTSEC-2026-0382)
+and tokio, which only the tests use, to 1.54.1 (RUSTSEC-2026-0386). No requirement in
+`Cargo.toml` changes; a crate that depends on nettls resolves these versions itself.
+`deny.toml` ignores RUSTSEC-2026-0387: crypto-bigint 0.5.5 arrives only through
+krypto 0.7.0, and the fix is krypto's move to p256 0.14.
+
 ## [0.9.0] — 2026-09-21 (the repository starts over)
 
 ### Note — the history starts here, on purpose

@@ -4,6 +4,11 @@
 
 [advisories]
 yanked = "deny"
+ignore = [
+    # crypto-bigint 0.5.5 arrives only through krypto 0.7.0 (p256 0.13). The fix is
+    # krypto's move to p256 0.14, which nettls takes with krypto 0.8.
+    { id = "RUSTSEC-2026-0387", reason = "fixed by the move to krypto 0.8" },
+]
 
 [licenses]
 allow = [
