@@ -5,8 +5,10 @@
 #
 # The jobs run in a container rather than on the runner directly, for one reason:
 # key material is held in `krypto`'s locked buffers, which mlock their pages and
-# fail closed when they cannot. With the default memlock limit those tests fail
-# for the wrong reason.
+# fail closed when they cannot. Each secret holds at least one whole locked page,
+# and the test suite, running its tests in parallel, locks a little over 100 KiB
+# at its peak. The test job sets the memlock limit to 1 MiB: enough with room to
+# spare, and still a limit.
 #
 # Two things in this crate make a silent regression expensive, and the whole point
 # of running CI is that the tests covering them actually get run:
@@ -37,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: rust:1-bookworm
-      options: --ulimit memlock=-1:-1
+      options: --ulimit memlock=1048576:1048576
     steps:
       - uses: actions/checkout@v7
 

@@ -47,8 +47,13 @@ env:
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    # krypto's locked buffers mlock their pages and fail closed when they cannot.
+    # Each secret holds at least one whole locked page, and the test suite, running
+    # its tests in parallel, locks a little over 100 KiB at its peak. 1 MiB is
+    # enough with room to spare, and still a limit.
     container:
       image: rust:1-bookworm
+      options: --ulimit memlock=1048576:1048576
     steps:
       # Checkout without actions/checkout (which is fetched from github). Clone directly
       # from our own Gitea with the job token. rust:1-bookworm has git + base64.

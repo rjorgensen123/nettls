@@ -8,6 +8,25 @@ and the project follows [Semantic Versioning](https://semver.org/).
 > marked with the version it applies from, so a reader sees what holds for their version
 > without guessing.
 
+## [0.10.0] — krypto 0.8, and fixes for the reported bugs
+
+### Changed — krypto 0.8 *(2026-11-03)*
+
+nettls builds against krypto 0.8 (`krypto = "0.8"`), the line on the new
+RustCrypto generation: p256 0.14, sha2 0.11, ed25519-dalek and x25519-dalek 3,
+getrandom 0.4. Every krypto item nettls uses keeps its signature, so no code in
+nettls changes. The krypto types in nettls's API (`SecretBuf`, `SecretString`,
+`Alg`) are krypto 0.8's, so a crate that hands them to nettls uses krypto 0.8 too.
+crypto-bigint 0.5.5 leaves the lockfile with p256 0.13, and `deny.toml` no longer
+ignores RUSTSEC-2026-0387.
+
+### Changed — CI runs the tests under a real memlock limit *(2026-11-03)*
+
+In krypto 0.8 each secret holds at least one whole locked page, and the test
+suite, running its tests in parallel, locks a little over 100 KiB at its peak. The
+test job in both CI files runs in a container with a memlock limit of 1 MiB. The
+GitHub file set no limit before, and the Gitea file used the runner's default.
+
 ## [0.9.2] — 2026-11-03
 
 No functional change. Not one public signature moved; the crate is brought onto

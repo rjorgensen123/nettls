@@ -19,7 +19,7 @@ continuity, signed receipts, generation pairs and an operator anchor.
   the version it applies from, so the crate can change without a reader having to guess
 - **License:** MIT/Apache-2.0 dual
 - **Dependencies:** rustls 0.23 (ring provider), rcgen 0.14, rustls-pki-types, x509-parser,
-  serde/serde_json, time, aegis, zeroize, krypto 0.7. **No `axum`, no async runtime, no logging** —
+  serde/serde_json, time, aegis, zeroize, krypto 0.8. **No `axum`, no async runtime, no logging** —
   the crate returns `ServerConfig`/`ClientConfig` and facts; the consumer binds and logs.
   **No direct `ring` or `x25519-dalek`** since 0.8.0 — every primitive is krypto's.
 - **In use:** already carrying traffic in more than one application.
