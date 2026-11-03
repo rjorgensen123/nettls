@@ -33,6 +33,11 @@ Files are created 0600 and only if nothing is there; a leftover temp file or a
 symlink is removed first. The temp file is removed on error, the directory is
 synced after the rename, and key directories are created 0700.
 
+### Fixed — `next` is promoted only after the key is proven *(2026-11-03)*
+
+`Trust` promoted `next` as soon as the peer presented it. It now waits until the
+handshake signature holds, so the public `next` without its key changes nothing.
+
 ## [0.9.2] — 2026-11-03
 
 No functional change. Not one public signature moved; the crate is brought onto

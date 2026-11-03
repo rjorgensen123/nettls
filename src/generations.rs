@@ -29,6 +29,9 @@
 //! the peer present the new certificate — not at a point in time, and not on
 //! a message. The observation is the trigger, and it requires no coordination
 //! between the parties at all. That is what makes the rotation asynchronous.
+//!
+//! `next` is public, so seeing it is not enough: [`Trust`] promotes only after
+//! the handshake signature holds *(0.10.0)*.
 
 use crate::announcement::Announcement;
 use crate::error::TlsError;
@@ -527,6 +530,19 @@ struct GenerationVerifier {
     provider: Arc<CryptoProvider>,
 }
 
+impl GenerationVerifier {
+    /// Promotes `next` once the handshake signature holds (§6.7, 0.10.0).
+    fn observed_after_proof(&self, cert: &CertificateDer<'_>) -> Result<(), Error> {
+        let fp = krypto::hex::encode(&sha256(cert.as_ref()));
+        // A poisoned lock fails closed.
+        let mut g = self.state.write().map_err(|_| {
+            Error::InvalidCertificate(CertificateError::ApplicationVerificationFailure)
+        })?;
+        g.observed(&fp);
+        Ok(())
+    }
+}
+
 impl ServerCertVerifier for GenerationVerifier {
     fn verify_server_cert(
         &self,
@@ -538,10 +554,9 @@ impl ServerCertVerifier for GenerationVerifier {
     ) -> Result<ServerCertVerified, Error> {
         let fp = krypto::hex::encode(&sha256(end_entity.as_ref()));
 
-        // One write-lock grab: we may have to promote, and taking a read lock
-        // first and then a write lock would open a window where two handshakes
-        // see different state.
-        let mut g = match self.state.write() {
+        // Read only: rustls calls this before the signature, so nothing is
+        // promoted here.
+        let g = match self.state.read() {
             Ok(g) => g,
             // A poisoned lock is a bug — but it must never turn into "accept
             // everything". Fail closed here too.
@@ -552,11 +567,11 @@ impl ServerCertVerifier for GenerationVerifier {
             }
         };
 
-        let godtatt = g
+        let accepted = g
             .accepted_in_handshake()
             .iter()
             .any(|x| x.fingerprint() == fp);
-        if !godtatt {
+        if !accepted {
             // The fingerprints are deliberately left out of the error: the
             // client knows what it expected, and what it saw belongs in a log
             // call at the consumer — not in a TLS alert that goes out on the
@@ -565,11 +580,6 @@ impl ServerCertVerifier for GenerationVerifier {
                 CertificateError::ApplicationVerificationFailure,
             ));
         }
-
-        // **The observation is the promotion** (§6.7). If we see `next` on the
-        // wire, the peer has switched — and then it is this moment, not a
-        // point in time or a message, that moves the state.
-        g.observed(&fp);
 
         Ok(ServerCertVerified::assertion())
     }
@@ -580,12 +590,14 @@ impl ServerCertVerifier for GenerationVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, Error> {
-        rustls::crypto::verify_tls12_signature(
+        let valid = rustls::crypto::verify_tls12_signature(
             message,
             cert,
             dss,
             &self.provider.signature_verification_algorithms,
-        )
+        )?;
+        self.observed_after_proof(cert)?;
+        Ok(valid)
     }
 
     fn verify_tls13_signature(
@@ -594,12 +606,14 @@ impl ServerCertVerifier for GenerationVerifier {
         cert: &CertificateDer<'_>,
         dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, Error> {
-        rustls::crypto::verify_tls13_signature(
+        let valid = rustls::crypto::verify_tls13_signature(
             message,
             cert,
             dss,
             &self.provider.signature_verification_algorithms,
-        )
+        )?;
+        self.observed_after_proof(cert)?;
+        Ok(valid)
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {

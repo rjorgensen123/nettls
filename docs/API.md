@@ -324,6 +324,8 @@ impl Trust {
 }
 ```
 
+The verifier promotes `next` only after the handshake signature holds *(0.10.0)*.
+
 ---
 
 ## `announcement` — "here is my next certificate"

@@ -708,3 +708,78 @@ async fn the_gate_postpones_the_switch_without_side_effects() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A server with `cert`'s certificate and `key`'s private key.
+fn cfg_with_foreign_key(cert: &Gen, key: &Gen) -> Arc<rustls::ServerConfig> {
+    #[derive(Debug)]
+    struct Fixed(Arc<rustls::sign::CertifiedKey>);
+    impl rustls::server::ResolvesServerCert for Fixed {
+        fn resolve(
+            &self,
+            _: rustls::server::ClientHello<'_>,
+        ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+            Some(self.0.clone())
+        }
+    }
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let key_der = key
+        .pkcs8
+        .expose(|k| rustls::pki_types::PrivateKeyDer::Pkcs8(k.to_vec().into()));
+    let signer = provider
+        .key_provider
+        .load_private_key(key_der)
+        .expect("signing key");
+    // `CertifiedKey::new` does not check that key and certificate match.
+    let ck = rustls::sign::CertifiedKey::new(vec![cert.material.cert_chain()[0].clone()], signer);
+    Arc::new(
+        rustls::ServerConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
+            .unwrap()
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(Fixed(Arc::new(ck)))),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn next_without_its_key_does_not_promote() {
+    // `next` is public; presenting it without its key must change nothing.
+    nettls::install_crypto_provider();
+
+    let c0 = generation();
+    let c1 = generation();
+    let stranger = generation();
+    let port = ledig_port();
+
+    let trust = Trust::from_approval(Generation::from_der(
+        c0.material.cert_chain()[0].as_ref().to_vec(),
+    ));
+    let k = Announcement::new("gateway", None, (&c0.fp_bar(), &c0.pkcs8), &c1.pem, 1).unwrap();
+    trust
+        .receive(&k)
+        .expect("the announcement must be accepted");
+
+    let s = server(port, cfg_with_foreign_key(&c1, &stranger)).await;
+    assert!(
+        connect_to(&trust, port).await.is_err(),
+        "a handshake without the key must fail"
+    );
+    s.abort();
+
+    let g = trust.state().unwrap();
+    assert_eq!(
+        g.current().fingerprint(),
+        c0.fp_bar(),
+        "the state moved without proof of the key"
+    );
+    assert_eq!(g.next().unwrap().fingerprint(), c1.fp_bar());
+    assert!(g.previous().is_none());
+
+    // The real successor still gets through, and promotes.
+    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+    let s1 = server(port, c1.cfg()).await;
+    connect_to(&trust, port)
+        .await
+        .expect("the real successor must get through");
+    assert_eq!(trust.state().unwrap().current().fingerprint(), c1.fp_bar());
+    s1.abort();
+}
