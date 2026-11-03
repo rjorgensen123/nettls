@@ -1,8 +1,8 @@
 [package]
 name = "nettls"
-version = "0.9.1"
-edition = "2021"
-rust-version = "1.75"
+version = "0.9.2"
+edition = "2024"
+rust-version = "1.99.1"
 license = "MIT OR Apache-2.0"
 description = "Shared TLS building block: self-signed certificates with SANs, PEM in and out, SHA-256 fingerprint pinning, and asynchronous certificate rotation with two-signature continuity."
 repository = "https://github.com/rjorgensen123/nettls"

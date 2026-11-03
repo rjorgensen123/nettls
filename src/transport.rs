@@ -24,9 +24,9 @@
 
 use std::sync::Arc;
 
-use rustls::crypto::ring::cipher_suite as ring;
-use rustls::crypto::CryptoProvider;
 use rustls::SupportedCipherSuite;
+use rustls::crypto::CryptoProvider;
+use rustls::crypto::ring::cipher_suite as ring;
 
 use crate::error::TlsError;
 
@@ -206,8 +206,9 @@ mod tests {
         .unwrap();
         let ours = p.provider().cipher_suites.clone();
         assert!(ours.len() < all);
-        assert!(ours
-            .iter()
-            .all(|s| !format!("{:?}", s.suite()).contains("AES_128")));
+        assert!(
+            ours.iter()
+                .all(|s| !format!("{:?}", s.suite()).contains("AES_128"))
+        );
     }
 }

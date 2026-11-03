@@ -379,12 +379,13 @@ mod tester {
             Announcement::new("gateway", None, (&fp0, &pkcs8), &pem1, 2).unwrap(),
         ));
         let r = register();
-        assert!(a
-            .verify(&Context {
+        assert!(
+            a.verify(&Context {
                 keys: &r,
                 previous_der: None,
                 current_der: None,
             })
-            .is_err());
+            .is_err()
+        );
     }
 }

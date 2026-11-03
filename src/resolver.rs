@@ -37,9 +37,9 @@
 
 use std::sync::{Arc, RwLock};
 
+use rustls::ServerConfig;
 use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
-use rustls::ServerConfig;
 
 use crate::error::TlsError;
 use crate::material::TlsMaterial;

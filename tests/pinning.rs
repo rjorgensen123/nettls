@@ -5,7 +5,7 @@
 //! `smoke_tls.rs`. What is tested here is only that the config builds.
 
 use nettls::{
-    pinned_client_config, pinned_client_config_with_alpn, CertSource, SelfSignedParams, TlsMaterial,
+    CertSource, SelfSignedParams, TlsMaterial, pinned_client_config, pinned_client_config_with_alpn,
 };
 
 fn en_fingerprint() -> String {

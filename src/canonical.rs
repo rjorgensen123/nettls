@@ -140,13 +140,13 @@ pub fn algsupport_v1(component: &str, algs: &str, timestamp: i64) -> Result<Vec<
                 "algs: unknown token {token:?} — known: aegis256, xchacha20, aes256gcm"
             )));
         };
-        if let Some(prev) = last_pos {
-            if pos <= prev {
-                return Err(TlsError::Params(format!(
-                    "algs: token {token:?} out of canonical order (aegis256,xchacha20,aes256gcm) \
-                     or duplicated — one spelling per support set"
-                )));
-            }
+        if let Some(prev) = last_pos
+            && pos <= prev
+        {
+            return Err(TlsError::Params(format!(
+                "algs: token {token:?} out of canonical order (aegis256,xchacha20,aes256gcm) \
+                 or duplicated — one spelling per support set"
+            )));
         }
         last_pos = Some(pos);
     }

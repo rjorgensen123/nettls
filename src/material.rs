@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::ServerConfig;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use x509_parser::prelude::FromDer;
 use zeroize::Zeroizing;
 
@@ -567,7 +567,7 @@ impl TlsMaterial {
             _ => {
                 return Err(TlsError::Pem(
                     "unknown private key format — cannot be written as PEM".to_string(),
-                ))
+                ));
             }
         };
         // The PEM form of the key lives in locked memory until it is on disk.

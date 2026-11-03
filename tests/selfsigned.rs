@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Self-signed generation: SANs, fingerprints and parameter validation.
 
-use nettls::{CertOrigin, CertSource, SelfSignedParams, TlsMaterial, MAX_VALID_DAYS};
+use nettls::{CertOrigin, CertSource, MAX_VALID_DAYS, SelfSignedParams, TlsMaterial};
 
 fn params() -> SelfSignedParams {
     SelfSignedParams::new(
@@ -60,9 +60,10 @@ fn fingerprint_is_64_hex_digits_and_stable_for_same_cert() {
     let fp = m.fingerprint_sha256();
 
     assert_eq!(fp.len(), 64, "fingerprint: {fp}");
-    assert!(fp
-        .chars()
-        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    assert!(
+        fp.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    );
     // Same material → same value, every time.
     assert_eq!(fp, m.fingerprint_sha256());
 }
@@ -147,7 +148,7 @@ fn debug_never_leaks_the_key() {
 // browser error instead of a clear startup failure.
 // --------------------------------------------------------------------------- #
 
-fn gen(sans: &[&str]) -> Result<TlsMaterial, nettls::TlsError> {
+fn generate(sans: &[&str]) -> Result<TlsMaterial, nettls::TlsError> {
     let p = SelfSignedParams::new("test", sans.iter().map(|s| s.to_string()));
     TlsMaterial::load(&CertSource::self_signed(p))
 }
@@ -158,10 +159,10 @@ fn gen(sans: &[&str]) -> Result<TlsMaterial, nettls::TlsError> {
 #[test]
 fn ip_addresses_accepted_both_v4_and_v6() {
     for ip in ["127.0.0.1", "10.255.0.1", "::1", "2001:db8::1"] {
-        assert!(gen(&[ip]).is_ok(), "IP SAN {ip} was rejected");
+        assert!(generate(&[ip]).is_ok(), "IP SAN {ip} was rejected");
     }
     // And they must actually end up in the certificate, not just pass validation.
-    let m = gen(&["10.0.0.5", "portal.example.no"]).expect("should have passed");
+    let m = generate(&["10.0.0.5", "portal.example.no"]).expect("should have passed");
     assert!(
         m.sans().iter().any(|s| s == "10.0.0.5"),
         "IP missing from SAN: {:?}",
@@ -180,7 +181,10 @@ fn valid_dns_names_are_accepted() {
         "example.no.",         // absolute name — one trailing dot is legal
         "xn--kvithval-64a.no", // punycode
     ] {
-        assert!(gen(&[name]).is_ok(), "valid name {name:?} was rejected");
+        assert!(
+            generate(&[name]).is_ok(),
+            "valid name {name:?} was rejected"
+        );
     }
 }
 
@@ -199,7 +203,8 @@ fn illegal_names_are_rejected_with_explanation() {
         ("æøå.no", "non-ASCII"),
     ];
     for (name, what) in tilfeller {
-        let err = gen(&[name]).expect_err(&format!("{what}: {name:?} should have been rejected"));
+        let err =
+            generate(&[name]).expect_err(&format!("{what}: {name:?} should have been rejected"));
         let message = err.to_string();
         // The error message must name what is wrong — otherwise the operator
         // is left with "invalid parameter" and a service that will not start.
@@ -215,17 +220,16 @@ fn too_long_names_are_rejected() {
     // One label above 63 characters.
     let lang_label = format!("{}.no", "a".repeat(64));
     assert!(
-        gen(&[lang_label.as_str()]).is_err(),
+        generate(&[lang_label.as_str()]).is_err(),
         "a 64-character label should have been rejected"
     );
     // Above 253 characters in total (each label legal on its own).
-    let mange = std::iter::repeat("abcdefgh")
-        .take(40)
+    let mange = std::iter::repeat_n("abcdefgh", 40)
         .collect::<Vec<_>>()
         .join(".");
     assert!(mange.len() > 253);
     assert!(
-        gen(&[mange.as_str()]).is_err(),
+        generate(&[mange.as_str()]).is_err(),
         "a name above 253 characters should have been rejected"
     );
 }

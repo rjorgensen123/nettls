@@ -144,25 +144,25 @@ impl Generations {
         next: Option<Generation>,
     ) -> Result<Self, TlsError> {
         for (name, g) in [("previous", &previous), ("next", &next)] {
-            if let Some(g) = g {
-                if g.fingerprint() == current.fingerprint() {
-                    return Err(TlsError::Params(format!(
-                        "restored state has \"{name}\" equal to \"current\" ({}) — \
-                         that cannot arise from a legal rotation",
-                        current.fingerprint()
-                    )));
-                }
-            }
-        }
-        if let (Some(f), Some(n)) = (&previous, &next) {
-            if f.fingerprint() == n.fingerprint() {
+            if let Some(g) = g
+                && g.fingerprint() == current.fingerprint()
+            {
                 return Err(TlsError::Params(format!(
-                    "restored state has \"previous\" equal to \"next\" ({}) — \
-                     the peer cannot rotate back to a certificate it \
-                     just left",
-                    f.fingerprint()
+                    "restored state has \"{name}\" equal to \"current\" ({}) — \
+                     that cannot arise from a legal rotation",
+                    current.fingerprint()
                 )));
             }
+        }
+        if let (Some(f), Some(n)) = (&previous, &next)
+            && f.fingerprint() == n.fingerprint()
+        {
+            return Err(TlsError::Params(format!(
+                "restored state has \"previous\" equal to \"next\" ({}) — \
+                 the peer cannot rotate back to a certificate it \
+                 just left",
+                f.fingerprint()
+            )));
         }
         Ok(Self {
             previous,
@@ -178,10 +178,10 @@ impl Generations {
     /// `previous` that decides whether a single signature is accepted is the
     /// whole point (`Announcement::verify`).
     pub fn receive(&mut self, k: &Announcement) -> Result<Received, TlsError> {
-        if let Some(n) = &self.next {
-            if n.fingerprint() == k.new_fingerprint() {
-                return Ok(Received::Known);
-            }
+        if let Some(n) = &self.next
+            && n.fingerprint() == k.new_fingerprint()
+        {
+            return Ok(Received::Known);
         }
         k.verify(self.previous.as_ref().map(|g| g.der()), self.current.der())?;
         self.next = Some(Generation::from_pem(k.new_cert_pem())?);
@@ -252,7 +252,7 @@ mod tester {
         pub(super) pkcs8: krypto::SecretBuf,
     }
 
-    pub(super) fn gen(name: &str) -> Gen {
+    pub(super) fn new_gen(name: &str) -> Gen {
         let m = TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::new(
             name,
             [name],
@@ -287,8 +287,8 @@ mod tester {
 
     #[test]
     fn bootstrap_has_no_previous_and_accepts_single_signature() {
-        let c0 = gen("c0");
-        let c1 = gen("c1");
+        let c0 = new_gen("c0");
+        let c1 = new_gen("c1");
         let mut g = Generations::from_approval(c0.g.clone());
         assert!(g.is_bootstrap());
 
@@ -301,9 +301,9 @@ mod tester {
     fn the_two_roles_are_not_the_same() {
         // The core of the module: previous verifies announcements, but lets
         // no one into a handshake.
-        let c0 = gen("c0");
-        let c1 = gen("c1");
-        let c2 = gen("c2");
+        let c0 = new_gen("c0");
+        let c1 = new_gen("c1");
+        let c2 = new_gen("c2");
 
         let mut g = Generations::from_approval(c0.g.clone());
         g.receive(&kunngjor("gateway", None, &c0, &c1, 1)).unwrap();
@@ -331,8 +331,8 @@ mod tester {
 
     #[test]
     fn promotion_happens_on_observation() {
-        let c0 = gen("c0");
-        let c1 = gen("c1");
+        let c0 = new_gen("c0");
+        let c1 = new_gen("c1");
         let mut g = Generations::from_approval(c0.g.clone());
         g.receive(&kunngjor("gateway", None, &c0, &c1, 1)).unwrap();
 
@@ -348,9 +348,9 @@ mod tester {
 
     #[test]
     fn observing_something_else_does_not_promote() {
-        let c0 = gen("c0");
-        let c1 = gen("c1");
-        let foreign = gen("foreign");
+        let c0 = new_gen("c0");
+        let c1 = new_gen("c1");
+        let foreign = new_gen("foreign");
         let mut g = Generations::from_approval(c0.g.clone());
         g.receive(&kunngjor("gateway", None, &c0, &c1, 1)).unwrap();
 
@@ -364,8 +364,8 @@ mod tester {
     fn same_announcement_again_is_idempotent() {
         // The peer republishes the same one until it gets an acknowledgement
         // (§6.8a). That must not be an error.
-        let c0 = gen("c0");
-        let c1 = gen("c1");
+        let c0 = new_gen("c0");
+        let c1 = new_gen("c1");
         let mut g = Generations::from_approval(c0.g.clone());
         let k = kunngjor("gateway", None, &c0, &c1, 1);
         assert_eq!(g.receive(&k).unwrap(), Received::Stored);
@@ -374,9 +374,9 @@ mod tester {
 
     #[test]
     fn single_signature_rejected_after_first_rotation() {
-        let c0 = gen("c0");
-        let c1 = gen("c1");
-        let c2 = gen("c2");
+        let c0 = new_gen("c0");
+        let c1 = new_gen("c1");
+        let c2 = new_gen("c2");
         let mut g = Generations::from_approval(c0.g.clone());
         g.receive(&kunngjor("gateway", None, &c0, &c1, 1)).unwrap();
         g.observed(c1.g.fingerprint());
@@ -392,7 +392,7 @@ mod tester {
         // M-36: only at rotation 3 is the anchor out of every signature, and
         // the receiver's pair consists solely of certificates no one has
         // approved manually.
-        let c: Vec<Gen> = (0..4).map(|i| gen(&format!("c{i}"))).collect();
+        let c: Vec<Gen> = (0..4).map(|i| new_gen(&format!("c{i}"))).collect();
         let mut g = Generations::from_approval(c[0].g.clone());
 
         g.receive(&kunngjor("gateway", None, &c[0], &c[1], 1))
@@ -548,7 +548,7 @@ impl ServerCertVerifier for GenerationVerifier {
             Err(_) => {
                 return Err(Error::InvalidCertificate(
                     CertificateError::ApplicationVerificationFailure,
-                ))
+                ));
             }
         };
 
@@ -611,7 +611,7 @@ impl ServerCertVerifier for GenerationVerifier {
 
 #[cfg(test)]
 mod restore_tests {
-    use super::tester::{gen, kunngjor};
+    use super::tester::{kunngjor, new_gen};
     use super::*;
 
     /// The core of §6.8: a restart WITH state must not look like memory
@@ -625,7 +625,7 @@ mod restore_tests {
     /// that has remembered its `previous` verifies both signatures.
     #[test]
     fn restored_state_accepts_double_signed_announcement() {
-        let (c0, c1, c2) = (gen("c0"), gen("c1"), gen("c2"));
+        let (c0, c1, c2) = (new_gen("c0"), new_gen("c1"), new_gen("c2"));
         let k = kunngjor("gateway", Some(&c0), &c1, &c2, 1_700_000_000);
 
         // Without memory: only the anchor. A8: accepted — this is the late
@@ -656,7 +656,7 @@ mod restore_tests {
     /// rejected it at the very moment the peer actually switched.
     #[test]
     fn restored_next_accepted_in_handshake_and_promoted() {
-        let (c0, c1, c2) = (gen("c0"), gen("c1"), gen("c2"));
+        let (c0, c1, c2) = (new_gen("c0"), new_gen("c1"), new_gen("c2"));
         let mut g = Generations::restore(Some(c0.g.clone()), c1.g.clone(), Some(c2.g.clone()))
             .expect("legal state");
 
@@ -689,7 +689,7 @@ mod restore_tests {
     /// The shape is enforced, even though the contents cannot be verified.
     #[test]
     fn impossible_states_are_rejected() {
-        let (c0, c1) = (gen("c0"), gen("c1"));
+        let (c0, c1) = (new_gen("c0"), new_gen("c1"));
 
         assert!(
             Generations::restore(Some(c1.g.clone()), c1.g.clone(), None).is_err(),

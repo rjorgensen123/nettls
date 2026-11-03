@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use nettls::{
-    install_crypto_provider, pinned_client_config, CertSource, SelfSignedParams, TlsMaterial,
+    CertSource, SelfSignedParams, TlsMaterial, install_crypto_provider, pinned_client_config,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -34,11 +34,11 @@ async fn start_server(config: Arc<nettls::rustls::ServerConfig>) -> u16 {
     tokio::spawn(async move {
         // One attempt is enough; a rejected client yields an error we ignore
         // on purpose here — it is the client side the test checks.
-        if let Ok((tcp, _)) = listener.accept().await {
-            if let Ok(mut tls) = acceptor.accept(tcp).await {
-                let _ = tls.write_all(GREETING).await;
-                let _ = tls.shutdown().await;
-            }
+        if let Ok((tcp, _)) = listener.accept().await
+            && let Ok(mut tls) = acceptor.accept(tcp).await
+        {
+            let _ = tls.write_all(GREETING).await;
+            let _ = tls.shutdown().await;
         }
     });
 

@@ -23,7 +23,7 @@ use nettls::announcement::{Announcement, Receipt};
 use nettls::announcer::{Mode, Schedule};
 use nettls::generations::{Generation, Trust};
 use nettls::{CertSource, SelfSignedParams, TlsMaterial};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 struct Node {
     name: String,
@@ -358,10 +358,10 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
                 Ok(v) => v,
                 Err(e) => return json!({"error": e.to_string()}),
             };
-            if let Some(t) = node.peers.lock().unwrap().get(name) {
-                if let Err(e) = t.receive(&k) {
-                    return json!({"error": e.to_string()});
-                }
+            if let Some(t) = node.peers.lock().unwrap().get(name)
+                && let Err(e) = t.receive(&k)
+            {
+                return json!({"error": e.to_string()});
             }
             let kv = Receipt::new(
                 &node.name,

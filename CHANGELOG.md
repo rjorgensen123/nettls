@@ -8,6 +8,28 @@ and the project follows [Semantic Versioning](https://semver.org/).
 > marked with the version it applies from, so a reader sees what holds for their version
 > without guessing.
 
+## [0.9.2] — 2026-11-03
+
+No functional change. Not one public signature moved; the crate is brought onto
+the newest Rust.
+
+### Changed — Rust 1.99.1 and edition 2024
+
+`rust-version` is 1.99.1, the newest stable Rust, and the crate is written in
+edition 2024. Building nettls now needs Rust 1.99.1 or newer. The old value, 1.75,
+no longer held: the locked `time` 0.3.55 needs 1.88, and krypto from 0.7.2 needs
+1.89. Edition 2024 reserves `gen` as a keyword, so two test helpers that carried
+the name are renamed; nothing public changes. The code is formatted in the 2024
+style, and `Cargo.lock` is written in format version 4. With the new
+`rust-version`, clippy asks for what that Rust offers: nested `if let` become let
+chains, and a fixed-size `chunks_exact` becomes `as_chunks`. Behaviour is unchanged.
+
+### Added — CI builds with the Rust named in `rust-version`
+
+Both CI files gain a job that reads `rust-version` from `Cargo.toml`, installs
+exactly that Rust and builds every target with it. The other jobs run on the
+newest stable Rust, so nothing checked the promise before.
+
 ## [0.9.1] — 2026-10-07
 
 No functional change. Not one public signature moved; the round is about what

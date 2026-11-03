@@ -109,6 +109,24 @@ jobs:
       - name: Package check
         run: cargo package --locked
 
+  # `rust-version` in Cargo.toml is the oldest Rust the crate promises to build
+  # with, and the jobs above run on the newest stable. This job reads the version
+  # from the manifest and builds every target with exactly that Rust, so the
+  # promise is checked and the job never keeps its own copy of the number.
+  msrv:
+    runs-on: ubuntu-latest
+    container:
+      image: rust:1-bookworm
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build with the Rust named in rust-version
+        run: |
+          v=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
+          test -n "$v" || { echo "Cargo.toml names no rust-version" >&2; exit 1; }
+          rustup toolchain install "$v" --profile minimal
+          cargo +"$v" check --all-targets --locked
+
   # Dependency audit: RustSec advisories, license allowlist, bans and source
   # control. The bans matter more here than in most crates — a second crypto
   # provider arriving through a transitive dependency is the failure this crate

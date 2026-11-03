@@ -9,8 +9,8 @@
 use std::sync::Arc;
 
 use nettls::{
-    install_crypto_provider, pinned_client_config_with, CertSource, SelfSignedParams, TlsMaterial,
-    TransportCipher, TransportPolicy,
+    CertSource, SelfSignedParams, TlsMaterial, TransportCipher, TransportPolicy,
+    install_crypto_provider, pinned_client_config_with,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -33,11 +33,11 @@ async fn start_server(m: &TlsMaterial, policy: &TransportPolicy) -> u16 {
     let port = listener.local_addr().unwrap().port();
     let acceptor = TlsAcceptor::from(config);
     tokio::spawn(async move {
-        if let Ok((tcp, _)) = listener.accept().await {
-            if let Ok(mut tls) = acceptor.accept(tcp).await {
-                let _ = tls.write_all(GREETING).await;
-                let _ = tls.shutdown().await;
-            }
+        if let Ok((tcp, _)) = listener.accept().await
+            && let Ok(mut tls) = acceptor.accept(tcp).await
+        {
+            let _ = tls.write_all(GREETING).await;
+            let _ = tls.shutdown().await;
         }
     });
     port

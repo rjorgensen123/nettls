@@ -4,7 +4,7 @@
 //! falling back to nothing does not exist.
 
 use krypto::Alg;
-use nettls::capability::{alg_from_token, choose, SupportStatement};
+use nettls::capability::{SupportStatement, alg_from_token, choose};
 use nettls::{CertSource, SelfSignedParams, TlsMaterial};
 
 fn identity(name: &str) -> TlsMaterial {

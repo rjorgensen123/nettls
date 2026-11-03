@@ -286,8 +286,8 @@ fn _bruk_arc(_: Arc<()>) {}
 /// fails that very moment — exactly the break §6 exists to avoid.
 #[tokio::test(flavor = "multi_thread")]
 async fn announcer_rolls_only_when_receipt_is_in() {
-    use nettls::announcer::{Announcer, OwnMaterial, Schedule};
     use nettls::RotatingResolver;
+    use nettls::announcer::{Announcer, OwnMaterial, Schedule};
 
     nettls::install_crypto_provider();
 
@@ -379,8 +379,8 @@ async fn announcer_rolls_only_when_receipt_is_in() {
 /// ingen holder.
 #[tokio::test(flavor = "multi_thread")]
 async fn loftet_overlever_en_restart() {
-    use nettls::announcer::{Announcer, OwnMaterial, Schedule};
     use nettls::RotatingResolver;
+    use nettls::announcer::{Announcer, OwnMaterial, Schedule};
 
     nettls::install_crypto_provider();
 
@@ -485,8 +485,8 @@ async fn loftet_overlever_en_restart() {
 /// fulfilled.
 #[tokio::test(flavor = "multi_thread")]
 async fn keys_are_locked_when_password_is_set() {
-    use nettls::announcer::{Announcer, OwnMaterial, Schedule};
     use nettls::RotatingResolver;
+    use nettls::announcer::{Announcer, OwnMaterial, Schedule};
 
     nettls::install_crypto_provider();
 
@@ -584,8 +584,8 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 /// §6 exists.
 #[tokio::test(flavor = "multi_thread")]
 async fn previous_key_survives_restart_after_two_rotations() {
-    use nettls::announcer::{Announcer, OwnMaterial, Schedule, DAY_S};
     use nettls::RotatingResolver;
+    use nettls::announcer::{Announcer, DAY_S, OwnMaterial, Schedule};
 
     nettls::install_crypto_provider();
 
@@ -653,8 +653,8 @@ async fn previous_key_survives_restart_after_two_rotations() {
 /// word, and a `false` postpones with **no side effects**.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_gate_postpones_the_switch_without_side_effects() {
-    use nettls::announcer::{Announcer, OwnMaterial, Schedule};
     use nettls::RotatingResolver;
+    use nettls::announcer::{Announcer, OwnMaterial, Schedule};
 
     nettls::install_crypto_provider();
     let c0 = generation();

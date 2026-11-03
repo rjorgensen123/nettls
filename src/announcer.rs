@@ -863,10 +863,11 @@ mod retry_tests {
         assert!(m.starts_with("ERROR"), "{m}");
 
         r.acked("portal");
-        assert!(r
-            .status(ALARM_AFTER_S, 30 * DAY_S)
-            .message("gateway")
-            .is_none());
+        assert!(
+            r.status(ALARM_AFTER_S, 30 * DAY_S)
+                .message("gateway")
+                .is_none()
+        );
     }
 
     #[test]

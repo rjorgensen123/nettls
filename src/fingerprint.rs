@@ -46,7 +46,7 @@ pub(crate) fn parse_fingerprint(s: &str) -> Result<[u8; 32], TlsError> {
             None => {
                 return Err(TlsError::Fingerprint(format!(
                     "the character {c:?} is not hexadecimal (expected 64 hex digits, possibly with colons)"
-                )))
+                )));
             }
         }
     }
@@ -57,8 +57,8 @@ pub(crate) fn parse_fingerprint(s: &str) -> Result<[u8; 32], TlsError> {
         )));
     }
     let mut out = [0u8; 32];
-    for (i, pair) in nibbles.chunks_exact(2).enumerate() {
-        out[i] = (pair[0] << 4) | pair[1];
+    for (i, [hi, lo]) in nibbles.as_chunks::<2>().0.iter().enumerate() {
+        out[i] = (hi << 4) | lo;
     }
     Ok(out)
 }

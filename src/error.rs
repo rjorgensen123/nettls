@@ -83,13 +83,22 @@ pub enum TlsError {
 impl fmt::Display for TlsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TlsError::Io { path: Some(p), detail } => {
+            TlsError::Io {
+                path: Some(p),
+                detail,
+            } => {
                 write!(f, "file I/O failed for {}: {detail}", p.display())
             }
             TlsError::Io { path: None, detail } => write!(f, "file I/O failed: {detail}"),
             TlsError::Pem(s) => write!(f, "the PEM could not be parsed: {s}"),
-            TlsError::KeyMismatch(s) => write!(f, "key and certificate do not belong together: {s}"),
-            TlsError::NotValidNow { not_before, not_after, now } => write!(
+            TlsError::KeyMismatch(s) => {
+                write!(f, "key and certificate do not belong together: {s}")
+            }
+            TlsError::NotValidNow {
+                not_before,
+                not_after,
+                now,
+            } => write!(
                 f,
                 "the certificate is not valid now (notBefore={not_before}, notAfter={not_after}, now={now}, unix time)"
             ),
@@ -99,7 +108,9 @@ impl fmt::Display for TlsError {
             TlsError::Params(s) => write!(f, "invalid parameters: {s}"),
             TlsError::Fingerprint(s) => write!(f, "invalid SHA-256 fingerprint: {s}"),
             TlsError::Proof(s) => write!(f, "a signed value could not be parsed: {s}"),
-            TlsError::ProofInvalid(s) => write!(f, "a signature or sealed value does not hold: {s}"),
+            TlsError::ProofInvalid(s) => {
+                write!(f, "a signature or sealed value does not hold: {s}")
+            }
             TlsError::Chain(s) => write!(f, "{s}"),
             TlsError::Sign(s) => write!(f, "could not sign: {s}"),
             TlsError::Negotiation(s) => write!(

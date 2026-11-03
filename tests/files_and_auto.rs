@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use nettls::{CertOrigin, CertSource, SelfSignedParams, TlsMaterial, CERT_FILE, KEY_FILE};
+use nettls::{CERT_FILE, CertOrigin, CertSource, KEY_FILE, SelfSignedParams, TlsMaterial};
 
 /// Enkel temp-katalog uten dependency. Ryddes i `Drop`.
 struct TempDir(PathBuf);

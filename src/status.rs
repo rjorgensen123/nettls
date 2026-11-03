@@ -24,7 +24,7 @@
 
 use serde::Serialize;
 
-use crate::announcer::{mode1_should_warn, Status};
+use crate::announcer::{Status, mode1_should_warn};
 use crate::generations::Generations;
 use crate::material::TlsMaterial;
 

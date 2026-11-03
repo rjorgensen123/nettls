@@ -6,8 +6,8 @@
 //! and its exit condition are documented and unit-tested in `src/aegis.rs`.
 
 use nettls::{
-    install_crypto_provider, pinned_client_config_with, CertSource, SelfSignedParams, TlsMaterial,
-    TransportCipher, TransportPolicy,
+    CertSource, SelfSignedParams, TlsMaterial, TransportCipher, TransportPolicy,
+    install_crypto_provider, pinned_client_config_with,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -43,15 +43,15 @@ async fn start_server(m: &TlsMaterial, policy: &TransportPolicy) -> (u16, JoinHa
     let acceptor = TlsAcceptor::from(config);
     let handle = tokio::spawn(async move {
         let mut got = Vec::new();
-        if let Ok((tcp, _)) = listener.accept().await {
-            if let Ok(mut tls) = acceptor.accept(tcp).await {
-                let mut buf = vec![0u8; HELLO.len()];
-                if tls.read_exact(&mut buf).await.is_ok() {
-                    got = buf;
-                }
-                let _ = tls.write_all(REPLY).await;
-                let _ = tls.shutdown().await;
+        if let Ok((tcp, _)) = listener.accept().await
+            && let Ok(mut tls) = acceptor.accept(tcp).await
+        {
+            let mut buf = vec![0u8; HELLO.len()];
+            if tls.read_exact(&mut buf).await.is_ok() {
+                got = buf;
             }
+            let _ = tls.write_all(REPLY).await;
+            let _ = tls.shutdown().await;
         }
         got
     });
@@ -162,11 +162,11 @@ async fn larger_than_one_record_survives() {
     let acceptor = TlsAcceptor::from(config);
     let payload = big.clone();
     tokio::spawn(async move {
-        if let Ok((tcp, _)) = listener.accept().await {
-            if let Ok(mut tls) = acceptor.accept(tcp).await {
-                let _ = tls.write_all(&payload).await;
-                let _ = tls.shutdown().await;
-            }
+        if let Ok((tcp, _)) = listener.accept().await
+            && let Ok(mut tls) = acceptor.accept(tcp).await
+        {
+            let _ = tls.write_all(&payload).await;
+            let _ = tls.shutdown().await;
         }
     });
     let config = pinned_client_config_with(&fp, &[], &aegis_only()).unwrap();

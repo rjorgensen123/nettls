@@ -44,7 +44,7 @@
 //! swap the sender key and make the recipient derive a different key than the
 //! one that was used — a classic mistake in home-grown sealed-box variants.
 
-use krypto::{exchange, Alg, SecretBuf};
+use krypto::{Alg, SecretBuf, exchange};
 
 use crate::error::TlsError;
 

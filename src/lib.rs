@@ -137,8 +137,8 @@ mod secret; // 0.8.3: private keys in memory — SecretBuf, and the honest limit
 
 pub use error::TlsError;
 pub use material::{
-    cert_fingerprint_sha256, is_valid_san, CertOrigin, CertSource, SelfSignedParams, TlsMaterial,
-    CERT_FILE, KEY_FILE, MAX_VALID_DAYS,
+    CERT_FILE, CertOrigin, CertSource, KEY_FILE, MAX_VALID_DAYS, SelfSignedParams, TlsMaterial,
+    cert_fingerprint_sha256, is_valid_san,
 };
 pub use pin::{pinned_client_config, pinned_client_config_with, pinned_client_config_with_alpn};
 pub use provider::{install_crypto_provider, provider};

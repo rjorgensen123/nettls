@@ -43,7 +43,7 @@
 //! `why`/`level`, levels `parse`/`verify`) — both suites read the same file and stay as they
 //! are — data, not prose.
 
-use nettls::announcement::{der_from_pem, Announcement, AnnouncementJson, Receipt, ReceiptJson};
+use nettls::announcement::{Announcement, AnnouncementJson, Receipt, ReceiptJson, der_from_pem};
 use nettls::approval::{Approval, ApprovalJson};
 use nettls::signature::from_hex;
 
@@ -184,7 +184,9 @@ fn run_kind(kind: &str, proev: fn(&serde_json::Value, &serde_json::Value) -> Out
             ("verify", Outcome::RejectedAtVerification) => {}
 
             ("parse", Outcome::Accepted) | ("verify", Outcome::Accepted) => {
-                panic!("{kind}/{name}: ACCEPTED. Should have been rejected because {why} (field: {field})")
+                panic!(
+                    "{kind}/{name}: ACCEPTED. Should have been rejected because {why} (field: {field})"
+                )
             }
             ("parse", Outcome::RejectedAtVerification) => panic!(
                 "{kind}/{name}: slipped through the parser and was first stopped in \
