@@ -27,6 +27,12 @@ suite, running its tests in parallel, locks a little over 100 KiB at its peak. T
 test job in both CI files runs in a container with a memlock limit of 1 MiB. The
 GitHub file set no limit before, and the Gitea file used the runner's default.
 
+### Fixed — key files are private from the first byte *(2026-11-03)*
+
+Files are created 0600 and only if nothing is there; a leftover temp file or a
+symlink is removed first. The temp file is removed on error, the directory is
+synced after the rename, and key directories are created 0700.
+
 ## [0.9.2] — 2026-11-03
 
 No functional change. Not one public signature moved; the crate is brought onto

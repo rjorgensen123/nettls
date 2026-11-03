@@ -547,10 +547,10 @@ impl TlsMaterial {
 
     /// Writes `cert.pem` (0644) and `key.pem` (0600) to `dir`, atomically.
     ///
-    /// The directory is created if missing. The key file gets its permissions
-    /// set **before** it becomes visible under its final name.
+    /// The directory is created 0700 if missing. Neither file is ever more open
+    /// than its final mode.
     pub fn save_pem(&self, dir: &Path) -> Result<(), TlsError> {
-        fs::create_dir_all(dir).map_err(|e| TlsError::io(dir, e))?;
+        pem::create_private_dir(dir)?;
 
         let mut cert_pem = Vec::new();
         for c in &self.chain {

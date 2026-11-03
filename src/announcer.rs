@@ -250,7 +250,7 @@ impl Announcer {
         // is the one serialization `TlsMaterial` can be round-tripped through,
         // so we go via it — but it must never be left lying around.
         let tmp = dir.join(".tmp-material");
-        std::fs::create_dir_all(&tmp).map_err(|e| TlsError::io(&tmp, e))?;
+        crate::pem::create_private_dir(&tmp)?;
         let res = (|| -> Result<Vec<u8>, TlsError> {
             m.save_pem(&tmp)?;
             let cert = std::fs::read(tmp.join(crate::material::CERT_FILE))
@@ -276,7 +276,7 @@ impl Announcer {
         let _ = std::fs::remove_dir_all(&tmp);
         let locked = res?;
         let path = dir.join(Self::LOCKED_FILE);
-        Self::skriv_atomisk(&path, &locked)
+        crate::pem::write_atomic(&path, &locked, 0o600)
     }
 
     /// Read the material back, locked or not.
@@ -314,30 +314,6 @@ impl Announcer {
         } else {
             Self::PREVIOUS_CLEARTEXT_FILE
         })
-    }
-
-    /// Write atomically, with mode 0600.
-    ///
-    /// Every file this type owns goes through here: the previous generation's
-    /// private key, the locked material of the current one, and the promise
-    /// that survives a restart. A half-written file after a crash would look
-    /// like a corrupt chain, and that is not a state we want to be able to end
-    /// up in on a power failure. The mode matters for the same reason the rest
-    /// of the crate sets it: `fs::write` would take whatever the umask says.
-    fn skriv_atomisk(path: &std::path::Path, data: &[u8]) -> Result<(), TlsError> {
-        use std::io::Write;
-        let tmp = path.with_extension("tmp");
-        let mut f = std::fs::File::create(&tmp).map_err(|e| TlsError::io(&tmp, e))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            f.set_permissions(std::fs::Permissions::from_mode(0o600))
-                .map_err(|e| TlsError::io(&tmp, e))?;
-        }
-        f.write_all(data).map_err(|e| TlsError::io(&tmp, e))?;
-        f.sync_all().map_err(|e| TlsError::io(&tmp, e))?;
-        drop(f);
-        std::fs::rename(&tmp, path).map_err(|e| TlsError::io(path, e))
     }
 
     /// Persist the **previous generation's key** — the one announcements are signed with.
@@ -379,7 +355,7 @@ impl Announcer {
             Some(pw) => secret.expose(|b| crate::lockbox::lock(pw, b))?,
             None => secret.expose(|b| b.to_vec()),
         };
-        Self::skriv_atomisk(&path, &out)
+        crate::pem::write_atomic(&path, &out, 0o600)
     }
 
     /// Restore the chain `(previous, current)` after a restart.
@@ -1222,7 +1198,7 @@ impl Announcer {
 
         let fresh = TlsMaterial::load(&CertSource::self_signed(self.params.clone()))?;
         let new_dir = self.dir.join("new");
-        std::fs::create_dir_all(&new_dir).map_err(|e| TlsError::io(&new_dir, e))?;
+        crate::pem::create_private_dir(&new_dir)?;
         self.save(&fresh, &new_dir)?;
 
         let der = fresh.cert_chain()[0].as_ref().to_vec();
@@ -1686,7 +1662,7 @@ impl Announcer {
         };
         let text = serde_json::to_string_pretty(&on_disk)
             .map_err(|e| TlsError::Proof(format!("could not serialize: {e}")))?;
-        Self::skriv_atomisk(&path, text.as_bytes())
+        crate::pem::write_atomic(&path, text.as_bytes(), 0o600)
     }
 
     /// Read a promise back after a restart.
