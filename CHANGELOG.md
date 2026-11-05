@@ -38,6 +38,14 @@ synced after the rename, and key directories are created 0700.
 `Trust` promoted `next` as soon as the peer presented it. It now waits until the
 handshake signature holds, so the public `next` without its key changes nothing.
 
+### Changed — `auto` makes a new identity only when there is none *(2026-11-05)*
+
+A stored identity that cannot be loaded (unreadable, corrupt, a key that does not
+match, or one file missing) is now an error that names the directory, and the
+files are left untouched. Before, `auto` replaced it with a new one and the
+fingerprint changed silently. `save_pem` locks the key in memory before writing
+`cert.pem`, so a failure there no longer leaves a new certificate with the old key.
+
 ## [0.9.2] — 2026-11-03
 
 No functional change. Not one public signature moved; the crate is brought onto

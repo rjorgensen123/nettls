@@ -95,6 +95,9 @@ Where the certificate came from. **Log this.**
 > everyone who pinned you loses you. `ReusedExpired` means an expired certificate was kept
 > deliberately — regeneration must be an operator action, or every pinned pairing breaks
 > silently. Both deserve loud log lines.
+>
+> `auto` makes a new identity only when the directory holds none. A stored one it cannot load is
+> returned as an error that names the directory, and the files are left untouched *(0.10.0)*.
 
 ### `SelfSignedParams`
 

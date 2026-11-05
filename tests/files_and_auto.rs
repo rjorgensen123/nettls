@@ -109,37 +109,80 @@ fn auto_generates_first_time_and_reuses_thereafter() {
 }
 
 #[test]
-fn auto_regenerates_when_stored_cert_is_corrupt() {
-    let dir = TempDir::new("korrupt");
-    let first = TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();
-
+fn auto_reports_a_corrupt_stored_cert_and_leaves_it() {
+    let dir = TempDir::new("corrupt");
+    TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();
     fs::write(dir.path().join(CERT_FILE), b"this is not PEM\n").unwrap();
+    let key_before = fs::read(dir.path().join(KEY_FILE)).unwrap();
 
-    let second = TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();
-    assert_eq!(second.origin(), CertOrigin::Generated);
-    assert_ne!(first.fingerprint_sha256(), second.fingerprint_sha256());
-    // And the new material is actually written back.
-    let tredje = TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();
-    assert_eq!(tredje.origin(), CertOrigin::Reused);
-    assert_eq!(tredje.fingerprint_sha256(), second.fingerprint_sha256());
+    let e = TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap_err();
+    assert!(matches!(e, nettls::TlsError::Pem(_)), "{e}");
+    assert!(
+        e.to_string().contains(&dir.path().display().to_string()),
+        "the error must say where: {e}"
+    );
+    assert_eq!(
+        fs::read(dir.path().join(CERT_FILE)).unwrap(),
+        b"this is not PEM\n"
+    );
+    assert_eq!(fs::read(dir.path().join(KEY_FILE)).unwrap(), key_before);
 }
 
 #[test]
-fn auto_regenerates_when_key_does_not_belong_to_cert() {
+fn auto_reports_a_key_that_does_not_belong_and_leaves_it() {
     let dir = TempDir::new("mismatch");
-    let first = TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();
-
-    // Swap in the key from a COMPLETELY different certificate.
-    let annen = TempDir::new("mismatch-kilde");
+    TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();
+    let other = TempDir::new("mismatch-source");
     TlsMaterial::load(&CertSource::self_signed(params()))
         .unwrap()
-        .save_pem(annen.path())
+        .save_pem(other.path())
         .unwrap();
-    fs::copy(annen.path().join(KEY_FILE), dir.path().join(KEY_FILE)).unwrap();
+    fs::copy(other.path().join(KEY_FILE), dir.path().join(KEY_FILE)).unwrap();
+    let cert_before = fs::read(dir.path().join(CERT_FILE)).unwrap();
+    let key_before = fs::read(dir.path().join(KEY_FILE)).unwrap();
 
-    let second = TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();
-    assert_eq!(second.origin(), CertOrigin::Generated);
-    assert_ne!(first.fingerprint_sha256(), second.fingerprint_sha256());
+    let e = TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap_err();
+    assert!(matches!(e, nettls::TlsError::KeyMismatch(_)), "{e}");
+    assert_eq!(fs::read(dir.path().join(CERT_FILE)).unwrap(), cert_before);
+    assert_eq!(fs::read(dir.path().join(KEY_FILE)).unwrap(), key_before);
+}
+
+#[test]
+fn auto_reports_an_incomplete_identity() {
+    let dir = TempDir::new("incomplete");
+    TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();
+    fs::remove_file(dir.path().join(KEY_FILE)).unwrap();
+    let cert_before = fs::read(dir.path().join(CERT_FILE)).unwrap();
+
+    let e = TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap_err();
+    assert!(
+        matches!(&e, nettls::TlsError::Io { path: Some(p), .. } if p.ends_with(KEY_FILE)),
+        "{e}"
+    );
+    assert_eq!(fs::read(dir.path().join(CERT_FILE)).unwrap(), cert_before);
+    assert!(!dir.path().join(KEY_FILE).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn auto_reports_an_unreadable_stored_file_and_leaves_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new("unreadable");
+    TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();
+    let key = dir.path().join(KEY_FILE);
+    fs::set_permissions(&key, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read(&key).is_ok() {
+        // Root reads past mode 000, and then there is nothing to test.
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o600)).unwrap();
+        eprintln!("skipping: the file is readable despite mode 000");
+        return;
+    }
+    let cert_before = fs::read(dir.path().join(CERT_FILE)).unwrap();
+
+    let e = TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap_err();
+    fs::set_permissions(&key, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(matches!(e, nettls::TlsError::Io { .. }), "{e}");
+    assert_eq!(fs::read(dir.path().join(CERT_FILE)).unwrap(), cert_before);
 }
 
 #[test]
@@ -189,7 +232,7 @@ fn auto_without_writable_dir_gives_ephemeral_but_works() {
     let umulig = std::path::Path::new("/proc/nettls-cannot-write-here");
     if fs::create_dir_all(umulig).is_ok() {
         let _ = fs::remove_dir_all(umulig);
-        eprintln!("hopper over: katalogen lot seg actual opprette");
+        eprintln!("skipping: the directory could be created after all");
         return;
     }
 

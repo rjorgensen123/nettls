@@ -43,8 +43,9 @@ pub enum CertOrigin {
     Files,
     /// Loaded from PEM bytes the consumer had in memory (e.g. an upload).
     Pem,
-    /// Freshly generated self-signed, written to the `auto` directory. The
-    /// fingerprint survives a restart.
+    /// Freshly generated self-signed: by `self_signed`, or by `auto` when the
+    /// directory held no identity. `auto` writes it there, so the fingerprint
+    /// survives a restart.
     Generated,
     /// Valid certificate found in the `auto` directory and reused. No new
     /// browser warning for the operator.
@@ -223,19 +224,19 @@ impl CertSource {
         }
     }
 
-    /// Load from `dir` if a **valid** certificate exists there; otherwise
-    /// generate a self-signed one and save it in `dir`.
+    /// Load the identity stored in `dir`; generate and save a new one only if
+    /// none is stored there.
     ///
     /// This is the variant services should use. The point is that the
     /// fingerprint is stable across restarts: without that, the operator gets
     /// a new browser warning every time, and warnings you learn to stop
     /// reading don't work the day there is a real MITM.
     ///
-    /// "Valid" means: both files exist, the PEM parses, the key belongs to the
-    /// certificate, and the certificate is within its validity window **now**.
-    /// If any of this does not hold, a new one is generated — a service that
-    /// does not start because a self-generated certificate expired is a worse
-    /// outcome than a new certificate.
+    /// The identity is the pair `cert.pem` + `key.pem`; one is worthless
+    /// without the other. Both there: loaded and reused, also when expired
+    /// ([`CertOrigin::ReusedExpired`]). Neither there: a new pair. Anything
+    /// else is an error that names the directory, and the files are left
+    /// untouched *(0.10.0)*.
     ///
     /// If the directory is not writable, the certificate is generated in
     /// memory and [`TlsMaterial::origin`] becomes [`CertOrigin::Ephemeral`].
@@ -311,12 +312,9 @@ impl TlsMaterial {
         let cert_path = dir.join(CERT_FILE);
         let key_path = dir.join(KEY_FILE);
 
-        if cert_path.is_file() && key_path.is_file() {
-            // Failure here is not fatal: we fall back to generating. But we do
-            // not swallow the error silently — it comes out as `Ephemeral`/
-            // `Generated` which the consumer can log, and the files are only
-            // overwritten once the new material has been validated.
-            match Self::load(&CertSource::files(&cert_path, &key_path)) {
+        match (present(&cert_path)?, present(&key_path)?) {
+            (false, false) => {}
+            (true, true) => match Self::load(&CertSource::files(&cert_path, &key_path)) {
                 Ok(mut m) => {
                     // Valid → reuse. Expired → reuse ANYWAY, but mark it.
                     //
@@ -332,9 +330,23 @@ impl TlsMaterial {
                     };
                     return Ok(m);
                 }
-                // Corrupt, unreadable, or a key that does not match → we have no
-                // usable material at all, and generate new.
-                Err(_) => { /* falls through to the generation below */ }
+                // The pair is one identity: a fault in either is reported, never
+                // replaced (0.10.0).
+                Err(e) => return Err(left_untouched(e, dir)),
+            },
+            (cert, _) => {
+                let (there, missing) = if cert {
+                    (CERT_FILE, &key_path)
+                } else {
+                    (KEY_FILE, &cert_path)
+                };
+                return Err(TlsError::Io {
+                    path: Some(missing.clone()),
+                    detail: format!(
+                        "missing while {there} is there; the identity in {} is incomplete and was left untouched",
+                        dir.display()
+                    ),
+                });
             }
         }
 
@@ -552,12 +564,6 @@ impl TlsMaterial {
     pub fn save_pem(&self, dir: &Path) -> Result<(), TlsError> {
         pem::create_private_dir(dir)?;
 
-        let mut cert_pem = Vec::new();
-        for c in &self.chain {
-            cert_pem.extend_from_slice(&pem::encode("CERTIFICATE", c.as_ref()));
-        }
-        pem::write_atomic(&dir.join(CERT_FILE), &cert_pem, 0o644)?;
-
         let (label, der) = match &*self.key {
             PrivateKeyDer::Pkcs8(k) => ("PRIVATE KEY", k.secret_pkcs8_der()),
             PrivateKeyDer::Pkcs1(k) => ("RSA PRIVATE KEY", k.secret_pkcs1_der()),
@@ -571,8 +577,49 @@ impl TlsMaterial {
             }
         };
         // The PEM form of the key lives in locked memory until it is on disk.
+        // It is taken before either file is written, so a failure here leaves
+        // the stored pair as it was.
         let key_pem = secret::hold(pem::encode(label, der))?;
+
+        let mut cert_pem = Vec::new();
+        for c in &self.chain {
+            cert_pem.extend_from_slice(&pem::encode("CERTIFICATE", c.as_ref()));
+        }
+        pem::write_atomic(&dir.join(CERT_FILE), &cert_pem, 0o644)?;
         key_pem.expose(|k| pem::write_atomic(&dir.join(KEY_FILE), k, 0o600))
+    }
+}
+
+/// Whether `path` holds a file. `false` only when nothing is there: a path that
+/// cannot be looked at, or is not a regular file, is an error.
+fn present(path: &Path) -> Result<bool, TlsError> {
+    match fs::metadata(path) {
+        Ok(m) if m.is_file() => Ok(true),
+        Ok(_) => Err(TlsError::Io {
+            path: Some(path.to_path_buf()),
+            detail: "is there but is not a regular file".to_string(),
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(TlsError::io(path, e)),
+    }
+}
+
+/// Adds where the stored identity is, and that it was left untouched.
+fn left_untouched(e: TlsError, dir: &Path) -> TlsError {
+    let ctx = |s: String| format!("the identity in {} was left untouched: {s}", dir.display());
+    match e {
+        TlsError::Pem(s) => TlsError::Pem(ctx(s)),
+        TlsError::KeyMismatch(s) => TlsError::KeyMismatch(ctx(s)),
+        TlsError::Certificate(s) => TlsError::Certificate(ctx(s)),
+        TlsError::Sign(s) => TlsError::Sign(ctx(s)),
+        TlsError::Io { path, detail } => TlsError::Io {
+            path,
+            detail: format!(
+                "{detail}; the identity in {} was left untouched",
+                dir.display()
+            ),
+        },
+        other => other,
     }
 }
 

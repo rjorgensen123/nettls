@@ -54,6 +54,12 @@ fingerprint changes every time — and everyone who recognized you no longer doe
 > restart, when the fingerprint is new and the peers no longer recognize you. That is a failure
 > you want to discover at once, not in three weeks.
 >
+> ⚠ **A stored identity that cannot be loaded is an error, not a reason for a new one** *(0.10.0)*:
+> a file that cannot be read, corrupt PEM, a key that does not belong to the certificate, or one of
+> the two files missing. The error names the directory, and the files are left untouched. The cause
+> is often a manual change gone wrong, and the operator needs to know. To start over, remove both
+> files.
+>
 > ⚠ **An expired stored certificate is reused too** — marked `ReusedExpired`. The service comes
 > up, and clients complain about the date. That is deliberate: silently generating a new one
 > would change the fingerprint and break every pinned pairing, turning a clear date error into an
