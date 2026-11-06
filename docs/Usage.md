@@ -223,3 +223,4 @@ The library provides the building blocks. This is yours:
 
 - **[Home](Home.md)** — what nettls is, and what it is not
 - **[API](API.md)** — the reference for every type and function
+- **[Python](Python.md)** — the same steps, from Python

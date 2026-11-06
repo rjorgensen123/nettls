@@ -20,10 +20,10 @@
 #      to say after rollout. The fence is a test in the crate, not a grep step
 #      here, so it travels to everyone who builds it.
 #
-#   2. THE CONTRACT WITH THE PYTHON SIDE. The crate ships two implementations of
-#      the same wire protocol — `src/` and `python/nettls.py` — and they have
-#      drifted apart before. A cross-test caught it; reading did not. So both
-#      sides run here, against the vectors and against each other.
+#   2. THE PYTHON SIDE (0.11.0). Python runs this same Rust code, through the binding
+#      in `nettls-py`. There is one implementation, and CI checks that Python gets
+#      all of it: the surface test, the vectors, the error corpus, the stream, and
+#      the ring test of Python and Rust nodes over TLS.
 name: CI
 
 on:
@@ -59,52 +59,39 @@ jobs:
       - name: Test
         run: cargo test --locked --all-targets
 
-      # Pinned, like the Rust side: python/krav-ci.txt fixes exact versions,
-      # transitives included. `cryptography` is not a test dependency — it IS the
-      # crypto implementation on the Python side, and an unannounced version drift
-      # there is as serious as one in Cargo.lock.
-      - name: Python + dependencies (pinned versions)
+      # --- The Python binding (0.11.0) ----------------------------------------- #
+      #
+      # `nettls-py` is this crate, run from Python through PyO3: one implementation,
+      # two languages. CI builds the module and tests it from Python, under the same
+      # memlock limit as the Rust tests.
+      #
+      # LOCKED, like the Rust side: nettls-py/requirements-ci.txt fixes maturin,
+      # pytest and krypto-py with exact versions, transitives included.
+      - name: Python + build tools (locked versions)
         run: |
           apt-get update -qq && apt-get install -y -qq python3 python3-pip python3-venv
           python3 -m venv /tmp/venv
           /tmp/venv/bin/pip install -q --upgrade pip
-          /tmp/venv/bin/pip install -q -r python/krav-ci.txt
+          /tmp/venv/bin/pip install -q -r nettls-py/requirements-ci.txt
 
-      # The vectors are the answer key, not a byproduct of the Rust code. If one
-      # fails, the question is which side is right — not that Python must fall in
-      # line. Ed25519 is deterministic, so the signatures are compared byte for
-      # byte, which is a far tighter probe than "does it verify".
-      - name: Conformance — the vectors, byte for byte
-        run: /tmp/venv/bin/python -m pytest python/test_nettls.py -q
+      - name: Clippy for nettls-py (warnings are errors)
+        run: PYO3_PYTHON=/tmp/venv/bin/python cargo clippy --locked -p nettls-py --all-targets -- -D warnings
 
-      # Everything above probes VALID values, and an attacker does not live there.
-      # Two divergences arose without any test seeing them, both in the handling of
-      # the invalid. One shared corpus, read by both sides: separate lists would let
-      # each side probe its own cases and the divergence would survive.
-      - name: The error corpus
-        run: /tmp/venv/bin/python -m pytest python/test_feil.py -q
+      - name: Build and install nettls-py
+        run: VIRTUAL_ENV=/tmp/venv /tmp/venv/bin/maturin develop --locked -m nettls-py/Cargo.toml
 
-      # Behaviour tests assume the function exists on both sides. If it is missing
-      # in Python there is nothing to compare, and everything is green. This one
-      # requires every public element to be either mirrored or explicitly
-      # justified, and fails the build if something is added without a position.
-      - name: Parity Rust <-> Python
-        run: /tmp/venv/bin/python -m pytest python/test_paritet.py -q
+      # The Python API is the Rust API: the same names in the same places, both
+      # ways, and a written reason for anything only one side has.
+      - name: nettls-py surface
+        run: PYO3_PYTHON=/tmp/venv/bin/python cargo test --locked -p nettls-py
 
-      # The vectors catch errors the two implementations SHARE. The cross-test
-      # catches errors where they DISAGREE — a signature from one that does not
-      # hold at the other. Neither covers the other's case.
-      - name: Cross-test Rust <-> Python
-        run: /tmp/venv/bin/python -m pytest python/test_krysstest.py -q
-
-      # Rotation around a ring of nodes, in five configurations: mixed rings, and
-      # pure rings of each implementation alone. A mixed ring can hide a fault if
-      # one side is lenient where the other is strict; a pure ring cannot. The
-      # error corpus is injected mid-flight, while nodes hold three certificate
-      # generations at once, and the requirement is not only that the message is
-      # rejected but that the state is unchanged and the ring keeps turning.
-      - name: Ring test — five configurations, with error injection
-        run: /tmp/venv/bin/python -m pytest python/test_ring.py -q
+      # The vectors and the error corpus are normative. The stream carries TLS over
+      # a Python socket. The ring (§6.15) has Python and Rust nodes rotating against
+      # each other, with the error corpus injected mid-flight; the requirement is
+      # that a hostile message is rejected, the state is unchanged, and the ring
+      # keeps turning.
+      - name: nettls-py from Python (pytest)
+        run: /tmp/venv/bin/pytest nettls-py/tests -q
 
       # Finding a packaging problem here is cheap; finding it after a publish is
       # not, since a version number can never be reused.
@@ -127,7 +114,10 @@ jobs:
           v=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
           test -n "$v" || { echo "Cargo.toml names no rust-version" >&2; exit 1; }
           rustup toolchain install "$v" --profile minimal
-          cargo +"$v" check --all-targets --locked
+          # The binding too. As an extension module on the stable ABI it needs no
+          # Python to build, which is what these two variables tell PyO3.
+          PYO3_NO_PYTHON=1 PYO3_BUILD_EXTENSION_MODULE=1 \
+            cargo +"$v" check --workspace --all-targets --locked
 
   # Dependency audit: RustSec advisories, license allowlist, bans and source
   # control. The bans matter more here than in most crates — a second crypto
@@ -148,5 +138,6 @@ jobs:
           tar -xzf /tmp/cd.tgz -C /tmp --strip-components=1
           install /tmp/cargo-deny /usr/local/bin/
 
+      # `--workspace`: the binding's dependencies (PyO3) are audited too.
       - name: cargo deny check
-        run: cargo deny check
+        run: cargo deny --workspace check

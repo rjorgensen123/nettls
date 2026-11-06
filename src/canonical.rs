@@ -44,7 +44,7 @@ pub const ALGSUPPORT_V1: &str = "nettls-algsupport/v1";
 /// format. With a newline the field would become **two** lines, and an
 /// attacker could thereby move content within the message without touching
 /// the signature.
-pub fn require_fingerprint(v: &str, field: &'static str) -> Result<(), TlsError> {
+pub fn require_fingerprint(v: &str, field: &str) -> Result<(), TlsError> {
     if v.len() != 64 || !v.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(TlsError::Params(format!(
             "{field}: expected 64 hex characters without a «sha256:» prefix, got {} characters",
@@ -66,7 +66,7 @@ pub fn require_fingerprint(v: &str, field: &'static str) -> Result<(), TlsError>
 /// protocol where `Gateway` and `gateway` both get in is a protocol where two
 /// implementations can produce different bytes for the same party. Usernames
 /// (`approved_by`) are a different category and keep the looser rule.
-pub fn require_component_name(v: &str, field: &'static str) -> Result<(), TlsError> {
+pub fn require_component_name(v: &str, field: &str) -> Result<(), TlsError> {
     if v.is_empty() {
         return Err(TlsError::Params(format!("{field}: cannot be empty")));
     }
@@ -90,7 +90,7 @@ pub fn require_component_name(v: &str, field: &'static str) -> Result<(), TlsErr
 ///
 /// Refuses empty, too long, and anything that could break the line structure
 /// — `\n`, `\r` and other control characters.
-pub fn require_name(v: &str, field: &'static str, max: usize) -> Result<(), TlsError> {
+pub fn require_name(v: &str, field: &str, max: usize) -> Result<(), TlsError> {
     if v.is_empty() {
         return Err(TlsError::Params(format!("{field}: cannot be empty")));
     }

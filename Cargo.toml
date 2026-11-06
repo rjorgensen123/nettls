@@ -1,6 +1,6 @@
 [package]
 name = "nettls"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 rust-version = "1.99.1"
 license = "MIT OR Apache-2.0"
@@ -9,11 +9,17 @@ repository = "https://github.com/rjorgensen123/nettls"
 authors = ["Roger Jorgensen <rogerj@gmail.com>"]
 keywords = ["tls", "rustls", "pinning", "certificate", "rotation"]
 categories = ["cryptography", "network-programming", "authentication"]
-# CI configuration is not part of the crate, so it is never packaged.
-exclude = [".gitea/", ".github/"]
+# CI configuration and the Python binding are not part of the crate, so they are
+# never packaged.
+exclude = [".gitea/", ".github/", "nettls-py/"]
 # The crate is published on crates.io, and only there: the list refuses any other
 # destination outright.
 publish = ["crates-io"]
+
+# The repository is a workspace: the library at the root, and the Python binding
+# in `nettls-py/`, built and tested against the same code (0.11.0).
+[workspace]
+members = ["nettls-py"]
 
 [dependencies]
 # ── THE PROVIDER TRAP (read this before touching a single version line) ─────── #

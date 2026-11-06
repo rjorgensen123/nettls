@@ -8,6 +8,23 @@ and the project follows [Semantic Versioning](https://semver.org/).
 > marked with the version it applies from, so a reader sees what holds for their version
 > without guessing.
 
+## [0.11.0] — Python runs the Rust code
+
+### Changed — Python uses the Rust code, through `nettls-py` *(2026-11-06)*
+
+The Python twin, `python/nettls.py`, is gone. Python now runs this crate through
+PyO3: `nettls-py` (module `nettls_py`) has the same modules, names and types, and
+its TLS is rustls. There is one implementation to maintain. A test holds the
+Python API to the Rust API, and CI builds the module and runs the Python tests
+against it; the parity test and the cross-test went with the twin. See
+`docs/Python.md`.
+
+### Changed — two parameters *(2026-11-06)*
+
+The `require_*` checks in `canonical` take `field: &str` instead of
+`&'static str`, so a name from Python fits. The second parameter of
+`Receipt::verify` is now called `expected_new_fp`. No call changes.
+
 ## [0.10.0] — krypto 0.8, and fixes for the reported bugs
 
 ### Changed — krypto 0.8 *(2026-11-03)*

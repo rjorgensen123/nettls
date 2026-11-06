@@ -622,10 +622,10 @@ impl Receipt {
     ///
     /// Both are required. A receipt that is genuine but applies to a *different*
     /// rotation is a replay — and it must not make us roll.
-    pub fn verify(&self, pinned_pubkey: &[u8], forventet_new_fp: &str) -> Result<(), TlsError> {
-        if self.new_fp != forventet_new_fp {
+    pub fn verify(&self, pinned_pubkey: &[u8], expected_new_fp: &str) -> Result<(), TlsError> {
+        if self.new_fp != expected_new_fp {
             return Err(TlsError::ProofInvalid(format!(
-                "the receipt covers {}, but we announced {forventet_new_fp} — \
+                "the receipt covers {}, but we announced {expected_new_fp} — \
                  this is a receipt for a different rotation",
                 self.new_fp
             )));

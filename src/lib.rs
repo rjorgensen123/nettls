@@ -147,12 +147,12 @@ pub use transport::{TransportCipher, TransportPolicy};
 
 /// Re-export, so consumers can name rustls types without listing `rustls`
 /// themselves — and thus without risking a line of their own with wrong features.
-/// PKCS#8 from key material — **only for the cross-test** against the Python side.
+/// PKCS#8 from key material — **only for tests**.
 ///
-/// Lives here and not in `signature` because it is not part of §6: it exists
-/// solely so the bridge in `python/test_krysstest.py` can sign with the same
-/// material it serves. A general signing oracle on TLS key material is a
-/// surface we do not want.
+/// Lives here and not in `signature` because it is not part of §6. It was made
+/// for the cross-test against the Python twin, which went with the twin in
+/// 0.11.0. A general signing oracle on TLS key material is a surface we do not
+/// want.
 #[doc(hidden)]
 #[deprecated(
     since = "0.8.1",

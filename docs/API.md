@@ -214,7 +214,7 @@ impl TransportPolicy {
 ```
 
 - **Default: AES-256-GCM only** (decided 2026-09-04) — the one AEAD every party in the
-  party speaks: rustls, OpenSSL/Python, every browser since 2014. Up to 0.8.2 the configs
+  party speaks: rustls, OpenSSL, every browser since 2014. Up to 0.8.2 the configs
   offered ring's full list (nine suites, AES-128 included); that list is gone.
 - **The consumer's list, in the consumer's order.** rustls picks the first suite in *our* list
   the peer also offers; the server's list decides. Nothing outside the list is ever used.
@@ -235,9 +235,9 @@ pub fn suite() -> SupportedCipherSuite;   // what TransportCipher::Aegis256 puts
 ```
 
 Offered only when a consumer lists `TransportCipher::Aegis256`; **never the default**. Two nettls
-ends speak it; a foreign peer (Python/OpenSSL, a browser) skips it as an unknown suite — the
-fallback rule realised by TLS itself: list `[Aegis256, Aes256Gcm]` and a Rust peer lands on AEGIS,
-everyone else on AES-256-GCM, with no negotiation code of ours.
+ends speak it, from Rust or from Python (`nettls-py`, 0.11.0); a foreign peer (OpenSSL, a browser)
+skips it as an unknown suite — the fallback rule realised by TLS itself: list `[Aegis256, Aes256Gcm]`
+and a nettls peer lands on AEGIS, everyone else on AES-256-GCM, with no negotiation code of ours.
 
 **Why it deviates (decided 2026-09-04):** rustls gives every TLS 1.3 AEAD a 12-byte nonce
 (`NONCE_LEN`; 16 in 0.24-dev and on git-main, checked against the source), AEGIS-256 needs 32,
@@ -626,9 +626,8 @@ pub fn choose(requested: Alg, verified_supported: Option<&[Alg]>) -> Result<Alg,
   it → the best the peer declared, by the fixed preference order (aegis256 · xchacha20 ·
   aes256gcm); nothing acceptable → `TlsError::Negotiation` — **the connection fails, never
   silently weaker**. An unverifiable statement authorizes nothing.
-- The Python twin carries the same surface (`algsupport_v1`,
-  `build_support_statement`/`verify_support_statement`, `choose_alg`) — a Python party
-  typically declares `["aes256gcm"]`. Byte parity is proven by the `algsupport-01` vector.
+- From Python it is the same module, `nettls_py.capability` *(0.11.0)*. The `algsupport-01`
+  vector fixes the canonical bytes.
 
 ## `status` — the About contribution *(new in 0.8.2)*
 
@@ -716,7 +715,7 @@ pub fn open(key: &RecipientKey, envelope: &[u8]) -> Result<krypto::SecretBuf, Tl
 ```
 
 Whoever seals holds no key and cannot open. `seal_with(_, _, Alg::Aes256Gcm)` is the interop
-bridge for a recipient without AEGIS (Python); `open` reads the algorithm from the header.
+bridge for a recipient without AEGIS; `open` reads the algorithm from the header.
 The key exchange is `krypto::exchange` (0.8.0) — a low-order recipient point is **rejected at
 sealing** (non-contributory result), it no longer yields an envelope.
 
@@ -854,9 +853,79 @@ retired §5 model entirely** (`chain` + `rotation`: `TrustChain`, `RotationProof
 phase, nothing to migrate (`cert_fingerprint_sha256` survived; it moved to `material`).
 Recorded here, and every entry above carries the version it applies from.
 
+## Python — `nettls-py` *(0.11.0)*
+
+The same API from Python 3.11 or newer: `pip install nettls-py`, then `import nettls_py`. Every
+function, type, constant and module in this document exists there, with the same name, and does the
+same thing, because it is the same Rust code. A test (`nettls-py/tests/surface.rs`) fails the build
+if a name is on one side only without a written reason. What differs is what can be guaranteed
+(below). How to use it, with examples: **[Python](Python.md)**.
+
+How the Rust forms read in Python:
+
+| Rust | Python |
+|---|---|
+| `nettls::TlsMaterial`, `nettls::announcer::Announcer`, … | `nettls_py.TlsMaterial`, `nettls_py.announcer.Announcer`, … — the same modules and the same root re-exports |
+| `&[u8]`, `Vec<u8>` | `bytes` |
+| `&str`, `String` | `str` |
+| `impl Into<PathBuf>`, `&Path` | `str` or a path object |
+| `Option<T>` | `T` or `None` |
+| `Result<T, TlsError>` | `T`, or an exception |
+| `TlsError::Pem`, `TlsError::Params`, … | `PemError`, `ParamsError`, …, all subclasses of `TlsError`, also in `nettls_py.error` |
+| `Mode::Rolling`, `ChainState::Idle { attempt_at }`, … | `Mode.Rolling`, `ChainState.Idle(attempt_at=…)`, … — enums with data too |
+| A struct's `pub` fields | Attributes. `SelfSignedParams::valid_days` is both a field and a builder in Rust; in Python it is the field |
+| `X::new(…)` | `X.new(…)`; where Rust has a plain constructor or `Default`, `X(…)` too |
+| `&krypto::SecretBuf`, `krypto::SecretString` taken in | `bytes`, `str`, copied straight into locked memory |
+| `krypto::SecretBuf` handed out (`unlock`, `open`, `anchor_pkcs8`) | `bytes` |
+| `krypto::Alg` | `nettls_py.Alg` |
+| A closure (`roll_if_ready_gated`, an approval's key lookup) | A function. An exception it raises fails the call closed, and is raised afterwards |
+| A value taken by value (`OwnMaterial` into `Announcer::new`) | The object is taken; using it afterwards is a `ValueError` |
+| `serde_json` on the JSON types and the status report | `x.dumps()`, and `X.loads(s)` where Rust can read it back |
+| rustls `ClientConfig`, `ServerConfig` | Objects only `nettls_py.stream` takes |
+
+No Python form: `pub use rustls`, `provider()`, `aegis::suite()` and `TlsMaterial::certified_key`
+give rustls values with no meaning outside rustls; the crate never hands out a `Pending`; and the
+`#[doc(hidden)]` test helpers.
+
+### `stream` — TLS over a Python socket (Python only)
+
+```python
+Stream.connect(sock, config: ClientConfig, server_name: str) -> Stream   # the client side
+Stream.accept(sock, config: ServerConfig) -> Stream                      # the server side
+stream.read(n=65536) -> bytes          # b"" once the peer has closed; at most MAX_READ
+stream.write(data) -> int              # all of it, flushed
+stream.flush(); stream.close()         # close sends close_notify; closing twice does nothing
+stream.peer_fingerprint() -> str | None
+```
+
+Rust consumers drive rustls themselves, with `rustls::Stream` or `tokio-rustls`; Python has nothing
+that can, so this is that piece, with no nettls logic in it. Whom to trust is the client config's
+decision — `Trust::client_config` accepts `current` and `next` and promotes on proof (§6.7),
+`pinned_client_config` accepts one fingerprint — and the certificate shown is the server config's,
+so a `RotatingResolver` server follows the rotation. Both constructors complete the handshake
+before they return. The stream takes the socket over (`socket.detach()`); its timeout carries over,
+and waiting happens without the GIL. A non-blocking socket is refused and left to the caller.
+Socket and TLS failures are `OSError`, as Python's `ssl` gives them, and a timeout is
+`TimeoutError`. There is no asyncio form.
+
+### What is guaranteed, and where Python differs
+
+| | Rust | Python |
+|---|---|---|
+| Private keys the crate holds (`TlsMaterial`, `Announcer`, `RecipientKey`) | In krypto's locked memory, kept out of core dumps, wiped on drop | The same: the objects hold Rust memory |
+| What goes in | `SecretBuf`, `SecretString` | Copied in. The `bytes` or `str` passed stays as Python keeps it, neither locked nor wiped |
+| What comes out | `SecretBuf` | `bytes`: a copy Python holds, neither locked nor wiped |
+| Locked memory | Counted against `RLIMIT_MEMLOCK` of the process | The same, in the Python process |
+| `fork` | The child's copies of locked pages are not locked | The same |
+| TLS | rustls, with the configs above | The same rustls, through `stream`; Python's `ssl` is not used |
+| Long calls | — | Key generation, Argon2 in `lockbox`, the announcer's writes and the stream's waiting release the GIL |
+| A panic inside nettls | Unwinds to the caller | Becomes `pyo3_runtime.PanicException` |
+| `unsafe` | None in `nettls` (`forbid(unsafe_code)`) | One block in the binding: taking over the socket's descriptor |
+
 ---
 
 ## Further
 
 - **[Home](Home.md)** — what nettls is, and what it is not
 - **[Usage](Usage.md)** — the order, the traps, and what you do yourself
+- **[Python](Python.md)** — the same, from Python

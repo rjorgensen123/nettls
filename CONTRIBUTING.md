@@ -21,10 +21,10 @@ guarantee does not hold, open an issue. These get looked at first.
 what a function does, that is worth an issue on its own — the docs are checked against
 the code by a test, but a test cannot tell whether a sentence is *true*.
 
-**Interoperability findings.** The crate ships a Python twin of the protocol, and the
-two are held to the same wire format by a cross-test. If you build a third
-implementation and it disagrees with either of them, that is a finding worth having —
-whichever side turns out to be wrong.
+**Interoperability findings.** The wire format is fixed by the test vectors in
+`testvectors/`, and Python runs this same Rust code through `nettls-py`. If you build
+another implementation and it disagrees with the vectors, that is a finding worth
+having — whichever side turns out to be wrong.
 
 **Security findings.** Not as an issue — see [SECURITY.md](SECURITY.md), which also
 says what a report must contain.
@@ -45,14 +45,14 @@ that means and why.
 **Feature requests.** Possible, and worth asking about. But the crate offers one
 canonical way of doing each thing on purpose, so a second way is not a small change: it
 is a decision about what every consumer then has to agree on, and for anything that
-touches the wire it is a decision two implementations have to agree on. Say what you
+touches the wire it is a decision every peer has to agree on. Say what you
 are trying to do rather than which function you want — the problem is easier to judge
 than the solution.
 
 ## If you are filing an issue
 
-Say which version. It is declared in `Cargo.toml`; the crate exposes it as `nettls::VERSION`
-and the Python twin as `nettls.__version__`, both derived from that one declaration.
+Say which version. It is declared in `Cargo.toml`; the crate exposes it as `nettls::VERSION`,
+and the Python module as `nettls_py.__version__`, which is the same constant.
 
 Include what someone else needs to see the same thing: the calls you made, the input
 shape, and the actual output or error. A failing test is the clearest form there is.

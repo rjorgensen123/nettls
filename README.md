@@ -23,7 +23,9 @@ continuity, signed receipts, generation pairs and an operator anchor.
   the crate returns `ServerConfig`/`ClientConfig` and facts; the consumer binds and logs.
   **No direct `ring` or `x25519-dalek`** since 0.8.0 — every primitive is krypto's.
 - **In use:** already carrying traffic in more than one application.
-- **Python twin:** a protocol twin lives in [`python/nettls.py`](python/nettls.py).
+- **Python:** the same crate, run from Python through PyO3: [`nettls-py`](nettls-py/) (module
+  `nettls_py`, Python 3.11 or newer). One implementation, two languages *(0.11.0)* — see
+  [`docs/Python.md`](docs/Python.md).
 - **Docs:** [`docs/`](docs/) — **authoritative for the crate** (externally validated: a third
   party built against this repo alone). The complete, machine-verified contract is
   [`docs/API.md`](docs/API.md) — every public name, enforced by a doc-guard test; guide:
@@ -173,8 +175,10 @@ consuming service, not here. The crate provides the building blocks, not the flo
 ```sh
 cargo test                     # unit, integration and doctests; real TLS handshakes included
 cargo clippy --all-targets -- -D warnings
-python -m pytest python/ -q    # the Python twin — use the CI-pinned venv (python/krav-ci.txt)
-python python/ringnode.py      # the ring: N nodes rotating against each other (see examples/ringnode.rs)
+# The Python binding, in a venv from nettls-py/requirements-ci.txt (pinned, like CI):
+VIRTUAL_ENV=.venv .venv/bin/maturin develop --locked -m nettls-py/Cargo.toml
+PYO3_PYTHON=.venv/bin/python cargo test -p nettls-py   # the Python API is the Rust API
+.venv/bin/pytest nettls-py/tests -q                    # vectors, error corpus, stream, the ring
 ```
 
 ## Author

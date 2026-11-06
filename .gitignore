@@ -5,15 +5,17 @@ debug/
 *.pdb
 # Cargo.lock is committed on purpose: a security-sensitive crate wants reproducible builds
 
-# ── Python (python/nettls.py — the other half of the §6 contract) ──
-# .pyc files are machine-specific (cpython-312, pytest-9.1.1) and were COMMITTED
-# here for a while — which put them in `cargo package`, and so into the published
-# crate. A crate that commits Cargo.lock for the sake of reproducible builds has
-# no business shipping bytecode from one developer's machine in the tarball.
+# ── Python (the binding in nettls-py/) ──
+# .pyc files are machine-specific (cpython-312, pytest-9.1.1) and were once
+# COMMITTED here — which put them in `cargo package`, and so into the published
+# crate. Bytecode from one developer's machine has no place in the repository.
 __pycache__/
 *.py[cod]
 .pytest_cache/
-/python/.venv/
+.venv/
+# What `maturin develop` and `maturin build` leave behind.
+*.so
+/nettls-py/target/
 
 # ── Editor / OS ──
 /.idea/

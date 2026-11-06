@@ -2,10 +2,10 @@
 //! Version guard.
 //!
 //! `Cargo.toml` is the only place the version is written. The crate's `VERSION`
-//! constant and the Python twin's `__version__` both derive from it, so there is
-//! nothing here comparing them against each other — a derived value cannot drift
-//! from its source, and a test that asserts it does not is a test that asserts
-//! nothing. Until 0.8.6 the version stood in three files kept in step by tests;
+//! constant derives from it, and `nettls_py` gives Python that same constant as
+//! `__version__`, so there is nothing here comparing them against each other — a
+//! derived value cannot drift from its source, and a test that asserts it does
+//! not is a test that asserts nothing. Until 0.8.6 the version stood in three files kept in step by tests;
 //! now it stands in one.
 //!
 //! What can still drift is the changelog. A version can be cut without anyone

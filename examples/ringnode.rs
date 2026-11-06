@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! A ring node in Rust (SPEC-nettls §6.15).
 //!
-//! The counterpart of `python/ringnode.py`, and it speaks **exactly the same
-//! protocol**: one JSON line in, one out, over TLS. The node does not know
+//! The counterpart of `nettls-py/tests/ringnode.py`, which runs this same crate
+//! from Python, and it speaks **exactly the same protocol**: one JSON line in,
+//! one out, over TLS. The node does not know
 //! which language its neighbours are written in — and that is the whole point
 //! of the ring.
 //!

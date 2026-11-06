@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
-"""The ring test (SPEC-nettls §6.15) — 3 nodes, mixed implementations.
+"""The ring test (SPEC-nettls §6.15) — 3 nodes, Rust and Python.
 
 ```text
 A → B → C → A
@@ -20,9 +20,10 @@ carries without the anchor. Rotation 4 shows it does so **again** — and that
 the N-2 deletion is general, not just something that went well the one time
 N-2 happened to be the anchor.
 
-**Two configurations.** With only `2×Rust + 1×Python`, `Python → Python` is
-never tried, and a bug Python shares with itself would slip through — both
-sides would make the same wrong choice and agree about it.
+**Rust and Python nodes.** The Python node is `ringnode.py` on nettls_py, the
+same Rust code as `examples/ringnode.rs`, reached through the binding. Mixing
+them shows the binding carries the protocol and TLS the way the crate does,
+in every direction.
 
 Skipped if `cargo` is missing.
 """
@@ -42,11 +43,10 @@ from pathlib import Path
 
 import pytest
 
-HER = Path(__file__).resolve().parent
-ROT = HER.parent
-sys.path.insert(0, str(HER))
+from support import ROOT, ed25519_public
 
-import nettls as n  # noqa: E402
+HER = Path(__file__).resolve().parent
+ROT = ROOT
 
 pytestmark = pytest.mark.skipif(
     shutil.which("cargo") is None, reason="cargo is missing — the ring test is skipped"
@@ -75,7 +75,7 @@ class NodeProsess:
         # The Ed25519 seed survives a restart on purpose: it is the service's
         # STABLE, operator-distributed identity (§6.6b). It is the certificate
         # lineage that rotates, not the signing key.
-        self.pub = n.ed25519_public_from_seed(seed)
+        self.pub = ed25519_public(seed)
         args = (
             [sys.executable, str(HER / "ringnode.py")]
             if lang == "python"

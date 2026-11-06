@@ -51,8 +51,9 @@ so the same algorithms are not written twice in two places that then have to agr
 | **Send something secret to one specific recipient** | sealed so only the holder of the right key can open it |
 | **Know when the certificate expires** | well in advance, as a number you can alert on |
 
-**[Usage](Usage.md)** shows how to get started and in what order things are done. **[API](API.md)** is
-the lookup reference for every type and function.
+**[Usage](Usage.md)** shows how to get started and in what order things are done, and
+**[Python](Python.md)** the same from Python. **[API](API.md)** is the lookup reference for every
+type and function, in both languages.
 
 ## Two ways to use it
 
@@ -121,11 +122,11 @@ reasons are in **[Usage](Usage.md)**.
 
 `#![forbid(unsafe_code)]` — the library contains zero `unsafe`.
 
-A **Python twin** (`python/nettls.py`) implements the protocol — messages, signatures, generation
-state, the schedule, **and self-signed issuance** (`self_signed`: same P-256/SAN/lifetime rules
-as the crate) — against the same frozen test vectors, so a Python service can create its own
-identity and take part in the rotation.
-The TLS transport itself stays in Rust.
+**Python** runs this same crate through PyO3: **`nettls-py`** has the same modules, names and
+types, with the Rust code inside — the TLS too, which is rustls *(0.11.0)*. A Python service
+creates its own identity, takes part in the rotation, and connects through the same verifier as a
+Rust one. Up to 0.10.0 Python had its own implementation, `python/nettls.py`; there is one now.
+See **[Python](Python.md)**.
 
 ## Who uses it
 

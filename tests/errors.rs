@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! The error matrix, Rust side (SPEC-nettls §6.14b).
 //!
-//! Twin of `python/test_feil.py`, and they read **the same file**:
-//! `testvectors/errors.json`.
+//! `nettls-py/tests/test_feil.py` runs the same corpus from Python, and both read
+//! **the same file**: `testvectors/errors.json`.
 //!
 //! ## Why the corpus is shared and not two lists
 //!

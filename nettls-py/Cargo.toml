@@ -1,0 +1,22 @@
+[package]
+name = "nettls-py"
+version = "0.11.0"
+edition = "2024"
+rust-version = "1.99.1"
+description = "Python binding for nettls: pinned TLS, certificate rotation and the §6 messages, with the Rust code running inside."
+repository = "https://github.com/rjorgensen123/nettls"
+license = "MIT OR Apache-2.0"
+authors = ["Roger Jorgensen <rogerj@gmail.com>"]
+# The Rust crate is never published; the Python package is, on PyPI.
+publish = false
+
+[lib]
+name = "nettls_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+nettls = { path = ".." }
+krypto = "0.8"
+pyo3 = { version = "0.30", features = ["abi3-py311"] }
+serde_json = "1"
+zeroize = "1"

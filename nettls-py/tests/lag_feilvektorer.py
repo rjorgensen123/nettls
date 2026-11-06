@@ -1,23 +1,22 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """Generator for `testvectors/errors.json` — the normative error corpus.
 
-Run:  python3 python/lag_feilvektorer.py
+Run:  python3 nettls-py/tests/lag_feilvektorer.py [output path]
+
+With `nettls_py` installed. Without a path it writes `testvectors/errors.json`.
 
 ## Why the corpus exists
 
-`testvectors/kanonisk.json` shows that the two implementations agree on
-**valid** values. It says nothing about invalid ones — and that is where an
-attacker actually lives. If Python is more lenient than Rust somewhere, you
-attack Python; if Rust is more lenient, you attack Rust.
+`testvectors/canonical.json` shows the valid values. It says nothing about
+invalid ones, and that is where an attacker actually lives. Hence this corpus:
+one file, read by `tests/errors.rs` and by `nettls-py/tests/test_feil.py`, where
+every entry **must** be rejected.
 
-We have already had two such divergences, and the cross-test could see
-**neither**:
-
-- `from_hex` panicked in Rust on multi-byte UTF-8; Python gave an orderly error.
-- `require_name` let C1 control characters through in Python; Rust rejected them.
-
-Both sat in the handling of the *invalid*. Hence this corpus: one file, read by
-both sides, where every entry **must** be rejected by both.
+It was written when Python had its own implementation, and two divergences in
+the handling of the *invalid* had got through every other test: `from_hex`
+panicked in Rust on multi-byte UTF-8, and `require_name` let C1 control
+characters through in Python. Since 0.11.0 Python runs the Rust code; the
+corpus stays, and both suites still read it.
 
 ## Why the baseline is a real, valid message
 
@@ -30,10 +29,10 @@ would pass for the wrong reason.
 The `felt` value says which field was touched, so a test rejecting for the
 wrong reason can be spotted by reading.
 
-The corpus went fully English on 2026-08-15, together with the wire keys —
-a deliberate, Roger-approved change made before first adoption. The corpus is
-still normative: this generator's output IS the committed file, and both test
-suites read the same file.
+The corpus went fully English on 2026-08-15, together with the wire keys. It is
+normative: this generator's output is the committed file. The certificates and
+the P-256 signatures are made fresh every run, so a new run gives the same
+entries with new key material, not the same bytes.
 """
 
 from __future__ import annotations
@@ -42,12 +41,10 @@ import json
 import sys
 from pathlib import Path
 
-HER = Path(__file__).resolve().parent
-sys.path.insert(0, str(HER))
+import krypto_py
+import nettls_py as nettls
 
-import nettls as n  # noqa: E402
-
-UT = HER.parent / "testvectors" / "errors.json"
+UT = Path(__file__).resolve().parents[2] / "testvectors" / "errors.json"
 
 # Fixed seeds → the corpus is reproducible. The certificates below are
 # self-signed and regenerated every time; that is fine, because nothing in the
@@ -62,30 +59,42 @@ def _baseline() -> tuple[dict, dict, dict, dict]:
     neither side can run verification, and corpus level «verify» would be
     unprobeable.
     """
-    c0_pem, c0_key = n.self_signed("c0", ["c0"], days=30)
-    c1_pem, c1_key = n.self_signed("c1", ["c1"], days=30)
-    c2_pem, _ = n.self_signed("c2", ["c2"], days=30)
+    c0_pem, c0_key, c0_fp = _identity("c0")
+    c1_pem, c1_key, c1_fp = _identity("c1")
+    c2_pem, _, _ = _identity("c2")
 
-    k = n.Announcement.new(
-        announcer="gateway",
-        prev=(n.fingerprint_from_pem(c0_pem), c0_key),
-        curr=(n.fingerprint_from_pem(c1_pem), c1_key),
-        new_cert_pem=c2_pem,
-        sent_at=1_700_000_000,
+    k = nettls.announcement.Announcement.new(
+        "gateway", (c0_fp, c0_key), (c1_fp, c1_key), c2_pem, 1_700_000_000
     )
-    kv = n.Receipt.new("service", "gateway", k.new_fp, 1_700_000_001, SEED)
-    g = n.Approval.new(
-        "gateway", n.fingerprint_from_pem(c0_pem), "operator", 1_700_000_002, "portal", SEED
+    kv = nettls.announcement.Receipt.new(
+        "service", "gateway", k.new_fingerprint(), 1_700_000_001, SEED
     )
+    g = nettls.approval.Approval.new("gateway", c0_fp, "operator", 1_700_000_002, "portal", SEED)
     extra = {
         "prev_cert_pem": c0_pem,
         "curr_cert_pem": c1_pem,
         # The seed of the Ed25519 key that signed the receipt and the approval.
-        # Hex, like all other key material in §6.
+        # Hex, like all other key material in §6. Ed25519 is krypto's.
         "ed25519_seed": SEED.hex(),
-        "ed25519_pub": n.ed25519_public_from_seed(SEED).hex(),
+        "ed25519_pub": krypto_py.sign.ed25519_public(
+            krypto_py.SecretBuf.from_vec(bytearray(SEED))
+        ).hex(),
     }
-    return k.to_json(), kv.to_json(), g.to_json(), extra
+    return _dict(k), _dict(kv), _dict(g), extra
+
+
+def _identity(name: str) -> tuple[str, bytes, str]:
+    """A self-signed mode 2 identity: (cert PEM, PKCS#8 key, fingerprint)."""
+    m = nettls.TlsMaterial.load(
+        nettls.CertSource.self_signed(nettls.announcer.mode2_params(name, [name]))
+    )
+    pem = nettls.pem.encode("CERTIFICATE", m.cert_chain()[0]).decode()
+    return pem, m.anchor_pkcs8(), m.fingerprint_sha256()
+
+
+def _dict(message) -> dict:
+    """The message as the JSON object serde writes for it."""
+    return json.loads(message.to_json().dumps())
 
 
 def _m(base: dict, field: str, value, why: str, name: str, level: str = "parse") -> dict:
@@ -269,6 +278,7 @@ def approval_errors(base: dict) -> list[dict]:
 
 
 def main() -> None:
+    out = Path(sys.argv[1]) if len(sys.argv) > 1 else UT
     k, kv, g, extra = _baseline()
     corpus = {
         "_about": (
@@ -287,9 +297,9 @@ def main() -> None:
         "receipt": receipt_errors(kv),
         "approval": approval_errors(g),
     }
-    UT.write_text(json.dumps(corpus, indent=2, ensure_ascii=False) + "\n")
+    out.write_text(json.dumps(corpus, indent=2, ensure_ascii=False) + "\n")
     n_entries = sum(len(v) for v in corpus.values() if isinstance(v, list))
-    print(f"wrote {UT} — {n_entries} entries")
+    print(f"wrote {out} — {n_entries} entries")
 
 
 if __name__ == "__main__":

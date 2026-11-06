@@ -1,0 +1,16 @@
+# Locked Python tools and test dependencies for nettls-py: the Python side's Cargo.lock.
+#
+# The module itself needs nothing: the protocol, the certificates and TLS are
+# the Rust code inside it. Here are the build tool, the test runner, and
+# krypto-py, which the tests take Ed25519 from (it is krypto's, in Rust too).
+#
+# Usage:  python3 -m venv .venv && .venv/bin/pip install -r nettls-py/requirements-ci.txt
+#         VIRTUAL_ENV=.venv .venv/bin/maturin develop --locked -m nettls-py/Cargo.toml
+#         .venv/bin/pytest nettls-py/tests -q
+iniconfig==2.3.0
+krypto-py==0.8.0
+maturin==1.16.0
+packaging==26.3
+pluggy==1.6.0
+Pygments==2.20.0
+pytest==9.1.1
