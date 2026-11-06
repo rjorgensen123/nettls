@@ -204,11 +204,17 @@ impl Schedule {
 
     /// We have switched certificates. Schedules the next round.
     pub fn rolled(&mut self, now: i64) -> Result<(), TlsError> {
+        // Drawn first: if the draw fails, nothing has changed.
+        let attempt_at = draw_roll_time(now)?;
         self.last_rolled = Some(now);
-        self.state = ChainState::Idle {
-            attempt_at: draw_roll_time(now)?,
-        };
+        self.state = ChainState::Idle { attempt_at };
         Ok(())
+    }
+
+    /// Puts the time of the last switch back after a restart, so the 24-hour
+    /// cap holds across it (§6.7c, 0.10.0).
+    pub(crate) fn restore_last_rolled(&mut self, at: i64) {
+        self.last_rolled = Some(at);
     }
 
     /// The state, for logging and status.
@@ -318,13 +324,16 @@ impl Announcer {
 
     /// Persist the **previous generation's key** — the one announcements are signed with.
     ///
-    /// Only `previous` is stored here. `current` already lives on disk as
-    /// material (`material.locked` / `cert.pem`+`key.pem`), and storing it in
-    /// two places would have given two files that can drift apart after a crash
-    /// in the middle of a switch. The two files therefore hold **disjoint** state.
+    /// Only `previous`'s key is stored here; `current`'s lives in the material
+    /// (`material.locked` / `cert.pem`+`key.pem`). The file also names the
+    /// `current` it belongs to and when the pair came about, so a start can
+    /// check the two files against each other (§6.11 N-4) and keep the 24-hour
+    /// cap (§6.7c) *(0.10.0)*.
     fn save_previous(
         &self,
         previous: Option<&(String, krypto::SecretBuf)>,
+        current: &str,
+        rolled_at: Option<i64>,
     ) -> Result<(), TlsError> {
         let path = self.previous_path();
         let Some((fp, pkcs8)) = previous else {
@@ -335,13 +344,13 @@ impl Announcer {
         // The on-disk struct needs a `Vec<u8>` for serde; it is wiped the
         // moment the JSON exists.
         let json = {
-            let mut on_disk = ForrigePaaDisk {
+            let on_disk = ForrigePaaDisk {
                 fingerprint: fp.clone(),
                 pkcs8: pkcs8.expose(|b| b.to_vec()),
+                current: Some(current.to_string()),
+                rolled_at,
             };
-            let r = serde_json::to_vec(&on_disk);
-            on_disk.pkcs8.zeroize();
-            r
+            serde_json::to_vec(&on_disk)
         }
         .map_err(|e| TlsError::Chain(format!("could not serialize the previous key: {e}")))?;
 
@@ -358,17 +367,14 @@ impl Announcer {
         crate::pem::write_atomic(&path, &out, 0o600)
     }
 
-    /// Restore the chain `(previous, current)` after a restart.
+    /// Restore the chain `(previous, current)` after a restart. Called by
+    /// [`Announcer::new`].
     ///
-    /// **This must be called at startup.** `Announcer::new` receives the
-    /// material the caller *has* — and after a rotation that is only generation
-    /// 0, because the keys from generation 1 onwards are created and owned by
-    /// the crate. Without this call the instance is left with `previous = None`,
-    /// and the next double-signed announcement can be neither signed nor
-    /// verified.
-    ///
-    /// Mirrors [`Announcer::restore_pending`]: explicit, fallible, and
-    /// called by the consumer at startup.
+    /// `Announcer::new` receives the material the caller *has* — and after a
+    /// rotation that is only generation 0, because the keys from generation 1
+    /// onwards are created and owned by the crate. Without this the instance
+    /// is left with `previous = None`, and the next double-signed announcement
+    /// can be neither signed nor verified.
     ///
     /// Returns `true` if a chain was restored, `false` if we have never
     /// rolled.
@@ -380,6 +386,58 @@ impl Announcer {
     /// corrupt or tampered file exactly the silent state this call exists to
     /// prevent.
     fn restore_material(&self) -> Result<bool, TlsError> {
+        let Some(mut read_back) = self.read_previous()? else {
+            return Ok(false);
+        };
+        let path = self.previous_path();
+
+        // `current` is derived from the material actually on disk — that is
+        // the single truth about what we are running now.
+        let material = self.load(&self.dir)?;
+        let der = material.cert_chain()[0].as_ref().to_vec();
+        let current_fp = krypto::hex::encode(&krypto::sha256(&der));
+        let current_pkcs8 = crate::pkcs8::pkcs8_p256(material.key_der(), &der)?;
+
+        if read_back.fingerprint == current_fp {
+            return Err(TlsError::Chain(format!(
+                "previous and current have the same fingerprint ({current_fp}). The state on \
+                 disk is inconsistent, and the chain cannot be used"
+            )));
+        }
+        // §6.11 N-4. Files from before 0.10.0 do not name their `current`.
+        if let Some(c) = &read_back.current
+            && *c != current_fp
+        {
+            return Err(TlsError::Chain(format!(
+                "the previous key in {} belongs to {c}, but the material in {} is {current_fp}. \
+                 The two do not match, and the chain cannot be used",
+                path.display(),
+                self.dir.display()
+            )));
+        }
+        if let Some(at) = read_back.rolled_at {
+            self.schedule
+                .write()
+                .map_err(|_| TlsError::Rustls("the rotation lock is poisoned".into()))?
+                .restore_last_rolled(at);
+        }
+
+        *self
+            .material
+            .write()
+            .map_err(|_| TlsError::Rustls("the material lock is poisoned".into()))? = OwnMaterial {
+            // `hold` zeroizes the deserialized Vec as it moves it into the lock.
+            previous: Some((
+                std::mem::take(&mut read_back.fingerprint),
+                crate::secret::hold(std::mem::take(&mut read_back.pkcs8))?,
+            )),
+            current: (current_fp, current_pkcs8),
+        };
+        Ok(true)
+    }
+
+    /// Reads the previous-key file. `None` when there is none.
+    fn read_previous(&self) -> Result<Option<ForrigePaaDisk>, TlsError> {
         let path = self.previous_path();
         let raa = match std::fs::read(&path) {
             Ok(f) => f,
@@ -405,7 +463,7 @@ impl Announcer {
                         }
                     )));
                 }
-                return Ok(false);
+                return Ok(None);
             }
             Err(e) => return Err(TlsError::io(&path, e)),
         };
@@ -424,30 +482,47 @@ impl Announcer {
                 path.display()
             ))
         })?;
+        Ok(Some(read_back))
+    }
 
-        // `current` is derived from the material actually on disk — that is
-        // the single truth about what we are running now.
-        let material = self.load(&self.dir)?;
-        let der = material.cert_chain()[0].as_ref().to_vec();
-        let current_fp = krypto::hex::encode(&krypto::sha256(&der));
-        let current_pkcs8 = crate::pkcs8::pkcs8_p256(material.key_der(), &der)?;
-
-        if read_back.fingerprint == current_fp {
-            return Err(TlsError::Chain(format!(
-                "previous and current have the same fingerprint ({current_fp}). The state on \
-                 disk is inconsistent, and the chain cannot be used"
-            )));
+    /// Reads back what a switch wrote and checks it (0.10.0).
+    fn verify_switch(&self, current: &str, previous: &str) -> Result<(), TlsError> {
+        let m = self.load(&self.dir)?;
+        let on_disk = krypto::hex::encode(&krypto::sha256(m.cert_chain()[0].as_ref()));
+        let chain_ok = self
+            .read_previous()?
+            .is_some_and(|p| p.fingerprint == previous && p.current.as_deref() == Some(current));
+        if on_disk == current && chain_ok {
+            return Ok(());
         }
+        Err(TlsError::Chain(format!(
+            "what was written to {} does not read back as written; nothing has been switched",
+            self.dir.display()
+        )))
+    }
 
-        *self
-            .material
-            .write()
-            .map_err(|_| TlsError::Rustls("the material lock is poisoned".into()))? = OwnMaterial {
-            // `hold` zeroizes the deserialized Vec as it moves it into the lock.
-            previous: Some((read_back.fingerprint, crate::secret::hold(read_back.pkcs8)?)),
-            current: (current_fp, current_pkcs8),
+    /// Removes the promise and `new/` once the switch to `current` is done.
+    fn clean_up_switch(&self, current: &str) -> Result<(), TlsError> {
+        let gone = |r: std::io::Result<()>| match r {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Some(e),
+            _ => None,
         };
-        Ok(true)
+        let promise = self.dir.join(PENDING_FILE);
+        let new_dir = self.dir.join("new");
+        for (path, err) in [
+            (&promise, gone(std::fs::remove_file(&promise))),
+            (&new_dir, gone(std::fs::remove_dir_all(&new_dir))),
+        ] {
+            if let Some(e) = err {
+                return Err(TlsError::Io {
+                    path: Some(path.clone()),
+                    detail: format!(
+                        "{e}; the switch to {current} is done, and the next start removes it"
+                    ),
+                });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -456,6 +531,18 @@ impl Announcer {
 struct ForrigePaaDisk {
     fingerprint: String,
     pkcs8: Vec<u8>,
+    /// The `current` this `previous` belongs to. Absent before 0.10.0.
+    #[serde(default)]
+    current: Option<String>,
+    /// When the pair came about. Absent before 0.10.0.
+    #[serde(default)]
+    rolled_at: Option<i64>,
+}
+
+impl Drop for ForrigePaaDisk {
+    fn drop(&mut self) {
+        self.pkcs8.zeroize();
+    }
 }
 
 /// Logs that the keys are stored in cleartext, once at setup.
@@ -1186,6 +1273,10 @@ impl Announcer {
     ///
     /// Idempotent: if an announcement is already out, the same one is returned.
     /// That is exactly the one that is republished until everyone has acked (§6.8a).
+    ///
+    /// The promise is saved before the announcement is returned, so a restart
+    /// resumes it (§6.9c). If saving fails, the error is returned, and the next
+    /// call saves it again *(0.10.0)*.
     pub fn prepare(&self, now: i64) -> Result<Announcement, TlsError> {
         if let Some(k) = self
             .pending
@@ -1193,6 +1284,7 @@ impl Announcer {
             .ok()
             .and_then(|v| v.as_ref().map(|p| p.announcement.clone()))
         {
+            self.save_pending()?;
             return Ok(k);
         }
 
@@ -1232,16 +1324,18 @@ impl Announcer {
             .write()
             .map_err(|_| TlsError::Rustls("the rotation lock is poisoned".into()))?
             .announced(now);
+        self.save_pending()?;
         Ok(k)
     }
 
-    /// A peer has acked.
+    /// A peer has acked. The promise is saved again with the shorter waiting
+    /// list *(0.10.0)*.
     pub fn acked(&self, peer: &str) -> Result<(), TlsError> {
         self.schedule
             .write()
             .map_err(|_| TlsError::Rustls("the rotation lock is poisoned".into()))?
             .acked(peer);
-        Ok(())
+        self.save_pending()
     }
 
     /// Switch certificates — **only** if everyone has acked and the rate limit allows it.
@@ -1268,6 +1362,11 @@ impl Announcer {
     /// postpones the switch with no side effects — ask again later. The chain
     /// and the serving still switch **together**, inside this call: there is
     /// no way to roll the chain without the resolver following.
+    ///
+    /// Everything new is written to disk and read back before anything in
+    /// memory moves. If that fails, nothing has been switched, the error is
+    /// returned, and the next call tries again. An error after the switch can
+    /// only come from removing the promise or `new/`, and says so *(0.10.0)*.
     pub fn roll_if_ready_gated(
         &self,
         now: i64,
@@ -1300,46 +1399,45 @@ impl Announcer {
             return Ok(None);
         }
 
-        // Move the material into place BEFORE the resolver switches, so a
-        // crash in the middle leaves us with a certificate we actually have
-        // the key to.
-        let new_dir = self.dir.join("new");
-        let fresh = self.load(&new_dir)?;
-        self.save(&fresh, &self.dir)?;
-
-        let old = self.resolver.swap(&fresh)?;
-
-        {
-            let mut m = self
-                .material
-                .write()
-                .map_err(|_| TlsError::Rustls("the material lock is poisoned".into()))?;
-            let new_fp = krypto::hex::encode(&krypto::sha256(fresh.cert_chain()[0].as_ref()));
-            // Exactly two are kept: the old `previous` is dropped here.
-            m.previous = Some(std::mem::replace(&mut m.current, (new_fp, new_pkcs8)));
-        }
-
-        // Preserve the new `previous` key. Without this it lives only in
-        // memory, and a restart after more than one rotation leaves the
-        // instance without the key the next announcement must be signed with
-        // (SPEC-nettls §6.11, norm N-1).
-        {
+        // Write and check everything first; nothing in memory moves until the
+        // disk holds the new pair (0.10.0).
+        let fresh = self.load(&self.dir.join("new"))?;
+        let new_fp = krypto::hex::encode(&krypto::sha256(fresh.cert_chain()[0].as_ref()));
+        let mut next = self
+            .schedule
+            .read()
+            .map_err(|_| TlsError::Rustls("the rotation lock is poisoned".into()))?
+            .clone();
+        next.rolled(now)?;
+        let previous = {
             let m = self
                 .material
                 .read()
                 .map_err(|_| TlsError::Rustls("the material lock is poisoned".into()))?;
-            self.save_previous(m.previous.as_ref())?;
-        }
+            (m.current.0.clone(), crate::secret::copy(&m.current.1)?)
+        };
+        self.save_previous(Some(&previous), &new_fp, Some(now))?;
+        self.save(&fresh, &self.dir)?;
+        self.verify_switch(&new_fp, &previous.0)?;
 
+        let old = self.resolver.swap(&fresh)?;
+        // Exactly two are kept: the old `previous` is dropped here.
+        *self
+            .material
+            .write()
+            .map_err(|_| TlsError::Rustls("the material lock is poisoned".into()))? = OwnMaterial {
+            previous: Some(previous),
+            current: (new_fp.clone(), new_pkcs8),
+        };
         *self
             .pending
             .write()
             .map_err(|_| TlsError::Rustls("the pending lock is poisoned".into()))? = None;
-        self.schedule
+        *self
+            .schedule
             .write()
-            .map_err(|_| TlsError::Rustls("the rotation lock is poisoned".into()))?
-            .rolled(now)?;
-        let _ = std::fs::remove_dir_all(&new_dir);
+            .map_err(|_| TlsError::Rustls("the rotation lock is poisoned".into()))? = next;
+        self.clean_up_switch(&new_fp)?;
         Ok(Some(old))
     }
 
@@ -1635,9 +1733,10 @@ struct PendingOnDisk {
 impl Announcer {
     /// Write the pending announcement to disk.
     ///
-    /// **The private key is not included.** It already lives in the `fresh/`
-    /// directory from `prepare`, and writing it a second time would have given
-    /// us two places to protect and one to forget.
+    /// `prepare` and `acked` call this themselves *(0.10.0)*; calling it again
+    /// does no harm. **The private key is not included.** It already lives in
+    /// `new/` from `prepare`, and writing it a second time would have given us
+    /// two places to protect and one to forget.
     pub fn save_pending(&self) -> Result<(), TlsError> {
         let path = self.dir.join(PENDING_FILE);
         let v = self
@@ -1671,9 +1770,11 @@ impl Announcer {
     /// that we had promised something binding — and the peer, which has acked
     /// and awaits the new certificate, would be left holding a promise nobody keeps.
     ///
-    /// **The material is read from `fresh/`, not from the file.** The file
+    /// **The material is read from `new/`, not from the file.** The file
     /// carries only the announcement and who we are waiting for; the private
-    /// key lies where it was written in `prepare`.
+    /// key lies where it was written in `prepare`. A promise whose certificate
+    /// is already the current one was switched before the restart; only its
+    /// cleanup is left, and that is done here *(0.10.0)*.
     fn restore_pending(&self) -> Result<bool, TlsError> {
         let path = self.dir.join(PENDING_FILE);
         let text = match std::fs::read_to_string(&path) {
@@ -1685,6 +1786,17 @@ impl Announcer {
             .map_err(|e| TlsError::Proof(format!("the pending file could not be parsed: {e}")))?;
 
         let k = Announcement::from_json(&on_disk.announcement)?;
+        let current = self
+            .material
+            .read()
+            .map_err(|_| TlsError::Rustls("the material lock is poisoned".into()))?
+            .current
+            .0
+            .clone();
+        if k.new_fingerprint() == current {
+            self.clean_up_switch(&current)?;
+            return Ok(false);
+        }
         let new_dir = self.dir.join("new");
         let m = self.load(&new_dir).map_err(|e| {
             TlsError::Chain(format!(

@@ -543,16 +543,21 @@ impl Announcer {
 
     pub fn own_trio(&self) -> Result<OwnTrio, TlsError>;
     pub fn prepare(&self, now: i64) -> Result<Announcement, TlsError>;   // create + persist + announce; idempotent
-    pub fn acked(&self, peer: &str) -> Result<(), TlsError>;             // verify the Receipt FIRST
+    pub fn acked(&self, peer: &str) -> Result<(), TlsError>;             // verify the Receipt FIRST; persists
     pub fn roll_if_ready(&self, now: i64) -> Result<Option<String>, TlsError>;
     pub fn roll_if_ready_gated(&self, now: i64, safe_now: impl FnOnce() -> bool)
         -> Result<Option<String>, TlsError>;   // the consumer's last word; chain+serving switch together
     pub fn should_announce(&self, now: i64) -> bool;
     pub fn status(&self, now: i64, expires: i64) -> Result<Status, TlsError>;
     pub fn pending(&self) -> Option<Announcement>;
-    pub fn save_pending(&self) -> Result<(), TlsError>;   // the private key is NOT included
+    pub fn save_pending(&self) -> Result<(), TlsError>;   // prepare/acked call it (0.10.0); NOT the key
 }
 ```
+
+`prepare` and `acked` save the promise themselves, so a restart resumes it *(0.10.0)*. A switch
+writes the new pair and reads it back before anything in memory moves: a failed write changes
+nothing, and the next call tries again. At start, the stored chain is checked against the material,
+and the 24-hour cap holds across the restart.
 
 `password: None` means **key material in cleartext on disk**. Legitimate (mode 1 with an
 operator-uploaded certificate), but it is a choice, and it must be visible as one.

@@ -783,3 +783,121 @@ async fn next_without_its_key_does_not_promote() {
     assert_eq!(trust.state().unwrap().current().fingerprint(), c1.fp_bar());
     s1.abort();
 }
+
+/// A fresh directory holding `c0` as the material.
+fn dir_with(name: &str, c0: &Gen) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("nettls-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    c0.material.save_pem(&dir).unwrap();
+    dir
+}
+
+/// The announcer a process builds at start, with `c0` as the anchor.
+fn announcer_in(
+    dir: &std::path::Path,
+    c0: &Gen,
+    resolver: &Arc<nettls::RotatingResolver>,
+) -> nettls::announcer::Announcer {
+    use nettls::announcer::{Announcer, OwnMaterial, Schedule};
+    Announcer::new(
+        "gateway",
+        dir,
+        SelfSignedParams::new("localhost", ["localhost"]),
+        resolver.clone(),
+        OwnMaterial {
+            previous: None,
+            current: (c0.fp_bar(), c0.key()),
+        },
+        Schedule::new(vec!["service".to_string()], 0),
+        None,
+    )
+    .unwrap()
+}
+
+#[test]
+fn the_promise_and_the_switch_survive_restarts_without_save_pending() {
+    nettls::install_crypto_provider();
+    let c0 = generation();
+    let dir = dir_with("promise", &c0);
+    let resolver = Arc::new(nettls::RotatingResolver::new(&c0.material).unwrap());
+
+    let a = announcer_in(&dir, &c0, &resolver);
+    let k = a.prepare(100).unwrap();
+    a.acked("service").unwrap();
+    drop(a);
+
+    let b = announcer_in(&dir, &c0, &resolver);
+    assert_eq!(b.pending().unwrap().new_fingerprint(), k.new_fingerprint());
+    assert!(
+        b.roll_if_ready(200).unwrap().is_some(),
+        "the receipt was lost"
+    );
+    assert!(!dir.join(nettls::announcer::PENDING_FILE).exists());
+    assert!(!dir.join("new").exists());
+    drop(b);
+
+    let c = announcer_in(&dir, &c0, &resolver);
+    let trio = c.own_trio().unwrap();
+    assert_eq!(trio.current_fingerprint, k.new_fingerprint());
+    assert_eq!(trio.previous_fingerprint.unwrap(), c0.fp_bar());
+    assert!(trio.next_fingerprint.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_failed_write_changes_nothing_and_the_next_call_switches() {
+    nettls::install_crypto_provider();
+    let c0 = generation();
+    let dir = dir_with("failed-write", &c0);
+    let resolver = Arc::new(nettls::RotatingResolver::new(&c0.material).unwrap());
+    let a = announcer_in(&dir, &c0, &resolver);
+    let k = a.prepare(100).unwrap();
+    a.acked("service").unwrap();
+
+    // A directory where the previous key is to be written makes that write fail.
+    let blocker = dir.join("previous-key.json");
+    std::fs::create_dir(&blocker).unwrap();
+    assert!(a.roll_if_ready(200).is_err());
+    let trio = a.own_trio().unwrap();
+    assert_eq!(trio.current_fingerprint, c0.fp_bar());
+    assert_eq!(trio.next_fingerprint.as_deref(), Some(k.new_fingerprint()));
+    let on_disk = TlsMaterial::load(&CertSource::files(
+        dir.join(nettls::CERT_FILE),
+        dir.join(nettls::KEY_FILE),
+    ))
+    .unwrap();
+    assert_eq!(on_disk.fingerprint_sha256(), c0.fp);
+
+    std::fs::remove_dir(&blocker).unwrap();
+    assert!(a.roll_if_ready(201).unwrap().is_some());
+    assert_eq!(
+        a.own_trio().unwrap().current_fingerprint,
+        k.new_fingerprint()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_daily_cap_holds_across_a_restart() {
+    nettls::install_crypto_provider();
+    let c0 = generation();
+    let dir = dir_with("cap", &c0);
+    let resolver = Arc::new(nettls::RotatingResolver::new(&c0.material).unwrap());
+    let a = announcer_in(&dir, &c0, &resolver);
+    a.prepare(100).unwrap();
+    a.acked("service").unwrap();
+    assert!(a.roll_if_ready(200).unwrap().is_some());
+    drop(a);
+
+    let b = announcer_in(&dir, &c0, &resolver);
+    b.prepare(300).unwrap();
+    b.acked("service").unwrap();
+    assert!(
+        b.roll_if_ready(400).unwrap().is_none(),
+        "a restart must not reset the 24-hour cap"
+    );
+    let day = nettls::announcer::MIN_BETWEEN_ROLLS_S;
+    assert!(b.roll_if_ready(200 + day).unwrap().is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+}

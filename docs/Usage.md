@@ -209,7 +209,6 @@ The library provides the building blocks. This is yours:
 | **Show the operator something** | approving the first identity is a human action |
 | **Publish the announcement** | the library builds it; you decide where it is fetched from |
 | **Keep the files** | the directory must survive restarts, or you lose the identity |
-| **Persist receipts state** | call `save_pending()` after `prepare`/`acked`, so a restart resumes instead of resetting |
 
 ## Easy ways to trip
 

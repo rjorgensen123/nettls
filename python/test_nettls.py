@@ -751,3 +751,24 @@ def _p256_identity():
         serialization.NoEncryption(),
     ).decode()
     return key_pem, cert.public_bytes(serialization.Encoding.DER)
+
+
+def test_announcer_state_keeps_who_is_to_ack_and_the_times():
+    # `prepare` stores before it announces; the stored state must still say
+    # who is to ack, or a restart would roll without a single receipt.
+    cert, key = n.self_signed("gw", ["gw"], 30)
+    current = (n.fingerprint_from_pem(cert), cert, key)
+    stored = []
+    a = n.Announcer("gw", ("gw", ["gw"]), current, n.Schedule(["peer"], 0), lambda c, k: None)
+    a.prepare(100, stored.append)
+    assert stored[0]["schedule"]["waiting_for"] == ["peer"]
+
+    b = n.Announcer.restore(stored[0], lambda c, k: None)
+    assert not b.schedule.can_roll(200)
+    b.acked("peer")
+    assert b.roll_if_ready(200) is not None
+
+    # The time of the switch survives a restart: the 24-hour cap holds.
+    c = n.Announcer.restore(b.state(), lambda c, k: None)
+    assert not c.schedule.rate_limit_ok(300)
+

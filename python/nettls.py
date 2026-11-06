@@ -1566,10 +1566,12 @@ class Schedule:
         )
 
     def rolled(self, now: int) -> None:
+        # Drawn first: if the draw fails, nothing has changed.
+        attempt_at = draw_roll_time(now)
         self._last_rolled = now
         self._waiting_for = None
         self._first_announced = None
-        self._forsoek_ved = draw_roll_time(now)
+        self._forsoek_ved = attempt_at
 
     def alarm(self, now: int) -> bool:
         return (
@@ -1711,10 +1713,20 @@ class Announcer:
             ),
             "schedule": {
                 "peers": sorted(self.schedule.peers),
-                "waiting_for": sorted(self.schedule.waiting_for()),
+                # `prepare` stores before `announced`: then everyone is still
+                # to ack, not no one (0.10.0).
+                "waiting_for": sorted(
+                    self.schedule.peers
+                    if pending is not None and self.schedule._waiting_for is None
+                    else self.schedule.waiting_for()
+                ),
                 "first_announced": (
                     now if now is not None else self.schedule._first_announced
                 ),
+                # Kept across a restart: the 24-hour cap and the drawn time
+                # of the next announcement (§6.7c, 0.10.0).
+                "last_rolled": self.schedule._last_rolled,
+                "attempt_at": self.schedule._forsoek_ved,
             },
         }
 
@@ -1739,7 +1751,10 @@ class Announcer:
         def mat(d):
             return None if d is None else (d["fp"], d["cert_pem"], d["key_pem"])
 
-        r = Schedule(state["schedule"]["peers"], 0)
+        r = Schedule(
+            state["schedule"]["peers"], state["schedule"].get("attempt_at", 0)
+        )
+        r._last_rolled = state["schedule"].get("last_rolled")
         v = state.get("pending")
         k = Announcer(
             state["name"],

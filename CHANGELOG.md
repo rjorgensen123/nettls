@@ -46,6 +46,15 @@ files are left untouched. Before, `auto` replaced it with a new one and the
 fingerprint changed silently. `save_pem` locks the key in memory before writing
 `cert.pem`, so a failure there no longer leaves a new certificate with the old key.
 
+### Fixed — a rotation survives a restart and a failed write *(2026-11-05)*
+
+`prepare` and `acked` save the promise themselves, so a restart resumes it. A
+switch writes the new pair and reads it back before anything in memory moves:
+a failed write changes nothing, and the next call tries again. The promise is
+removed once the switch is done. At start, the stored chain is checked against
+the material, and the 24-hour cap holds across the restart. The Python twin
+stores the waiting list and both times in its state.
+
 ## [0.9.2] — 2026-11-03
 
 No functional change. Not one public signature moved; the crate is brought onto
