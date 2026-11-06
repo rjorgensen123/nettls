@@ -77,6 +77,32 @@ def test_a_pinned_connection_carries_bytes_both_ways():
     assert result == {"value": b"hello\n"}
 
 
+def test_alpn_is_agreed_and_shown_on_both_sides():
+    m = identity("server")
+    seen: dict = {}
+
+    def handler(tls):
+        seen["server"] = tls.alpn_protocol()
+        return echo_line(tls)
+
+    port, thread, result = serve_once(m.server_config_with_alpn([b"h2", b"nettls/1"]), handler)
+    config = nettls.pinned_client_config_with_alpn(m.fingerprint_sha256(), [b"nettls/1"])
+    with connect(port, config) as tls:
+        assert tls.alpn_protocol() == b"nettls/1"
+        tls.write(b"x\n")
+        assert tls.read() == b"x\n"
+    thread.join(10)
+    assert seen["server"] == b"nettls/1" and "error" not in result
+
+    # Without ALPN, nothing is agreed.
+    port, thread, _ = serve_once(m.server_config(), echo_line)
+    with connect(port, nettls.pinned_client_config(m.fingerprint_sha256())) as tls:
+        assert tls.alpn_protocol() is None
+        tls.write(b"x\n")
+        tls.read()
+    thread.join(10)
+
+
 def test_the_wrong_pin_fails_the_handshake():
     m = identity("server")
     other = identity("other")

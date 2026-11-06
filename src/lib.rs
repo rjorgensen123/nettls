@@ -145,8 +145,6 @@ pub use provider::{install_crypto_provider, provider};
 pub use resolver::RotatingResolver;
 pub use transport::{TransportCipher, TransportPolicy};
 
-/// Re-export, so consumers can name rustls types without listing `rustls`
-/// themselves — and thus without risking a line of their own with wrong features.
 /// PKCS#8 from key material — **only for tests**.
 ///
 /// Lives here and not in `signature` because it is not part of §6. It was made
@@ -178,4 +176,6 @@ pub fn fingerprint_for_test(der: &[u8]) -> String {
     krypto::hex::encode(&krypto::sha256(der))
 }
 
+/// Re-export, so consumers can name rustls types without listing `rustls`
+/// themselves — and thus without risking a line of their own with wrong features.
 pub use rustls;

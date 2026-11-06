@@ -6,9 +6,10 @@
 //! A TLS 1.3 cipher suite with AEGIS-256 as the record AEAD, offered when a
 //! consumer puts [`TransportCipher::Aegis256`] in its [`TransportPolicy`]. It is
 //! **not** `TLS_AEGIS_256_SHA512` (IANA `0x13,0x06`, draft-irtf-cfrg-aegis-aead)
-//! and must not claim to be. Only two nettls ends can speak it; every other
-//! party (Python/OpenSSL, browsers) never sees it offered unless the consumer
-//! asks, and skips it as an unknown suite if it does.
+//! and must not claim to be. Only two nettls ends can speak it, from Rust or
+//! from Python (`nettls-py`); every other party (OpenSSL, browsers) never sees
+//! it offered unless the consumer asks, and skips it as an unknown suite if it
+//! does.
 //!
 //! # Why it deviates (decided 2026-09-04, Roger)
 //!

@@ -208,7 +208,7 @@ def announcement_errors(base: dict) -> list[dict]:
         # --- level «verifiser» ----------------------------------------------- #
         # `new_cert_pem` is NOT part of the signed string — only the
         # fingerprint is. That is why these get through `from_json` in
-        # both implementations, and must be stopped where the fingerprint is
+        # both test suites, and must be stopped where the fingerprint is
         # recomputed from the PEM. That is the right place: a receiver that
         # stored a broken PEM would be left without a usable «next» at the
         # rotation.
@@ -282,8 +282,8 @@ def main() -> None:
     k, kv, g, extra = _baseline()
     corpus = {
         "_about": (
-            "Normative error corpus (§6.14b). Every entry MUST be rejected by "
-            "BOTH implementations — with an error, never a panic. The baseline "
+            "Normative error corpus (§6.14b). Every entry MUST be rejected — by the "
+            "Rust tests and the Python tests alike — with an error, never a panic. The baseline "
             "is a valid message with real signatures; each entry is one mutation "
             "of it, so the rejection can be attributed to exactly that mutation."
         ),
@@ -291,7 +291,7 @@ def main() -> None:
         # reason: with wrong field names EVERYTHING would be rejected, and a
         # test that only demands rejection would look green while probing
         # nothing. These three are the unmutated messages, and they MUST be
-        # accepted by both sides.
+        # accepted by both test suites.
         "_valid": {"announcement": k, "receipt": kv, "approval": g, **extra},
         "announcement": announcement_errors(k),
         "receipt": receipt_errors(kv),

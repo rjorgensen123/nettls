@@ -55,7 +55,12 @@ with Stream.accept(sock, material.server_config()) as tls:
 ```
 
 The stream takes the socket over, completes the handshake before it returns, keeps the socket's
-timeout, and waits without holding the GIL — so serve each connection from its own thread.
+timeout, and waits without holding the GIL — so serve each connection from its own thread. It
+does one thing at a time: a read that waits holds the stream, so another thread's write waits for
+it. Keep each connection in one thread.
+
+With ALPN, the configs that take it (`server_config_with_alpn`, `pinned_client_config_with_alpn`,
+`Trust.client_config_with_alpn`) offer it, and `tls.alpn_protocol()` says what was agreed.
 
 ## The client side — [Usage: step 3](Usage.md#step-3--the-client-side)
 
@@ -69,6 +74,31 @@ with Stream.connect(sock, config, "localhost") as tls:
 
 The fingerprint is the identity; the name is only what is sent. A wrong certificate fails the
 handshake with an `OSError`, as Python's own `ssl` reports it, and a timeout is a `TimeoutError`.
+
+## Enrollment: looking before trusting — [API: the enrollment rule](API.md#the-enrollment-rule--trust-over-an-unverified-connection-contract)
+
+Before a peer is approved there is nothing to pin, and its certificate has to be fetched over a
+connection nobody has verified. nettls has no client for that, in Rust or in Python. From Python,
+use the standard library's `ssl` for that one look, and give the certificate to nettls:
+
+```python
+import ssl
+from nettls_py.generations import Generation, Trust
+
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE            # looking, not trusting
+with socket.create_connection((host, port), timeout=30) as raw:
+    with ctx.wrap_socket(raw) as s:
+        der = s.getpeercert(binary_form=True)
+print(nettls.cert_fingerprint_sha256(der))   # compare with the peer's own startup log
+
+# Once the operator has approved that fingerprint:
+trust = Trust.from_approval(Generation.from_der(der))
+```
+
+That connection is for looking, never for transferring: no secrets, no changes, nothing that
+carries data. The contract in API.md says exactly what is allowed.
 
 ## Mode 2: rotation — [Usage: step 5](Usage.md#step-5--if-you-chose-mode-2)
 

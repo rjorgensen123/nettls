@@ -17,12 +17,12 @@ fn identity(name: &str) -> TlsMaterial {
 
 #[test]
 fn statement_roundtrip_and_wrong_signer_rejected() {
-    let python_side = identity("service");
-    let pkcs8 = python_side.anchor_pkcs8().unwrap();
+    let bridge_side = identity("service");
+    let pkcs8 = bridge_side.anchor_pkcs8().unwrap();
     let s = SupportStatement::signed("service", &[Alg::Aes256Gcm], 1_760_000_000, &pkcs8).unwrap();
 
     // Verified against the RIGHT pinned identity → the declared set.
-    let cert = python_side.cert_chain()[0].as_ref().to_vec();
+    let cert = bridge_side.cert_chain()[0].as_ref().to_vec();
     assert_eq!(s.verify(&cert).unwrap(), vec![Alg::Aes256Gcm]);
 
     // An attacker cannot inject a downgrade: wrong signer → rejected.
@@ -40,7 +40,7 @@ fn statement_roundtrip_and_wrong_signer_rejected() {
 fn choose_implements_the_decided_pattern() {
     // No statement → the requested algorithm stands (AEGIS default flow).
     assert_eq!(choose(Alg::Aegis256, None).unwrap(), Alg::Aegis256);
-    // Verified statement without AEGIS → best declared (the Python bridge).
+    // Verified statement without AEGIS → best declared (the AES-256-GCM bridge).
     assert_eq!(
         choose(Alg::Aegis256, Some(&[Alg::Aes256Gcm])).unwrap(),
         Alg::Aes256Gcm

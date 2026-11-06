@@ -76,6 +76,7 @@ const PYTHON_ONLY: &[(&str, &str)] = &[
     ("stream.Stream.flush", STREAM),
     ("stream.Stream.close", STREAM),
     ("stream.Stream.peer_fingerprint", STREAM),
+    ("stream.Stream.alpn_protocol", STREAM),
     ("announcement.AnnouncementJson.dumps", SERDE),
     ("announcement.AnnouncementJson.loads", SERDE),
     ("announcement.ReceiptJson.dumps", SERDE),

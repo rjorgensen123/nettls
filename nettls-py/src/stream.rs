@@ -10,7 +10,9 @@
 //!
 //! The stream takes the socket over (`socket.detach()`): from then on only the
 //! stream reads, writes and closes it. The socket's timeout carries over, and
-//! waiting happens without the GIL. Socket and TLS failures are `OSError`, as
+//! waiting happens without the GIL. It does one thing at a time: a read that
+//! waits holds the stream, so a write from another thread waits for it. Serve
+//! each connection from one thread. Socket and TLS failures are `OSError`, as
 //! Python's own `ssl` gives them, and a timeout is `TimeoutError`.
 
 use std::io::{self, Read, Write};
@@ -94,6 +96,10 @@ impl Conn {
             }
             Ok(())
         })
+    }
+
+    fn alpn_protocol(&self) -> Option<Vec<u8>> {
+        both!(self, s => s.conn.alpn_protocol().map(<[u8]>::to_vec))
     }
 
     fn peer_fingerprint(&self) -> Option<String> {
@@ -288,6 +294,13 @@ impl Stream {
         let guard = lock(&self.inner);
         let conn = guard.as_ref().ok_or_else(closed)?;
         Ok(conn.peer_fingerprint())
+    }
+
+    /// The protocol ALPN agreed on, or `None` when none was offered or agreed.
+    fn alpn_protocol(&self) -> PyResult<Option<Bytes>> {
+        let guard = lock(&self.inner);
+        let conn = guard.as_ref().ok_or_else(closed)?;
+        Ok(conn.alpn_protocol().map(bytes))
     }
 
     fn __enter__(slf: Py<Self>) -> Py<Self> {

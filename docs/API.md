@@ -850,7 +850,9 @@ surface, seeds as `SecretBuf`) — still without touching the wire format; **0.8
 retired §5 model entirely** (`chain` + `rotation`: `TrustChain`, `RotationProof`,
 `PROOF_VERSION`, `ROTATION_PROOF_FILE`, the `sign_successor`/`sign_rotation`/
 `verify_successor` methods and the `rotation.proof` file) — the whole app is in its build
-phase, nothing to migrate (`cert_fingerprint_sha256` survived; it moved to `material`).
+phase, nothing to migrate (`cert_fingerprint_sha256` survived; it moved to `material`);
+**0.11.0 replaced the Python twin** (`python/nettls.py`, a second implementation with its own
+API) with `nettls-py`, this crate run from Python — still without touching the wire format.
 Recorded here, and every entry above carries the version it applies from.
 
 ## Python — `nettls-py` *(0.11.0)*
@@ -896,6 +898,7 @@ stream.read(n=65536) -> bytes          # b"" once the peer has closed; at most M
 stream.write(data) -> int              # all of it, flushed
 stream.flush(); stream.close()         # close sends close_notify; closing twice does nothing
 stream.peer_fingerprint() -> str | None
+stream.alpn_protocol() -> bytes | None   # what ALPN agreed on
 ```
 
 Rust consumers drive rustls themselves, with `rustls::Stream` or `tokio-rustls`; Python has nothing
@@ -905,6 +908,8 @@ decision — `Trust::client_config` accepts `current` and `next` and promotes on
 so a `RotatingResolver` server follows the rotation. Both constructors complete the handshake
 before they return. The stream takes the socket over (`socket.detach()`); its timeout carries over,
 and waiting happens without the GIL. A non-blocking socket is refused and left to the caller.
+The stream does one thing at a time: a read that waits holds it, so a write from another thread
+waits for that read. Serve each connection from one thread.
 Socket and TLS failures are `OSError`, as Python's `ssl` gives them, and a timeout is
 `TimeoutError`. There is no asyncio form.
 

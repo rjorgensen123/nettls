@@ -2,24 +2,24 @@
 //! Test vectors — **normative** (SPEC-nettls §6.14).
 //!
 //! The vectors in `testvectors/canonical.json` are the answer key. Not the
-//! Rust code, not the Python code: **the file**. If a vector fails, the
-//! question is "which of the two is right according to the specification",
-//! not "who must fall in line with whom".
+//! code: **the file**. If a vector fails, the question is "what does the
+//! specification say", not "what does the code do". These tests and
+//! `nettls-py/tests/test_nettls.py` read the same file, from Rust and from
+//! Python.
 //!
-//! ## What they catch that a cross-test does not
+//! ## What they catch
 //!
-//! A cross-test shows that the two implementations agree **right now**. Two
-//! implementations can agree and both be wrong. The vectors show that they
-//! agree with **the contract** — and they cover the entire path from object
+//! Code can agree with itself and still be wrong. The vectors show that it
+//! agrees with **the contract** — and they cover the entire path from object
 //! to bytes: field order, newlines, trailing newline, encoding.
 //!
-//! That is exactly where it broke last time: Rust picked hex, Python base64.
-//! Both were legal. Neither was the contract, because the contract did not
-//! say.
+//! That is exactly where it broke once, when Python had its own
+//! implementation: Rust picked hex, Python base64. Both were legal. Neither
+//! was the contract, because the contract did not say.
 //!
 //! The Ed25519 vectors include the **signature** too, not just the message —
-//! Ed25519 is deterministic, so two implementations must produce identical
-//! bytes. That is a far tighter probe than "does it verify?".
+//! Ed25519 is deterministic, so the bytes must be identical. That is a far
+//! tighter probe than "does it verify?".
 //!
 //! The vector names, descriptions and JSON field names went English on
 //! 2026-08-15 together with the wire keys (Roger's call: before first
@@ -200,7 +200,7 @@ fn vectors_match_byte_for_byte() {
 
 #[test]
 fn the_seeds_public_key_is_stable() {
-    // The Python side needs this to verify the vectors' signatures. If it
+    // `nettls-py/tests/test_nettls.py` checks the same key from Python. If it
     // changes, the seed changed — and then every signature vector is
     // invalid.
     let pk = krypto::sign::ed25519_public(&seed()).unwrap();

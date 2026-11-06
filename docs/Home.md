@@ -103,6 +103,7 @@ Just as important as what it can:
 | Sealing to one recipient | **X25519** — via krypto |
 | Secrets in memory, encryption at rest | **krypto** — AEGIS-256 by default, AES-256-GCM as the interop bridge |
 | Max lifetime of an own certificate | 397 days — browsers reject longer |
+| Python | **PyO3** — `nettls-py` runs this same Rust code *(0.11.0)* |
 
 Since 0.8.0 **every cryptographic primitive is krypto's**
 (signatures, key agreement, hashing, hex, randomness) — nettls implements none of its own and no

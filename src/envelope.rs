@@ -107,8 +107,8 @@ impl RecipientKey {
 /// Seals `plaintext` to the recipient's public key — with the
 /// default AEAD, **AEGIS-256** (SPEC-nettls §6.0b).
 ///
-/// The choice is **per recipient, static** (the layer table in §6.0b): a Rust
-/// recipient gets the default; a recipient without AEGIS (Python) gets the
+/// The choice is **per recipient, static** (the layer table in §6.0b): a
+/// recipient with AEGIS gets the default; a recipient without it gets the
 /// interop bridge via [`seal_with`] and `Alg::Aes256Gcm`. Opening reads the
 /// algorithm from the FAFN header; a recipient without the algorithm fails
 /// hard, never silently.

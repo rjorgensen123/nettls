@@ -7,7 +7,7 @@
 //!
 //! 1. **A default that needs no thought.** A consumer that says nothing gets
 //!    [`TransportPolicy::default`]: **AES-256-GCM only** — the one AEAD every
-//!    party speaks (rustls, OpenSSL/Python, every browser).
+//!    party speaks (rustls, OpenSSL, every browser).
 //!    Decided 2026-09-04: AEGIS-256 is *available* in the transport as a
 //!    consumer choice, but not the default — see `aegis.rs` for why.
 //! 2. **The consumer's list, in the consumer's order.** rustls picks the first

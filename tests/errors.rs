@@ -4,12 +4,12 @@
 //! `nettls-py/tests/test_feil.py` runs the same corpus from Python, and both read
 //! **the same file**: `testvectors/errors.json`.
 //!
-//! ## Why the corpus is shared and not two lists
+//! ## Why the corpus is a file
 //!
-//! The vectors in `canonical.json` show that the two implementations agree on
-//! **valid** values. An attacker does not live there. Two divergences had
-//! already managed to arise without any test seeing them, because both sat in
-//! the handling of the *invalid*:
+//! The vectors in `canonical.json` show the **valid** values. An attacker does
+//! not live there. When Python had its own implementation, three divergences
+//! got past every other test, because all of them sat in the handling of the
+//! *invalid*:
 //!
 //! | Divergence | Rust | Python |
 //! |---|---|---|
@@ -17,8 +17,8 @@
 //! | C1 control character (U+0085) in a name | rejected | **accepted** |
 //! | Broken PEM | wrapped error | **foreign exception type** |
 //!
-//! If the two lists differ, each side probes its own cases and the divergence
-//! survives. One file, read by both, is the whole point.
+//! Since 0.11.0 Python runs this same code. The corpus stays one file, read by
+//! both test suites, so the same cases are probed from Rust and from Python.
 //!
 //! ## Two levels, and the difference is not pedantry
 //!

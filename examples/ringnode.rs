@@ -115,7 +115,7 @@ impl Node {
                 let kv = Receipt::from_json(&kj).unwrap();
                 // `.get`, not indexing: a receipt from an unknown acker is a
                 // NORMAL hostile/misrouted message and must be an error reply,
-                // not a panic (mirrors the Python node).
+                // not a panic (as the Python node does).
                 let Some(pk) = self.peer_keys.lock().unwrap().get(kv.acker()).cloned() else {
                     return json!({"error": format!(
                         "receipt from unknown acker {:?} — no pinned Ed25519 key", kv.acker()
@@ -164,8 +164,7 @@ impl Node {
         nettls::install_crypto_provider();
         // `Trust` gives a config that accepts `current` + `next` and that
         // **promotes by itself** when it sees the swap in the handshake (§6.7).
-        // That is why
-        // trenger noden ingen manuell observasjons-logikk.
+        // That is why the node needs no observation logic of its own.
         let cfg = match neighbour.and_then(|nb| self.peers.lock().unwrap().get(nb).cloned()) {
             Some(t) => t.client_config().map_err(|e| e.to_string())?,
             None => unverified_config(),
@@ -569,8 +568,8 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
             // With `.unwrap()` the control thread panicked instead, and no
             // reply was ever written to stdout: the orchestrator stood waiting
             // forever. A hanging test does not say what is wrong; it only says
-            // something is. The Python node returned an error in the same
-            // situation — yet another asymmetry between the two.
+            // something is. The Python node returns an error in the same
+            // situation.
             let nb = node.neighbour_name.lock().unwrap().clone();
             match node.talk(
                 node.neighbour_port,

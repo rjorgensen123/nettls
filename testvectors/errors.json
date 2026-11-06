@@ -1,5 +1,5 @@
 {
-  "_about": "Normative error corpus (§6.14b). Every entry MUST be rejected by BOTH implementations — with an error, never a panic. The baseline is a valid message with real signatures; each entry is one mutation of it, so the rejection can be attributed to exactly that mutation.",
+  "_about": "Normative error corpus (§6.14b). Every entry MUST be rejected — by the Rust tests and the Python tests alike — with an error, never a panic. The baseline is a valid message with real signatures; each entry is one mutation of it, so the rejection can be attributed to exactly that mutation.",
   "_valid": {
     "announcement": {
       "v": "nettls-rotate/v2",

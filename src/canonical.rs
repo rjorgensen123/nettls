@@ -6,12 +6,11 @@
 //!
 //! ## Why this is its own module
 //!
-//! The contract between the Rust and Python implementations is not the
-//! cryptographic core — it is **the entire path from object to bytes**. The
-//! divergence we have already had (Rust picked hex, Python base64) sat
-//! in the serialization, not in the signature. Gathering the byte
-//! construction in one place means it can be tested against committed vectors
-//! without anything else being built.
+//! The contract is not the cryptographic core — it is **the entire path from
+//! object to bytes**. The divergence we once had, when Python had its own
+//! implementation (Rust picked hex, Python base64), sat in the serialization,
+//! not in the signature. Gathering the byte construction in one place means it
+//! can be tested against committed vectors without anything else being built.
 //!
 //! ## The form, normative (§6.4, §6.5, §6.6, §8.5b)
 //!

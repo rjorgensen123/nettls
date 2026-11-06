@@ -57,8 +57,8 @@ pub fn lock(password: &SecretString, plaintext: &[u8]) -> Result<Vec<u8>, TlsErr
 /// Like [`lock`], but with an explicit AEAD choice (SPEC-nettls §6.0b: the
 /// algorithm menu is krypto's; the choice is the consumer's).
 ///
-/// `Alg::Aes256Gcm` is the documented interop bridge — the one AEAD the
-/// Python side also has. Unlocking reads the algorithm from the FAFN header,
+/// `Alg::Aes256Gcm` is the documented interop bridge — the one AEAD a reader
+/// without AEGIS also has. Unlocking reads the algorithm from the FAFN header,
 /// so [`unlock`] opens either; a reader without the algorithm fails hard,
 /// never silently (the A1 rule: no fallback below the floor, never to
 /// nothing).

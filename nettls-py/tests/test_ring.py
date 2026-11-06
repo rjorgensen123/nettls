@@ -512,18 +512,16 @@ def test_ring_2python_1rust():
     """A (Python) → B (Rust) → C (Python). Covers P→R, R→P and **P→P**.
 
     Not a repeat of the previous one: here `Python → Python` is probed for the
-    first time, and a bug Python shares with itself would have slipped through
-    without it.
+    first time, with nettls-py on both ends of a connection.
     """
     _kjor_ring(["python", "rust", "python"], injiser_etter=1)
 
 
-# ── Pure rings: does each implementation do the job ALONE? ────────────────── #
+# ── Pure rings: Rust alone, and the binding alone ─────────────────────────── #
 #
-# The mixed rings above can hide something: if one side is lenient somewhere,
-# the other may end up carrying it. A pure ring has no such help — every
-# message is produced and consumed by the same implementation, and everything
-# it does wrong it must live with itself.
+# A pure Rust ring is the crate with nothing in between. A pure Python ring is
+# the same crate through nettls-py on every edge: the binding carries all of
+# it, the messages, the state and the TLS, with no Rust node next to it.
 
 
 @pytest.mark.slow
@@ -536,9 +534,8 @@ def test_ring_3rust():
 def test_ring_3python():
     """Pure Python ring. P→P on every edge.
 
-    The strictest probe that the Python side is a full implementation and not
-    just something that works as long as a Rust node stands next to it
-    correcting the form.
+    The strictest probe of the binding: every message, every stored state and
+    every TLS connection goes through nettls-py.
     """
     _kjor_ring(["python", "python", "python"], injiser_etter=3)
 
@@ -559,11 +556,10 @@ def test_ring_6_alle_naboskap():
     | `P→R→P` | e→f→a | a Rust node **between two Python** |
 
     The last two are the point, and they exist in no ring of three. A node
-    surrounded by the other implementation must receive from one and pass on
-    to the other in the same round — and then being *compatible* is not
-    enough; it must be **identical** in behaviour. That is exactly where a
-    small difference in validation, or in what is stored when, becomes
-    visible.
+    surrounded by the other language must receive from one and pass on to the
+    other in the same round. The code underneath is the same; what this probes
+    is that the binding carries it identically, in validation and in what is
+    stored when.
     """
     _kjor_ring(["python", "python", "rust", "rust", "python", "rust"], injiser_etter=2)
 
@@ -882,8 +878,8 @@ def test_restart_with_state_requires_no_operator(lang, offer_i):
 
     Runs in four configurations, and the last two are the point: a **mixed**
     ring where the victim is Python and Rust respectively. The recovery must
-    work the same whichever implementation restarted, and whichever stands on
-    either side of it.
+    work the same whichever language restarted, and whichever stands on either
+    side of it.
 
     The order in the test mirrors the one in production:
 

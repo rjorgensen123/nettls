@@ -14,7 +14,7 @@ certificates with SANs, PEM in and out, SHA-256 fingerprints, fingerprint pinnin
 side — and the **§6 announcement protocol**: asynchronous certificate rotation with two-signature
 continuity, signed receipts, generation pairs and an operator anchor.
 
-- **Type:** Rust crate (library)
+- **Type:** Rust crate (library), also run from Python as `nettls-py` *(0.11.0)*
 - **Lifetime:** Long-lived — semver from day one, and every entry in the API contract carries
   the version it applies from, so the crate can change without a reader having to guess
 - **License:** MIT/Apache-2.0 dual
@@ -176,6 +176,7 @@ consuming service, not here. The crate provides the building blocks, not the flo
 cargo test                     # unit, integration and doctests; real TLS handshakes included
 cargo clippy --all-targets -- -D warnings
 # The Python binding, in a venv from nettls-py/requirements-ci.txt (pinned, like CI):
+python3 -m venv .venv && .venv/bin/pip install -r nettls-py/requirements-ci.txt
 VIRTUAL_ENV=.venv .venv/bin/maturin develop --locked -m nettls-py/Cargo.toml
 PYO3_PYTHON=.venv/bin/python cargo test -p nettls-py   # the Python API is the Rust API
 .venv/bin/pytest nettls-py/tests -q                    # vectors, error corpus, stream, the ring
