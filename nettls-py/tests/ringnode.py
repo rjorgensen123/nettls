@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import json
 import socket
-import ssl
 import sys
 import threading
 import time
@@ -161,36 +160,16 @@ class Node:
 
     def talk(self, port: int, message: dict, neighbour: str | None) -> dict:
         """One request to a neighbour. A known neighbour is pinned through `Trust`,
-        which accepts `current` and `next` and promotes by itself (§6.7)."""
+        which accepts `current` and `next` and promotes by itself (§6.7). Before
+        that, enrollment fetches the identity with nettls' unverified client: on
+        purpose, since the approval that follows is what trusts it."""
         line = (json.dumps(message) + "\n").encode()
         trust = self.peers.get(neighbour) if neighbour else None
+        config = trust.client_config() if trust else nettls.unverified_client_config()
         sock = socket.create_connection(("127.0.0.1", port), timeout=20)
-        if trust is None:
-            return self.talk_unverified(sock, line)
-        with Stream.connect(sock, trust.client_config(), "localhost") as tls:
+        with Stream.connect(sock, config, "localhost") as tls:
             tls.write(line)
             return json.loads(read_line(tls))
-
-    @staticmethod
-    def talk_unverified(sock: socket.socket, line: bytes) -> dict:
-        """Enrollment: fetching an identity before there is anything to pin it to.
-
-        It is unverified on purpose; the approval that follows is what trusts
-        it. nettls has no observer client for this, so the node uses Python's
-        `ssl` here, as `examples/ringnode.rs` uses a verifier of its own.
-        """
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        with ctx.wrap_socket(sock, server_hostname="localhost") as s:
-            s.sendall(line)
-            data = b""
-            while not data.endswith(b"\n"):
-                chunk = s.recv(65536)
-                if not chunk:
-                    break
-                data += chunk
-        return json.loads(data)
 
     def state_of(self, name: str):
         """The trust in one peer as a comparable value."""

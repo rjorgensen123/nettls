@@ -54,7 +54,8 @@ pub fn provider() -> Arc<rustls::crypto::CryptoProvider>;
 Re-exported from the root: `TlsMaterial`, `CertSource`, `SelfSignedParams`, `CertOrigin`,
 `is_valid_san`, `CERT_FILE`, `KEY_FILE`, `MAX_VALID_DAYS`, `RotatingResolver`, `TlsError`,
 `pinned_client_config`, `pinned_client_config_with_alpn`, `pinned_client_config_with`,
-`cert_fingerprint_sha256`, `TransportCipher`, `TransportPolicy` *(0.8.3)*, `Expiry` *(0.11.0)*.
+`cert_fingerprint_sha256`, `TransportCipher`, `TransportPolicy` *(0.8.3)*, `Expiry`,
+`unverified_client_config`, `unverified_client_config_with` *(0.11.0)*.
 
 `pub use rustls` — so you do not have to list rustls as a dependency just for the types (and
 risk a line of your own with the wrong features).
@@ -197,7 +198,18 @@ pub enum Expiry { Enforce, Ignore }                                          // 
 pub enum Rejection { Untrusted, Expired { now: i64, not_after: i64 },
                      NotYetValid { now: i64, not_before: i64 }, Other }      // 0.11.0
 pub fn classify(err: &(dyn std::error::Error + 'static)) -> Rejection;      // 0.11.0
+
+// enrollment only — see the enrollment rule (0.11.0)
+pub fn unverified_client_config() -> Result<Arc<ClientConfig>, TlsError>;
+pub fn unverified_client_config_with(alpn: &[Vec<u8>], transport: &TransportPolicy)
+    -> Result<Arc<ClientConfig>, TlsError>;
 ```
+
+**Enrollment** *(0.11.0)*. `unverified_client_config` accepts any server certificate, whatever its
+dates, so a peer nobody has approved yet can be looked at. The handshake signature is still
+verified in full: the server must hold the key for the certificate it shows. Read the certificate
+from the connection (`peer_certificates()`) and approve its fingerprint out of band; the
+connection itself is for looking only — [the enrollment rule](#the-enrollment-rule--trust-over-an-unverified-connection-contract).
 
 **Dates** *(0.11.0)*. The client checks the identity first, then the certificate's dates against
 the handshake's time. One that is expired or not yet valid is refused with rustls' own
@@ -842,6 +854,10 @@ three principles apply for every consumer of this crate:
    operator to compare against the peer's own startup log. Without that comparison the
    approval is effectively TOFU.
 
+The client for that look is `pin::unverified_client_config` *(0.11.0)*: any certificate, but the
+handshake signature must hold, so a server cannot show a certificate whose key it does not have.
+Do not build one of your own.
+
 **The contract for unverified mode:**
 
 | Allowed | **Not allowed** |
@@ -942,6 +958,7 @@ stream.read(n=65536) -> bytes          # b"" once the peer has closed; at most M
 stream.write(data) -> int              # all of it, flushed
 stream.flush(); stream.close()         # close sends close_notify; closing twice does nothing
 stream.peer_fingerprint() -> str | None
+stream.peer_certificate() -> bytes | None   # the leaf as DER, for enrollment (0.11.0)
 stream.alpn_protocol() -> bytes | None   # what ALPN agreed on
 ```
 

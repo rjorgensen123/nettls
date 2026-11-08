@@ -126,11 +126,16 @@ impl Conn {
     }
 
     fn peer_fingerprint(&self) -> Option<String> {
+        self.peer_certificate()
+            .map(|leaf| nettls::cert_fingerprint_sha256(&leaf))
+    }
+
+    fn peer_certificate(&self) -> Option<Vec<u8>> {
         both!(self, s => s
             .conn
             .peer_certificates()
             .and_then(|chain| chain.first())
-            .map(|leaf| nettls::cert_fingerprint_sha256(leaf.as_ref())))
+            .map(|leaf| leaf.as_ref().to_vec()))
     }
 
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -340,6 +345,14 @@ impl Stream {
         let guard = lock(&self.inner);
         let conn = guard.as_ref().ok_or_else(closed)?;
         Ok(conn.peer_fingerprint())
+    }
+
+    /// The peer's certificate as DER, or `None` when the peer showed none
+    /// (0.11.0). What enrollment approves: `Generation.from_der(...)`.
+    fn peer_certificate(&self) -> PyResult<Option<Bytes>> {
+        let guard = lock(&self.inner);
+        let conn = guard.as_ref().ok_or_else(closed)?;
+        Ok(conn.peer_certificate().map(bytes))
     }
 
     /// The protocol ALPN agreed on, or `None` when none was offered or agreed.

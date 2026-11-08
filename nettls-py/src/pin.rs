@@ -64,10 +64,31 @@ fn pinned_client_config_with(
         .map_err(err)
 }
 
+/// Accepts any server certificate, for enrollment only (0.11.0). Read it with
+/// `Stream.peer_fingerprint()`; never send anything over the connection.
+#[pyfunction]
+fn unverified_client_config() -> PyResult<ClientConfig> {
+    nettls::unverified_client_config()
+        .map(ClientConfig::wrap)
+        .map_err(err)
+}
+
+#[pyfunction]
+fn unverified_client_config_with(
+    alpn: Vec<Vec<u8>>,
+    transport: &TransportPolicy,
+) -> PyResult<ClientConfig> {
+    nettls::unverified_client_config_with(&alpn, &transport.inner)
+        .map(ClientConfig::wrap)
+        .map_err(err)
+}
+
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Expiry>()?;
     m.add_function(wrap_pyfunction!(pinned_client_config, m)?)?;
     m.add_function(wrap_pyfunction!(pinned_client_config_with_alpn, m)?)?;
     m.add_function(wrap_pyfunction!(pinned_client_config_with, m)?)?;
+    m.add_function(wrap_pyfunction!(unverified_client_config, m)?)?;
+    m.add_function(wrap_pyfunction!(unverified_client_config_with, m)?)?;
     Ok(())
 }

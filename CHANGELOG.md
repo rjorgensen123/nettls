@@ -62,6 +62,15 @@ report red with "no answer from <names>". `PeerState` is now `#[non_exhaustive]`
 a `match` on it outside the crate needs a `_` arm, and later states change
 nothing for anyone.
 
+### Added — a client for enrollment *(2026-11-08)*
+
+`unverified_client_config` and `unverified_client_config_with` accept any
+server certificate, so a peer nobody has approved can be looked at, but still
+require the handshake signature, so a copied certificate does not get through.
+Python has both, and `Stream.peer_certificate()` gives the certificate. The
+home-made verifier in `examples/ringnode.rs` and the `ssl` workaround in
+Python are gone.
+
 ## [0.10.0] — krypto 0.8, and fixes for the reported bugs
 
 ### Changed — krypto 0.8 *(2026-11-03)*

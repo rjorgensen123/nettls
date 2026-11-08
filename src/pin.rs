@@ -98,11 +98,54 @@ pub fn pinned_client_config_with(
         expiry,
     };
 
+    build(provider, Arc::new(verifier), alpn)
+}
+
+/// A `ClientConfig` that accepts **any** server certificate — for enrollment
+/// only *(0.11.0)*.
+///
+/// Before a peer is approved there is nothing to pin, and its certificate has
+/// to be fetched so the operator can see its fingerprint. This config does
+/// that. It accepts whatever certificate the server shows, whatever its dates,
+/// but still verifies the handshake signature in full: the server must hold
+/// the key for the certificate it shows, so a copied certificate does not get
+/// through. Read the certificate from the connection once the handshake is
+/// done (`peer_certificates()`, or `Stream.peer_fingerprint()` in Python).
+///
+/// **For looking, never for transferring** — the enrollment rule in
+/// `docs/API.md`: no secrets, no changes and no data over a connection made
+/// with this config. The operator compares the fingerprint out of band and
+/// approves it; from then on the peer is pinned.
+pub fn unverified_client_config() -> Result<Arc<ClientConfig>, TlsError> {
+    unverified_client_config_with(&[], &crate::transport::TransportPolicy::default())
+}
+
+/// Like [`unverified_client_config`], with ALPN and an explicit
+/// [`TransportPolicy`](crate::transport::TransportPolicy), for a peer that
+/// does not use the default cipher *(0.11.0)*.
+pub fn unverified_client_config_with(
+    alpn: &[Vec<u8>],
+    transport: &crate::transport::TransportPolicy,
+) -> Result<Arc<ClientConfig>, TlsError> {
+    let provider = transport.provider();
+    let verifier = UnverifiedServerCertVerifier {
+        provider: provider.clone(),
+    };
+    build(provider, Arc::new(verifier), alpn)
+}
+
+/// A client config over `verifier`: TLS 1.3 and 1.2, no client
+/// authentication, no resumption.
+fn build(
+    provider: Arc<CryptoProvider>,
+    verifier: Arc<dyn ServerCertVerifier>,
+    alpn: &[Vec<u8>],
+) -> Result<Arc<ClientConfig>, TlsError> {
     let mut cfg = ClientConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
         .map_err(|e| TlsError::Rustls(e.to_string()))?
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(verifier))
+        .with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
     cfg.alpn_protocols = alpn.to_vec();
     cfg.resumption = no_resumption();
@@ -135,6 +178,63 @@ pub fn pinned_client_config_with(
 /// undermine.
 pub(crate) fn no_resumption() -> rustls::client::Resumption {
     rustls::client::Resumption::disabled()
+}
+
+/// The verifier behind [`unverified_client_config`] *(0.11.0)*: any
+/// certificate, but the handshake signature must hold.
+#[derive(Debug)]
+struct UnverifiedServerCertVerifier {
+    provider: Arc<CryptoProvider>,
+}
+
+impl ServerCertVerifier for UnverifiedServerCertVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, Error> {
+        // Looking, not trusting: the certificate is what we came to read.
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        // The one check that stays: the server holds the key for the
+        // certificate it shows, so what the operator sees is that server's.
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
 }
 
 /// Whether a client refuses a certificate outside its validity window

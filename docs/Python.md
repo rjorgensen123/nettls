@@ -96,19 +96,16 @@ argument on `Trust.client_config_with`.
 ## Enrollment: looking before trusting — [API: the enrollment rule](API.md#the-enrollment-rule--trust-over-an-unverified-connection-contract)
 
 Before a peer is approved there is nothing to pin, and its certificate has to be fetched over a
-connection nobody has verified. nettls has no client for that, in Rust or in Python. From Python,
-use the standard library's `ssl` for that one look, and give the certificate to nettls:
+connection nobody has verified. `unverified_client_config()` is the client for that *(0.11.0)*: it
+accepts any certificate, whatever its dates, but the server must prove it holds the key, so a
+copied certificate does not get through.
 
 ```python
-import ssl
 from nettls_py.generations import Generation, Trust
 
-ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE            # looking, not trusting
-with socket.create_connection((host, port), timeout=30) as raw:
-    with ctx.wrap_socket(raw) as s:
-        der = s.getpeercert(binary_form=True)
+sock = socket.create_connection((host, port), timeout=30)
+with Stream.connect(sock, nettls.unverified_client_config(), "localhost") as tls:
+    der = tls.peer_certificate()
 print(nettls.cert_fingerprint_sha256(der))   # compare with the peer's own startup log
 
 # Once the operator has approved that fingerprint:

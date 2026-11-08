@@ -249,6 +249,18 @@ def test_trust_promotes_next_once_the_handshake_proves_it():
     assert state.previous().fingerprint() == m0.fingerprint_sha256()
 
 
+def test_the_enrollment_client_reads_an_unknown_peers_certificate():
+    for m in (identity("new peer"), resigned(identity("old peer"), *EXPIRED)):
+        port, thread, result = serve_once(m.server_config(), echo_line)
+        with connect(port, nettls.unverified_client_config()) as tls:
+            assert tls.peer_certificate() == m.cert_chain()[0]
+            assert tls.peer_fingerprint() == m.fingerprint_sha256()
+            tls.write(b"hello\n")
+            tls.read()
+        thread.join(10)
+        assert "error" not in result
+
+
 def test_a_silent_server_times_out():
     listener = socket.create_server(("127.0.0.1", 0))
     try:

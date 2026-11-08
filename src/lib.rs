@@ -142,6 +142,7 @@ pub use material::{
 };
 pub use pin::{
     Expiry, pinned_client_config, pinned_client_config_with, pinned_client_config_with_alpn,
+    unverified_client_config, unverified_client_config_with,
 };
 pub use provider::{install_crypto_provider, provider};
 pub use resolver::RotatingResolver;

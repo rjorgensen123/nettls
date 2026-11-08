@@ -86,6 +86,7 @@ const PYTHON_ONLY: &[(&str, &str)] = &[
     ("stream.Stream.close", STREAM),
     ("stream.Stream.peer_fingerprint", STREAM),
     ("stream.Stream.alpn_protocol", STREAM),
+    ("stream.Stream.peer_certificate", STREAM),
     ("stream.UntrustedPeerError", STREAM),
     ("stream.CertificateExpiredError", STREAM),
     ("stream.CertificateNotYetValidError", STREAM),

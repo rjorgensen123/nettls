@@ -167,7 +167,7 @@ impl Node {
         // That is why the node needs no observation logic of its own.
         let cfg = match neighbour.and_then(|nb| self.peers.lock().unwrap().get(nb).cloned()) {
             Some(t) => t.client_config().map_err(|e| e.to_string())?,
-            None => unverified_config(),
+            None => nettls::unverified_client_config().map_err(|e| e.to_string())?,
         };
 
         let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
@@ -189,61 +189,6 @@ impl Node {
             .map_err(|e| e.to_string())?;
         serde_json::from_str(&line).map_err(|e| e.to_string())
     }
-}
-
-fn unverified_config() -> Arc<rustls::ClientConfig> {
-    #[derive(Debug)]
-    struct Alt(Arc<rustls::crypto::CryptoProvider>);
-    impl rustls::client::danger::ServerCertVerifier for Alt {
-        fn verify_server_cert(
-            &self,
-            _: &rustls::pki_types::CertificateDer<'_>,
-            _: &[rustls::pki_types::CertificateDer<'_>],
-            _: &rustls::pki_types::ServerName<'_>,
-            _: &[u8],
-            _: rustls::pki_types::UnixTime,
-        ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-            Ok(rustls::client::danger::ServerCertVerified::assertion())
-        }
-        fn verify_tls12_signature(
-            &self,
-            m: &[u8],
-            c: &rustls::pki_types::CertificateDer<'_>,
-            d: &rustls::DigitallySignedStruct,
-        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-            rustls::crypto::verify_tls12_signature(
-                m,
-                c,
-                d,
-                &self.0.signature_verification_algorithms,
-            )
-        }
-        fn verify_tls13_signature(
-            &self,
-            m: &[u8],
-            c: &rustls::pki_types::CertificateDer<'_>,
-            d: &rustls::DigitallySignedStruct,
-        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-            rustls::crypto::verify_tls13_signature(
-                m,
-                c,
-                d,
-                &self.0.signature_verification_algorithms,
-            )
-        }
-        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-            self.0.signature_verification_algorithms.supported_schemes()
-        }
-    }
-    let p = nettls::provider();
-    Arc::new(
-        rustls::ClientConfig::builder_with_provider(p.clone())
-            .with_safe_default_protocol_versions()
-            .unwrap()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(Alt(p)))
-            .with_no_client_auth(),
-    )
 }
 
 fn now() -> i64 {
