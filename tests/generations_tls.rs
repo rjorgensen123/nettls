@@ -979,3 +979,28 @@ fn a_cleartext_key_left_by_an_old_crash_is_removed_at_start() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_pending_file_that_cannot_be_removed_is_an_error_that_says_why() {
+    // With nothing pending, `save_pending` removes an old promise. A failure
+    // used to be ignored; it is now an error naming the file and what a
+    // leftover would do (0.11.0).
+    nettls::install_crypto_provider();
+    let dir = std::env::temp_dir().join(format!("nettls-fs0075-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let kg = announcer_with_password(&dir);
+
+    // A directory where the file should be: removing it as a file fails.
+    let promise = dir.join(nettls::announcer::PENDING_FILE);
+    std::fs::create_dir_all(&promise).unwrap();
+    let err = kg.save_pending().unwrap_err().to_string();
+    assert!(err.contains(nettls::announcer::PENDING_FILE), "{err}");
+    assert!(err.contains("nothing is pending"), "{err}");
+    assert!(err.contains("promised rotation"), "{err}");
+
+    // Nothing there is fine.
+    std::fs::remove_dir(&promise).unwrap();
+    kg.save_pending().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}

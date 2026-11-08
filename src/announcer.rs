@@ -326,18 +326,18 @@ impl Announcer {
     /// `current` it belongs to and when the pair came about, so a start can
     /// check the two files against each other (§6.11 N-4) and keep the 24-hour
     /// cap (§6.7c) *(0.10.0)*.
+    ///
+    /// It is called at a switch, so there is always a previous key: the branch
+    /// for "none yet" that removed the file and ignored a failure is gone
+    /// *(0.11.0)*.
     fn save_previous(
         &self,
-        previous: Option<&(String, krypto::SecretBuf)>,
+        previous: &(String, krypto::SecretBuf),
         current: &str,
         rolled_at: Option<i64>,
     ) -> Result<(), TlsError> {
         let path = self.previous_path();
-        let Some((fp, pkcs8)) = previous else {
-            // No previous yet (before the first rotation) — nothing to preserve.
-            let _ = std::fs::remove_file(&path);
-            return Ok(());
-        };
+        let (fp, pkcs8) = previous;
         // The on-disk struct needs a `Vec<u8>` for serde; it is wiped the
         // moment the JSON exists.
         let json = {
@@ -1416,7 +1416,7 @@ impl Announcer {
                 .map_err(|_| TlsError::poisoned("the material lock"))?;
             (m.current.0.clone(), crate::secret::copy(&m.current.1)?)
         };
-        self.save_previous(Some(&previous), &new_fp, Some(now))?;
+        self.save_previous(&previous, &new_fp, Some(now))?;
         self.save(&fresh, &self.dir)?;
         self.verify_switch(&new_fp, &previous.0)?;
 
@@ -1745,9 +1745,19 @@ impl Announcer {
             .map_err(|_| TlsError::poisoned("the pending lock"))?;
         let Some(v) = v.as_ref() else {
             // Nothing to store: remove any old file so a restart does not
-            // think a promise is lying there.
-            let _ = std::fs::remove_file(&path);
-            return Ok(());
+            // think a promise is lying there. "Not there" is fine; a failure
+            // is said, with what it means *(0.11.0)* — it used to be ignored.
+            return match std::fs::remove_file(&path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(TlsError::Io {
+                    path: Some(path),
+                    detail: format!(
+                        "{e}; nothing is pending, but the next start would read this file \
+                         as a promised rotation — remove it"
+                    ),
+                }),
+            };
         };
         let r = self
             .schedule

@@ -86,6 +86,13 @@ character there made it panic; it now cuts after 16 characters. It also said the
 connection "now stands in mode 1", but nettls switches no mode itself; it now
 says the connection must go back to mode 1.
 
+### Fixed — a delete that fails is reported *(2026-11-08)*
+
+With nothing pending, `save_pending` removed an old pending-rotation file and
+ignored a failure. It now returns an error naming the file and what a leftover
+would do. A branch for the previous key that did the same was never reached and
+is gone.
+
 ## [0.10.0] — krypto 0.8, and fixes for the reported bugs
 
 ### Changed — krypto 0.8 *(2026-11-03)*
