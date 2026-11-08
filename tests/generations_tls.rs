@@ -901,3 +901,81 @@ fn the_daily_cap_holds_across_a_restart() {
     assert!(b.roll_if_ready(200 + day).unwrap().is_some());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// An `Announcer` with a password, in a fresh directory.
+fn announcer_with_password(dir: &std::path::Path) -> nettls::announcer::Announcer {
+    use nettls::RotatingResolver;
+    use nettls::announcer::{Announcer, OwnMaterial, Schedule};
+
+    let c0 = generation();
+    Announcer::new(
+        "gateway",
+        dir,
+        SelfSignedParams::new("localhost", ["localhost"]),
+        Arc::new(RotatingResolver::new(&c0.material).unwrap()),
+        OwnMaterial {
+            previous: None,
+            current: (c0.fp_bar(), c0.key()),
+        },
+        Schedule::new(vec!["service".to_string()], 0),
+        Some(krypto::SecretString::from_string("secret".into()).unwrap()),
+    )
+    .unwrap()
+}
+
+#[test]
+fn saving_with_a_password_writes_nothing_in_cleartext_first() {
+    // Up to 0.10 `save` wrote the key in cleartext to `.tmp-material/`, then
+    // read it back, locked it and deleted the directory. Now it is built and
+    // locked in memory: a staging directory planted where it used to be is
+    // neither written to nor removed (0.11.0).
+    nettls::install_crypto_provider();
+    let dir = std::env::temp_dir().join(format!("nettls-fs0073-a-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let kg = announcer_with_password(&dir);
+
+    let staging = dir.join("new").join(".tmp-material");
+    std::fs::create_dir_all(&staging).unwrap();
+    kg.prepare(100).unwrap();
+
+    assert!(staging.is_dir(), "save went through the staging directory");
+    assert!(
+        std::fs::read_dir(&staging).unwrap().next().is_none(),
+        "save wrote to the staging directory"
+    );
+    assert!(dir.join("new").join("material.locked").is_file());
+
+    // And what was locked in memory reads back.
+    kg.acked("service").unwrap();
+    assert!(kg.roll_if_ready(200).unwrap().is_some(), "could not roll");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_cleartext_key_left_by_an_old_crash_is_removed_at_start() {
+    // A crash under 0.10 between writing and deleting `.tmp-material/` left
+    // the key there in cleartext. The next start removes it (0.11.0).
+    nettls::install_crypto_provider();
+    let dir = std::env::temp_dir().join(format!("nettls-fs0073-b-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let left = [
+        dir.join(".tmp-material"),
+        dir.join("new").join(".tmp-material"),
+    ];
+    for d in &left {
+        std::fs::create_dir_all(d).unwrap();
+        std::fs::write(d.join(nettls::KEY_FILE), b"-----BEGIN PRIVATE KEY-----\n").unwrap();
+    }
+
+    let _kg = announcer_with_password(&dir);
+
+    for d in &left {
+        assert!(
+            !d.exists(),
+            "a cleartext key is still on disk: {}",
+            d.display()
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

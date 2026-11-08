@@ -71,6 +71,14 @@ Python has both, and `Stream.peer_certificate()` gives the certificate. The
 home-made verifier in `examples/ringnode.rs` and the `ssl` workaround in
 Python are gone.
 
+### Fixed — no cleartext key on disk in password mode *(2026-11-08)*
+
+With a password, `Announcer` wrote the private key in cleartext to a staging
+directory, `.tmp-material`, before locking it, and a crash could leave it there.
+The key is now built and locked in memory, and only the locked file is written.
+A staging directory left by an earlier version is removed at start. The locked
+file is the same as before.
+
 ## [0.10.0] — krypto 0.8, and fixes for the reported bugs
 
 ### Changed — krypto 0.8 *(2026-11-03)*

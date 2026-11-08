@@ -251,37 +251,35 @@ impl Announcer {
         let Some(pw) = &self.password else {
             return m.save_pem(dir);
         };
-        // `save_pem` to a temporary directory, read, lock, delete. The PEM form
-        // is the one serialization `TlsMaterial` can be round-tripped through,
-        // so we go via it — but it must never be left lying around.
-        let tmp = dir.join(".tmp-material");
-        crate::pem::create_private_dir(&tmp)?;
-        let res = (|| -> Result<Vec<u8>, TlsError> {
-            m.save_pem(&tmp)?;
-            let cert = std::fs::read(tmp.join(crate::material::CERT_FILE))
-                .map_err(|e| TlsError::io(&tmp, e))?;
-            // Key PEM and the combined cleartext both stay in locked memory
-            // until `lock` has produced the blob.
-            let key = crate::secret::hold(
-                std::fs::read(tmp.join(crate::material::KEY_FILE))
-                    .map_err(|e| TlsError::io(&tmp, e))?,
-            )?;
-            let samlet = key.expose(|k| {
-                let mut s = cert;
-                s.extend_from_slice(b"\n");
-                s.extend_from_slice(k);
-                crate::secret::hold(s)
-            })?;
-            samlet.expose(|b| crate::lockbox::lock(pw, b))
-        })();
-        // Delete the cleartext staging area NO MATTER WHAT — also when the
-        // locking failed. Otherwise an error in that last step would have left
-        // the key in cleartext, and that is exactly the state we are trying to
-        // avoid.
-        let _ = std::fs::remove_dir_all(&tmp);
-        let locked = res?;
-        let path = dir.join(Self::LOCKED_FILE);
-        crate::pem::write_atomic(&path, &locked, 0o600)
+        // Built and locked in memory, then written once *(0.11.0)*. The key is
+        // never on disk in cleartext — up to 0.10 it went through a staging
+        // directory, `.tmp-material`, where a crash could leave it.
+        let (cert, key) = m.pem_pair()?;
+        // The PEM pair and the combined cleartext stay in locked memory until
+        // `lock` has produced the blob. The layout is the one `load` splits:
+        // the chain, a newline, the key.
+        let samlet = key.expose(|k| {
+            let mut s = cert;
+            s.extend_from_slice(b"\n");
+            s.extend_from_slice(k);
+            crate::secret::hold(s)
+        })?;
+        let locked = samlet.expose(|b| crate::lockbox::lock(pw, b))?;
+        crate::pem::create_private_dir(dir)?;
+        crate::pem::write_atomic(&dir.join(Self::LOCKED_FILE), &locked, 0o600)
+    }
+
+    /// Removes a staging directory up to 0.10 could leave behind with a
+    /// cleartext key in it, if a crash came between writing and deleting it
+    /// *(0.11.0)*. "Not there" is fine; anything else is an error, because a
+    /// key we could not remove is one the operator must know about.
+    fn remove_old_staging(dir: &std::path::Path) -> Result<(), TlsError> {
+        let staging = dir.join(".tmp-material");
+        match std::fs::remove_dir_all(&staging) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(TlsError::io(&staging, e)),
+        }
     }
 
     /// Read the material back, locked or not.
@@ -1231,6 +1229,10 @@ impl Announcer {
             schedule: Arc::new(RwLock::new(schedule)),
             pending: Arc::new(RwLock::new(None)),
         };
+        // A cleartext key a crash under 0.10 or earlier left behind goes
+        // first, before anything is read (0.11.0).
+        Self::remove_old_staging(&s.dir)?;
+        Self::remove_old_staging(&s.dir.join("new"))?;
         s.restore_material()?;
         s.restore_pending()?;
         Ok(s)

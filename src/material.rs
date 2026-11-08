@@ -564,8 +564,19 @@ impl TlsMaterial {
     /// The directory is created 0700 if missing. Neither file is ever more open
     /// than its final mode.
     pub fn save_pem(&self, dir: &Path) -> Result<(), TlsError> {
+        // Both PEMs are built before the directory or either file is touched,
+        // so a failure here leaves the stored pair as it was.
+        let (cert_pem, key_pem) = self.pem_pair()?;
         pem::create_private_dir(dir)?;
+        pem::write_atomic(&dir.join(CERT_FILE), &cert_pem, 0o644)?;
+        key_pem.expose(|k| pem::write_atomic(&dir.join(KEY_FILE), k, 0o600))
+    }
 
+    /// The certificate chain and the private key as PEM, built in memory: the
+    /// key in locked memory from its first byte *(0.11.0)*. What `save_pem`
+    /// writes, and what `Announcer` locks with a password without the key
+    /// ever touching the disk in cleartext.
+    pub(crate) fn pem_pair(&self) -> Result<(Vec<u8>, krypto::SecretBuf), TlsError> {
         let (label, der) = match &*self.key {
             PrivateKeyDer::Pkcs8(k) => ("PRIVATE KEY", k.secret_pkcs8_der()),
             PrivateKeyDer::Pkcs1(k) => ("RSA PRIVATE KEY", k.secret_pkcs1_der()),
@@ -578,17 +589,14 @@ impl TlsMaterial {
                 ));
             }
         };
-        // The PEM form of the key lives in locked memory until it is on disk.
-        // It is taken before either file is written, so a failure here leaves
-        // the stored pair as it was.
+        // The PEM form of the key goes straight into locked memory.
         let key_pem = secret::hold(pem::encode(label, der))?;
 
         let mut cert_pem = Vec::new();
         for c in &self.chain {
             cert_pem.extend_from_slice(&pem::encode("CERTIFICATE", c.as_ref()));
         }
-        pem::write_atomic(&dir.join(CERT_FILE), &cert_pem, 0o644)?;
-        key_pem.expose(|k| pem::write_atomic(&dir.join(KEY_FILE), k, 0o600))
+        Ok((cert_pem, key_pem))
     }
 }
 
