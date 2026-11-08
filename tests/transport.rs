@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use nettls::{
-    CertSource, SelfSignedParams, TlsMaterial, TransportCipher, TransportPolicy,
+    CertSource, Expiry, SelfSignedParams, TlsMaterial, TransportCipher, TransportPolicy,
     install_crypto_provider, pinned_client_config_with,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -45,7 +45,8 @@ async fn start_server(m: &TlsMaterial, policy: &TransportPolicy) -> u16 {
 
 /// Connects pinned, with the given policy. Returns the negotiated suite's name.
 async fn connect(port: u16, fp: &str, policy: &TransportPolicy) -> Result<String, String> {
-    let config = pinned_client_config_with(fp, &[], policy).map_err(|e| e.to_string())?;
+    let config =
+        pinned_client_config_with(fp, &[], policy, Expiry::Enforce).map_err(|e| e.to_string())?;
     let connector = TlsConnector::from(config);
     let tcp = TcpStream::connect(("127.0.0.1", port))
         .await

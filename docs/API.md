@@ -54,7 +54,7 @@ pub fn provider() -> Arc<rustls::crypto::CryptoProvider>;
 Re-exported from the root: `TlsMaterial`, `CertSource`, `SelfSignedParams`, `CertOrigin`,
 `is_valid_san`, `CERT_FILE`, `KEY_FILE`, `MAX_VALID_DAYS`, `RotatingResolver`, `TlsError`,
 `pinned_client_config`, `pinned_client_config_with_alpn`, `pinned_client_config_with`,
-`cert_fingerprint_sha256`, `TransportCipher`, `TransportPolicy` *(0.8.3)*.
+`cert_fingerprint_sha256`, `TransportCipher`, `TransportPolicy` *(0.8.3)*, `Expiry` *(0.11.0)*.
 
 `pub use rustls` — so you do not have to list rustls as a dependency just for the types (and
 risk a line of your own with the wrong features).
@@ -190,9 +190,24 @@ pub fn install_crypto_provider() -> bool;
 // pin — static pinning; against a ROTATING peer, use generations::Trust instead
 pub fn pinned_client_config(fingerprint_sha256: &str) -> Result<Arc<ClientConfig>, TlsError>;
 pub fn pinned_client_config_with_alpn(fingerprint_sha256: &str, alpn: &[Vec<u8>]) -> Result<Arc<ClientConfig>, TlsError>;
-pub fn pinned_client_config_with(fingerprint_sha256: &str, alpn: &[Vec<u8>], transport: &TransportPolicy)
-    -> Result<Arc<ClientConfig>, TlsError>;                                   // 0.8.3
+pub fn pinned_client_config_with(fingerprint_sha256: &str, alpn: &[Vec<u8>], transport: &TransportPolicy,
+                                 expiry: Expiry) -> Result<Arc<ClientConfig>, TlsError>;   // 0.8.3, expiry 0.11.0
+
+pub enum Expiry { Enforce, Ignore }                                          // 0.11.0; Default = Enforce
+pub enum Rejection { Untrusted, Expired { now: i64, not_after: i64 },
+                     NotYetValid { now: i64, not_before: i64 }, Other }      // 0.11.0
+pub fn classify(err: &(dyn std::error::Error + 'static)) -> Rejection;      // 0.11.0
 ```
+
+**Dates** *(0.11.0)*. The client checks the identity first, then the certificate's dates against
+the handshake's time. One that is expired or not yet valid is refused with rustls' own
+`CertificateError::ExpiredContext` or `NotValidYetContext`, which carry the dates; an unknown
+certificate is refused as untrusted whatever its dates. The short forms always check;
+`Expiry::Ignore` in the `_with` forms turns the date check off, as an explicit choice. The same
+holds for `Trust`. `classify` takes the error a connection returned — a `rustls::Error`, the
+`io::Error` tokio-rustls gives, or any error with one in its `source()` chain — and says whether it
+was untrusted, expired or not yet valid, with the dates in Unix seconds. The server side does not
+check its own dates: it serves what it has, and the status report warns.
 
 ### `transport` — the channel's cipher is the consumer's choice *(new in 0.8.3)*
 
@@ -322,10 +337,12 @@ impl Trust {
     pub fn state(&self) -> Result<Generations, TlsError>;                    // snapshot for storage
     pub fn client_config(&self) -> Result<Arc<ClientConfig>, TlsError>;      // LIVE — build once
     pub fn client_config_with_alpn(&self, alpn: &[Vec<u8>]) -> Result<Arc<ClientConfig>, TlsError>;
-    pub fn client_config_with(&self, alpn: &[Vec<u8>], transport: &TransportPolicy)
-        -> Result<Arc<ClientConfig>, TlsError>;                           // 0.8.3 — see `transport`
+    pub fn client_config_with(&self, alpn: &[Vec<u8>], transport: &TransportPolicy, expiry: Expiry)
+        -> Result<Arc<ClientConfig>, TlsError>;                           // 0.8.3, expiry 0.11.0
 }
 ```
+
+An expired or not yet valid certificate is refused as in `pin` *(0.11.0)*.
 
 The verifier promotes `next` only after the handshake signature holds *(0.10.0)*.
 
@@ -750,7 +767,6 @@ pub enum TlsError {
     Io { path: Option<PathBuf>, detail: String },
     Pem(String),
     KeyMismatch(String),                                    // the classic upload mistake
-    NotValidNow { not_before: i64, not_after: i64, now: i64 },
     Certificate(String),
     Generate(String),
     Rustls(String),
@@ -773,7 +789,6 @@ pub enum TlsError {
 | `Io` | file/directory |
 | `Pem` | the PEM could not be read |
 | `KeyMismatch` | the key does not belong to the certificate |
-| `NotValidNow` | outside the validity window |
 | `Certificate` | the certificate could not be parsed |
 | `Generate` | generation failed |
 | `Rustls` | rustls rejected the config |
@@ -870,7 +885,9 @@ retired §5 model entirely** (`chain` + `rotation`: `TrustChain`, `RotationProof
 `verify_successor` methods and the `rotation.proof` file) — the whole app is in its build
 phase, nothing to migrate (`cert_fingerprint_sha256` survived; it moved to `material`);
 **0.11.0 replaced the Python twin** (`python/nettls.py`, a second implementation with its own
-API) with `nettls-py`, this crate run from Python — still without touching the wire format.
+API) with `nettls-py`, this crate run from Python — still without touching the wire format —
+and made clients refuse an expired certificate, with `Expiry` as a new last argument of the
+`_with` forms and `TlsError::NotValidNow` gone.
 Recorded here, and every entry above carries the version it applies from.
 
 ## Python — `nettls-py` *(0.11.0)*
@@ -929,7 +946,10 @@ and waiting happens without the GIL. A non-blocking socket is refused and left t
 The stream does one thing at a time: a read that waits holds it, so a write from another thread
 waits for that read. Serve each connection from one thread.
 Socket and TLS failures are `OSError`, as Python's `ssl` gives them, and a timeout is
-`TimeoutError`. There is no asyncio form.
+`TimeoutError`. A refused server certificate is one of three `OSError` subclasses, as `classify`
+names it *(0.11.0)*: `UntrustedPeerError`, `CertificateExpiredError` (with `now` and `not_after`)
+and `CertificateNotYetValidError` (with `now` and `not_before`), Unix seconds. There is no asyncio
+form.
 
 ### What is guaranteed, and where Python differs
 

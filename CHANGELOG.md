@@ -46,6 +46,15 @@ wrong cause. Python has a matching exception for each.
 It said a man in the middle could not swap an envelope. The envelope has no
 sender, and the text now says so.
 
+### Changed — clients stop at an expired certificate *(2026-11-08)*
+
+The pinned client and `Trust` refuse a certificate that is expired or not yet
+valid, with rustls' error carrying the dates. `Expiry::Ignore`, a new last
+argument of the `_with` forms, turns this off. `pin::classify` tells untrusted
+from expired; Python raises `UntrustedPeerError`, `CertificateExpiredError` or
+`CertificateNotYetValidError`. `TlsError::NotValidNow`, which nothing produced,
+is gone.
+
 ## [0.10.0] — krypto 0.8, and fixes for the reported bugs
 
 ### Changed — krypto 0.8 *(2026-11-03)*

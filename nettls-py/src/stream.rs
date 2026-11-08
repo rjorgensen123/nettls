@@ -13,7 +13,11 @@
 //! waiting happens without the GIL. It does one thing at a time: a read that
 //! waits holds the stream, so a write from another thread waits for it. Serve
 //! each connection from one thread. Socket and TLS failures are `OSError`, as
-//! Python's own `ssl` gives them, and a timeout is `TimeoutError`.
+//! Python's own `ssl` gives them, and a timeout is `TimeoutError`. A refused
+//! server certificate is one of three `OSError` subclasses, after
+//! `nettls::pin::classify` (0.11.0): `UntrustedPeerError`,
+//! `CertificateExpiredError` (with `now` and `not_after`) and
+//! `CertificateNotYetValidError` (with `now` and `not_before`), Unix seconds.
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpStream};
@@ -22,13 +26,32 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use nettls::rustls;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConnection, ServerConnection, StreamOwned};
 
 use crate::{Bytes, bytes, err, lock};
+
+pyo3::create_exception!(
+    nettls_py,
+    UntrustedPeerError,
+    PyOSError,
+    "The server's certificate is not one the client config trusts (0.11.0)."
+);
+pyo3::create_exception!(
+    nettls_py,
+    CertificateExpiredError,
+    PyOSError,
+    "The server's certificate is trusted but expired; `now` and `not_after` are Unix seconds (0.11.0)."
+);
+pyo3::create_exception!(
+    nettls_py,
+    CertificateNotYetValidError,
+    PyOSError,
+    "The server's certificate is trusted but not valid yet; `now` and `not_before` are Unix seconds (0.11.0)."
+);
 
 /// The most `read` returns in one call.
 const MAX_READ: usize = 16 * 1024 * 1024;
@@ -184,12 +207,35 @@ fn take_socket(sock: &Bound<'_, PyAny>) -> PyResult<TcpStream> {
 }
 
 /// An I/O failure as Python's own sockets give it. The stream's socket is
-/// blocking, so `WouldBlock` can only mean that its timeout ran out.
+/// blocking, so `WouldBlock` can only mean that its timeout ran out. A refused
+/// certificate is the exception `nettls::pin::classify` names (0.11.0).
 fn io_err(e: io::Error) -> PyErr {
+    use nettls::pin::Rejection;
     if e.kind() == io::ErrorKind::WouldBlock {
         return PyErr::from(io::Error::new(io::ErrorKind::TimedOut, "timed out"));
     }
-    PyErr::from(e)
+    let msg = e.to_string();
+    let (err, times) = match nettls::pin::classify(&e) {
+        Rejection::Untrusted => (UntrustedPeerError::new_err(msg), None),
+        Rejection::Expired { now, not_after } => (
+            CertificateExpiredError::new_err(msg),
+            Some((now, "not_after", not_after)),
+        ),
+        Rejection::NotYetValid { now, not_before } => (
+            CertificateNotYetValidError::new_err(msg),
+            Some((now, "not_before", not_before)),
+        ),
+        Rejection::Other => return PyErr::from(e),
+    };
+    if let Some((now, name, at)) = times {
+        Python::attach(|py| {
+            let v = err.value(py);
+            // Setting an attribute on a fresh exception cannot fail.
+            let _ = v.setattr("now", now);
+            let _ = v.setattr(name, at);
+        });
+    }
+    err
 }
 
 fn closed() -> PyErr {
@@ -332,5 +378,15 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ServerConfig>()?;
     m.add_class::<Stream>()?;
     m.add("MAX_READ", MAX_READ)?;
+    let py = m.py();
+    m.add("UntrustedPeerError", py.get_type::<UntrustedPeerError>())?;
+    m.add(
+        "CertificateExpiredError",
+        py.get_type::<CertificateExpiredError>(),
+    )?;
+    m.add(
+        "CertificateNotYetValidError",
+        py.get_type::<CertificateNotYetValidError>(),
+    )?;
     Ok(())
 }

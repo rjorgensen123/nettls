@@ -6,7 +6,7 @@
 //! and its exit condition are documented and unit-tested in `src/aegis.rs`.
 
 use nettls::{
-    CertSource, SelfSignedParams, TlsMaterial, TransportCipher, TransportPolicy,
+    CertSource, Expiry, SelfSignedParams, TlsMaterial, TransportCipher, TransportPolicy,
     install_crypto_provider, pinned_client_config_with,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -60,7 +60,8 @@ async fn start_server(m: &TlsMaterial, policy: &TransportPolicy) -> (u16, JoinHa
 
 /// Connects pinned, sends HELLO, reads the reply. Returns the negotiated suite.
 async fn connect(port: u16, fp: &str, policy: &TransportPolicy) -> Result<String, String> {
-    let config = pinned_client_config_with(fp, &[], policy).map_err(|e| e.to_string())?;
+    let config =
+        pinned_client_config_with(fp, &[], policy, Expiry::Enforce).map_err(|e| e.to_string())?;
     let connector = TlsConnector::from(config);
     let tcp = TcpStream::connect(("127.0.0.1", port))
         .await
@@ -169,7 +170,7 @@ async fn larger_than_one_record_survives() {
             let _ = tls.shutdown().await;
         }
     });
-    let config = pinned_client_config_with(&fp, &[], &aegis_only()).unwrap();
+    let config = pinned_client_config_with(&fp, &[], &aegis_only(), Expiry::Enforce).unwrap();
     let tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
     let name = nettls::rustls::pki_types::ServerName::try_from("localhost").unwrap();
     let mut tls = TlsConnector::from(config).connect(name, tcp).await.unwrap();

@@ -31,12 +31,6 @@ pyo3::create_exception!(
 );
 pyo3::create_exception!(
     nettls_py,
-    NotValidNowError,
-    TlsError,
-    "`TlsError::NotValidNow`: the certificate is expired or not yet valid."
-);
-pyo3::create_exception!(
-    nettls_py,
     CertificateError,
     TlsError,
     "`TlsError::Certificate`: the certificate could not be parsed as X.509."
@@ -130,7 +124,6 @@ pub(crate) fn err(e: nettls::TlsError) -> PyErr {
         E::Io { .. } => IoError::new_err(msg),
         E::Pem(_) => PemError::new_err(msg),
         E::KeyMismatch(_) => KeyMismatchError::new_err(msg),
-        E::NotValidNow { .. } => NotValidNowError::new_err(msg),
         E::Certificate(_) => CertificateError::new_err(msg),
         E::Generate(_) => GenerateError::new_err(msg),
         E::Rustls(_) => RustlsError::new_err(msg),
@@ -157,7 +150,6 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("IoError", py.get_type::<IoError>())?;
     m.add("PemError", py.get_type::<PemError>())?;
     m.add("KeyMismatchError", py.get_type::<KeyMismatchError>())?;
-    m.add("NotValidNowError", py.get_type::<NotValidNowError>())?;
     m.add("CertificateError", py.get_type::<CertificateError>())?;
     m.add("GenerateError", py.get_type::<GenerateError>())?;
     m.add("RustlsError", py.get_type::<RustlsError>())?;

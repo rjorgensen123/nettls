@@ -72,8 +72,26 @@ with Stream.connect(sock, config, "localhost") as tls:
     print(tls.read(), tls.peer_fingerprint())
 ```
 
-The fingerprint is the identity; the name is only what is sent. A wrong certificate fails the
-handshake with an `OSError`, as Python's own `ssl` reports it, and a timeout is a `TimeoutError`.
+The fingerprint is the identity; the name is only what is sent. A refused certificate fails the
+handshake with an `OSError` subclass from `nettls_py.stream`, as Python's own `ssl` has
+`SSLCertVerificationError`: `UntrustedPeerError` for a certificate the config does not trust,
+`CertificateExpiredError` and `CertificateNotYetValidError` for one outside its dates, with `now`
+and `not_after` or `not_before` in Unix seconds. A timeout is a `TimeoutError`.
+
+```python
+from nettls_py.stream import CertificateExpiredError, UntrustedPeerError
+
+try:
+    tls = Stream.connect(sock, config, "localhost")
+except UntrustedPeerError:
+    ...                      # not who we trust — treat as a possible attack
+except CertificateExpiredError as e:
+    ...                      # trusted, but expired at e.not_after — someone must renew it
+```
+
+An expired certificate can be accepted on purpose:
+`nettls.pinned_client_config_with(fp, [], policy, nettls.Expiry.Ignore)`, and the same last
+argument on `Trust.client_config_with`.
 
 ## Enrollment: looking before trusting — [API: the enrollment rule](API.md#the-enrollment-rule--trust-over-an-unverified-connection-contract)
 

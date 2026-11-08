@@ -493,21 +493,29 @@ impl Trust {
 
     /// Like [`Trust::client_config`], but with ALPN.
     pub fn client_config_with_alpn(&self, alpn: &[Vec<u8>]) -> Result<Arc<ClientConfig>, TlsError> {
-        self.client_config_with(alpn, &crate::transport::TransportPolicy::default())
+        self.client_config_with(
+            alpn,
+            &crate::transport::TransportPolicy::default(),
+            crate::pin::Expiry::Enforce,
+        )
     }
 
     /// Like [`Trust::client_config_with_alpn`], with an explicit
-    /// [`TransportPolicy`](crate::transport::TransportPolicy) (0.8.3). Without
-    /// one, the client offers the default: **AES-256-GCM only**.
+    /// [`TransportPolicy`](crate::transport::TransportPolicy) (0.8.3) and an
+    /// explicit [`Expiry`](crate::pin::Expiry) (0.11.0). Without a policy, the
+    /// client offers the default: **AES-256-GCM only**; the short forms use
+    /// `Expiry::Enforce`, so an expired or not yet valid certificate is refused.
     pub fn client_config_with(
         &self,
         alpn: &[Vec<u8>],
         transport: &crate::transport::TransportPolicy,
+        expiry: crate::pin::Expiry,
     ) -> Result<Arc<ClientConfig>, TlsError> {
         let provider = transport.provider();
         let verifier = GenerationVerifier {
             state: self.state.clone(),
             provider: provider.clone(),
+            expiry,
         };
         let mut cfg = ClientConfig::builder_with_provider(provider)
             .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
@@ -528,6 +536,7 @@ impl Trust {
 struct GenerationVerifier {
     state: Arc<RwLock<Generations>>,
     provider: Arc<CryptoProvider>,
+    expiry: crate::pin::Expiry,
 }
 
 impl GenerationVerifier {
@@ -550,7 +559,7 @@ impl ServerCertVerifier for GenerationVerifier {
         _intermediates: &[CertificateDer<'_>],
         _server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
-        _now: UnixTime,
+        now: UnixTime,
     ) -> Result<ServerCertVerified, Error> {
         let fp = krypto::hex::encode(&sha256(end_entity.as_ref()));
 
@@ -581,6 +590,8 @@ impl ServerCertVerifier for GenerationVerifier {
             ));
         }
 
+        // Identity first, dates second, as in the pinned verifier (0.11.0).
+        crate::pin::check_validity(end_entity, now, self.expiry)?;
         Ok(ServerCertVerified::assertion())
     }
 

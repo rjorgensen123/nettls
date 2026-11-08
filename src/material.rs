@@ -632,6 +632,17 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+/// `notBefore` and `notAfter` of a certificate, as Unix seconds — what the
+/// client verifiers check the peer's certificate against *(0.11.0)*.
+pub(crate) fn validity(der: &[u8]) -> Result<(i64, i64), TlsError> {
+    let (_rest, cert) = x509_parser::certificate::X509Certificate::from_der(der)
+        .map_err(|e| TlsError::Certificate(e.to_string()))?;
+    Ok((
+        cert.validity().not_before.timestamp(),
+        cert.validity().not_after.timestamp(),
+    ))
+}
+
 /// Extracts the validity window, SAN list and subject from the leaf DER.
 fn inspect(leaf: &CertificateDer<'_>) -> Result<(i64, i64, Vec<String>, String), TlsError> {
     let (_rest, cert) = x509_parser::certificate::X509Certificate::from_der(leaf.as_ref())

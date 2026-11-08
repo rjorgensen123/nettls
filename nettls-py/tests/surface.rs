@@ -47,7 +47,16 @@ const RUST_ONLY: &[(&str, &str)] = &[
     ("announcer.Pending.announcement", "see announcer.Pending"),
     ("announcer.Pending.new_cert_pem", "see announcer.Pending"),
     ("announcer.Pending.new_pkcs8", "see announcer.Pending"),
+    ("pin.classify", CLASSIFY),
+    ("pin.Rejection", CLASSIFY),
+    ("pin.Rejection.Untrusted", CLASSIFY),
+    ("pin.Rejection.Expired", CLASSIFY),
+    ("pin.Rejection.NotYetValid", CLASSIFY),
+    ("pin.Rejection.Other", CLASSIFY),
 ];
+
+const CLASSIFY: &str =
+    "reads a Rust error; Python gets the same answer as the exceptions in stream";
 
 const STREAM: &str =
     "the TLS connection over a Python socket: Rust consumers drive rustls themselves";
@@ -77,6 +86,9 @@ const PYTHON_ONLY: &[(&str, &str)] = &[
     ("stream.Stream.close", STREAM),
     ("stream.Stream.peer_fingerprint", STREAM),
     ("stream.Stream.alpn_protocol", STREAM),
+    ("stream.UntrustedPeerError", STREAM),
+    ("stream.CertificateExpiredError", STREAM),
+    ("stream.CertificateNotYetValidError", STREAM),
     ("announcement.AnnouncementJson.dumps", SERDE),
     ("announcement.AnnouncementJson.loads", SERDE),
     ("announcement.ReceiptJson.dumps", SERDE),

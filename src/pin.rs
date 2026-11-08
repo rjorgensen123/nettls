@@ -31,8 +31,19 @@
 //! **If the server changes certificate, the pinned value must be updated.**
 //! That is the price of pinning, and it is intentional: a silent swap should
 //! stop the traffic, not pass.
+//!
+//! # Dates *(0.11.0)*
+//!
+//! After the identity, the certificate's dates are checked against the
+//! handshake's time: one that is expired or not yet valid is refused with
+//! rustls' own error, which carries the dates. An unknown certificate is
+//! "untrusted" whatever its dates. [`Expiry::Ignore`] turns the date check off,
+//! as an explicit choice in the `_with` forms; the short forms always check.
+//! [`classify`] tells the consumer which of these refused a connection — the
+//! same check runs in [`crate::generations::Trust`].
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::CryptoProvider;
@@ -65,22 +76,26 @@ pub fn pinned_client_config_with_alpn(
         fingerprint_sha256,
         alpn,
         &crate::transport::TransportPolicy::default(),
+        Expiry::Enforce,
     )
 }
 
 /// Like [`pinned_client_config_with_alpn`], with an explicit
-/// [`TransportPolicy`](crate::transport::TransportPolicy) (0.8.3). Without one,
-/// the client offers the default: **AES-256-GCM only**.
+/// [`TransportPolicy`](crate::transport::TransportPolicy) (0.8.3) and an
+/// explicit [`Expiry`] (0.11.0). Without a policy, the client offers the
+/// default: **AES-256-GCM only**; the short forms use [`Expiry::Enforce`].
 pub fn pinned_client_config_with(
     fingerprint_sha256: &str,
     alpn: &[Vec<u8>],
     transport: &crate::transport::TransportPolicy,
+    expiry: Expiry,
 ) -> Result<Arc<ClientConfig>, TlsError> {
     let expected = parse_fingerprint(fingerprint_sha256)?;
     let provider = transport.provider();
     let verifier = PinnedServerCertVerifier {
         expected,
         provider: provider.clone(),
+        expiry,
     };
 
     let mut cfg = ClientConfig::builder_with_provider(provider)
@@ -122,10 +137,132 @@ pub(crate) fn no_resumption() -> rustls::client::Resumption {
     rustls::client::Resumption::disabled()
 }
 
+/// Whether a client refuses a certificate outside its validity window
+/// *(0.11.0)*.
+///
+/// The short forms ([`pinned_client_config`], `Trust::client_config`) always
+/// use [`Expiry::Enforce`]. [`Expiry::Ignore`] exists for a consumer that must
+/// keep talking to a peer whose certificate has run out — an explicit choice,
+/// never a default. The identity is checked either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Expiry {
+    /// Refuse a certificate that is expired or not yet valid.
+    #[default]
+    Enforce,
+    /// Accept it anyway.
+    Ignore,
+}
+
+/// The date check both client verifiers run after the identity check
+/// *(0.11.0)*. The errors are rustls' own, with the dates, as its standard
+/// verifier gives them.
+pub(crate) fn check_validity(
+    cert: &CertificateDer<'_>,
+    now: UnixTime,
+    expiry: Expiry,
+) -> Result<(), Error> {
+    if expiry == Expiry::Ignore {
+        return Ok(());
+    }
+    let (not_before, not_after) = crate::material::validity(cert.as_ref())
+        .map_err(|_| Error::InvalidCertificate(CertificateError::BadEncoding))?;
+    let t = now.as_secs();
+    let at = |s: i64| UnixTime::since_unix_epoch(Duration::from_secs(s.max(0) as u64));
+    if (t as i64) < not_before {
+        return Err(CertificateError::NotValidYetContext {
+            time: now,
+            not_before: at(not_before),
+        }
+        .into());
+    }
+    if (t as i64) > not_after {
+        return Err(CertificateError::ExpiredContext {
+            time: now,
+            not_after: at(not_after),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// Why a client refused the server's certificate, in nettls' terms
+/// *(0.11.0)*. Times are Unix seconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rejection {
+    /// The certificate is not one we trust: an unknown fingerprint, or one
+    /// `Trust` does not accept.
+    Untrusted,
+    /// The certificate is trusted, but expired.
+    Expired {
+        /// The time of the handshake.
+        now: i64,
+        /// The certificate's `notAfter`.
+        not_after: i64,
+    },
+    /// The certificate is trusted, but not valid yet.
+    NotYetValid {
+        /// The time of the handshake.
+        now: i64,
+        /// The certificate's `notBefore`.
+        not_before: i64,
+    },
+    /// Anything else: not a certificate refusal by nettls' verifiers.
+    Other,
+}
+
+/// Tells why a connection with a nettls client config failed *(0.11.0)*.
+///
+/// Give it the error the connection returned: a `rustls::Error`, the
+/// `io::Error` tokio-rustls returns, or any error with one of them in its
+/// `source()` chain. "Untrusted" and "expired" are different situations — the
+/// first may be an attack, the second is a certificate someone forgot to
+/// renew — and this is how a consumer tells them apart.
+pub fn classify(err: &(dyn std::error::Error + 'static)) -> Rejection {
+    let mut cur = Some(err);
+    while let Some(e) = cur {
+        if let Some(r) = e.downcast_ref::<Error>() {
+            return from_rustls(r);
+        }
+        // `io::Error` does not list the error it wraps in `source()`.
+        if let Some(r) = e
+            .downcast_ref::<std::io::Error>()
+            .and_then(|io| io.get_ref())
+            .and_then(|inner| inner.downcast_ref::<Error>())
+        {
+            return from_rustls(r);
+        }
+        cur = e.source();
+    }
+    Rejection::Other
+}
+
+fn from_rustls(e: &Error) -> Rejection {
+    let secs = |t: &UnixTime| t.as_secs() as i64;
+    match e {
+        Error::InvalidCertificate(CertificateError::ApplicationVerificationFailure) => {
+            Rejection::Untrusted
+        }
+        Error::InvalidCertificate(CertificateError::ExpiredContext { time, not_after }) => {
+            Rejection::Expired {
+                now: secs(time),
+                not_after: secs(not_after),
+            }
+        }
+        Error::InvalidCertificate(CertificateError::NotValidYetContext { time, not_before }) => {
+            Rejection::NotYetValid {
+                now: secs(time),
+                not_before: secs(not_before),
+            }
+        }
+        _ => Rejection::Other,
+    }
+}
+
 /// The verifier behind [`pinned_client_config`].
 struct PinnedServerCertVerifier {
     expected: [u8; 32],
     provider: Arc<CryptoProvider>,
+    expiry: Expiry,
 }
 
 impl std::fmt::Debug for PinnedServerCertVerifier {
@@ -143,13 +280,16 @@ impl ServerCertVerifier for PinnedServerCertVerifier {
         _intermediates: &[CertificateDer<'_>],
         _server_name: &ServerName<'_>,
         _ocsp_response: &[u8],
-        _now: UnixTime,
+        now: UnixTime,
     ) -> Result<ServerCertVerified, Error> {
         // Intermediate certificates are ignored: we pin the leaf, there is no
         // chain to build, and a chain we do not trust must not be able to
         // influence anything.
         let actual = sha256(end_entity.as_ref());
         if ct_eq(&actual, &self.expected) {
+            // Identity first, dates second: an unknown certificate is
+            // "untrusted", whatever its dates (0.11.0).
+            check_validity(end_entity, now, self.expiry)?;
             Ok(ServerCertVerified::assertion())
         } else {
             // The error does not contain the fingerprints. The client already

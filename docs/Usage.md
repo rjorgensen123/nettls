@@ -61,7 +61,8 @@ fingerprint changes every time — and everyone who recognized you no longer doe
 > files.
 >
 > ⚠ **An expired stored certificate is reused too** — marked `ReusedExpired`. The service comes
-> up, and clients complain about the date. That is deliberate: silently generating a new one
+> up, and clients complain about the date; a nettls client refuses it with an expiry error unless
+> it was built with `Expiry::Ignore` *(0.11.0)*. That is deliberate: silently generating a new one
 > would change the fingerprint and break every pinned pairing, turning a clear date error into an
 > inexplicable connection failure. Replacing it is an operator action. Log this one loudly.
 

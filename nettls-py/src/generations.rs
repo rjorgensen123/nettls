@@ -234,9 +234,10 @@ impl Trust {
         &self,
         alpn: Vec<Vec<u8>>,
         transport: &TransportPolicy,
+        expiry: crate::pin::Expiry,
     ) -> PyResult<ClientConfig> {
         self.inner
-            .client_config_with(&alpn, &transport.inner)
+            .client_config_with(&alpn, &transport.inner, expiry.into())
             .map(ClientConfig::wrap)
             .map_err(err)
     }

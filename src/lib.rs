@@ -140,7 +140,9 @@ pub use material::{
     CERT_FILE, CertOrigin, CertSource, KEY_FILE, MAX_VALID_DAYS, SelfSignedParams, TlsMaterial,
     cert_fingerprint_sha256, is_valid_san,
 };
-pub use pin::{pinned_client_config, pinned_client_config_with, pinned_client_config_with_alpn};
+pub use pin::{
+    Expiry, pinned_client_config, pinned_client_config_with, pinned_client_config_with_alpn,
+};
 pub use provider::{install_crypto_provider, provider};
 pub use resolver::RotatingResolver;
 pub use transport::{TransportCipher, TransportPolicy};

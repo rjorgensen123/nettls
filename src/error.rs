@@ -3,8 +3,8 @@
 //!
 //! The principle from First Preview applies: **never empty error messages**.
 //! Every variant carries enough context for the operator to see *what* is
-//! wrong — "the key does not belong to the certificate", "the certificate
-//! expired 2026-03-01" — not just that something failed.
+//! wrong — "the key does not belong to the certificate", "the locked file is
+//! too short to contain header and salt" — not just that something failed.
 //!
 //! No variant contains key material. That is an invariant, not a coincidence:
 //! `TlsError` gets logged, and a logged private key is a compromised private
@@ -29,15 +29,6 @@ pub enum TlsError {
     /// The private key does not belong to the certificate, or the provider does
     /// not support it. This is the classic upload error.
     KeyMismatch(String),
-    /// The certificate is expired or not yet valid (unix time).
-    NotValidNow {
-        /// `notBefore` from the certificate.
-        not_before: i64,
-        /// `notAfter` from the certificate.
-        not_after: i64,
-        /// The point in time we compared against.
-        now: i64,
-    },
     /// The certificate could not be parsed as X.509.
     Certificate(String),
     /// Generating a self-signed certificate failed (rcgen).
@@ -107,14 +98,6 @@ impl fmt::Display for TlsError {
             TlsError::KeyMismatch(s) => {
                 write!(f, "key and certificate do not belong together: {s}")
             }
-            TlsError::NotValidNow {
-                not_before,
-                not_after,
-                now,
-            } => write!(
-                f,
-                "the certificate is not valid now (notBefore={not_before}, notAfter={not_after}, now={now}, unix time)"
-            ),
             TlsError::Certificate(s) => write!(f, "the certificate could not be parsed: {s}"),
             TlsError::Generate(s) => write!(f, "could not generate self-signed certificate: {s}"),
             TlsError::Rustls(s) => write!(f, "rustls rejected the configuration: {s}"),

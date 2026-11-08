@@ -17,7 +17,13 @@ import nettls_py as nettls
 import pytest
 
 from nettls_py.generations import Generation, Received, Trust
-from nettls_py.stream import MAX_READ, Stream
+from nettls_py.stream import (
+    MAX_READ,
+    CertificateExpiredError,
+    CertificateNotYetValidError,
+    Stream,
+    UntrustedPeerError,
+)
 
 A = nettls.announcer
 
@@ -107,10 +113,114 @@ def test_the_wrong_pin_fails_the_handshake():
     m = identity("server")
     other = identity("other")
     port, thread, result = serve_once(m.server_config(), echo_line)
-    with pytest.raises(OSError):
+    with pytest.raises(UntrustedPeerError):
         connect(port, nettls.pinned_client_config(other.fingerprint_sha256()))
     thread.join(10)
     assert isinstance(result.get("error"), OSError)
+
+
+# --------------------------------------------------------------------------- #
+# Dates: an expired or not yet valid certificate is refused, and says so
+# --------------------------------------------------------------------------- #
+
+
+def _tlv(tag: int, body: bytes) -> bytes:
+    n = len(body)
+    if n < 0x80:
+        return bytes([tag, n]) + body
+    b = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    return bytes([tag, 0x80 | len(b)]) + b + body
+
+
+def _end(der: bytes, i: int) -> int:
+    """Where the DER element at `i` ends."""
+    n = der[i + 1]
+    if n < 0x80:
+        return i + 2 + n
+    k = n & 0x7F
+    return i + 2 + k + int.from_bytes(der[i + 2 : i + 2 + k], "big")
+
+
+def resigned(m: nettls.TlsMaterial, not_before: str, not_after: str) -> nettls.TlsMaterial:
+    """`m`'s key with its certificate signed again for another window.
+
+    The dates are UTCTime (`YYMMDDHHMMSSZ`), the form the generated certificate
+    already has, so only the signature changes length. No key is stored with
+    the tests: the key is `m`'s own.
+    """
+    der = m.cert_chain()[0]
+    tbs_at = 4 if der[1] == 0x82 else 3
+    tbs_end = _end(der, tbs_at)
+    tbs = bytearray(der[tbs_at:tbs_end])
+    v = tbs.find(bytes([0x30, 0x1E, 0x17, 0x0D]))
+    assert v > 0 and tbs[v + 17 : v + 19] == bytes([0x17, 0x0D])
+    tbs[v + 4 : v + 17] = not_before.encode()
+    tbs[v + 19 : v + 32] = not_after.encode()
+    alg = der[tbs_end : _end(der, tbs_end)]
+    pkcs8 = m.anchor_pkcs8()
+    sig = nettls.signature.sign_p256(pkcs8, bytes(tbs))
+    cert = _tlv(0x30, bytes(tbs) + alg + _tlv(0x03, b"\x00" + sig))
+    return nettls.TlsMaterial.load(
+        nettls.CertSource.pem(
+            nettls.pem.encode("CERTIFICATE", cert), nettls.pem.encode("PRIVATE KEY", pkcs8)
+        )
+    )
+
+
+EXPIRED = ("000101000000Z", "000102000000Z")  # 2000
+NOT_YET_VALID = ("490101000000Z", "491231235959Z")  # 2049
+POLICY = nettls.TransportPolicy.only(nettls.TransportCipher.Aes256Gcm)
+
+
+def test_an_expired_certificate_is_refused_with_its_dates():
+    m = resigned(identity("server"), *EXPIRED)
+    port, thread, _ = serve_once(m.server_config(), echo_line)
+    with pytest.raises(CertificateExpiredError) as e:
+        connect(port, nettls.pinned_client_config(m.fingerprint_sha256()))
+    thread.join(10)
+    assert isinstance(e.value, OSError)
+    assert e.value.not_after == m.not_after()
+    assert e.value.now > e.value.not_after
+
+
+def test_a_not_yet_valid_certificate_is_refused_with_its_dates():
+    m = resigned(identity("server"), *NOT_YET_VALID)
+    port, thread, _ = serve_once(m.server_config(), echo_line)
+    with pytest.raises(CertificateNotYetValidError) as e:
+        connect(port, nettls.pinned_client_config(m.fingerprint_sha256()))
+    thread.join(10)
+    assert e.value.not_before == m.not_before()
+    assert e.value.now < e.value.not_before
+
+
+def test_expiry_ignore_lets_an_expired_certificate_through():
+    m = resigned(identity("server"), *EXPIRED)
+    port, thread, result = serve_once(m.server_config(), echo_line)
+    config = nettls.pinned_client_config_with(
+        m.fingerprint_sha256(), [], POLICY, nettls.Expiry.Ignore
+    )
+    with connect(port, config) as tls:
+        tls.write(b"late\n")
+        assert tls.read() == b"late\n"
+    thread.join(10)
+    assert result == {"value": b"late\n"}
+
+
+def test_trust_refuses_an_expired_certificate_unless_told_to_ignore_it():
+    m = resigned(identity("server"), *EXPIRED)
+    trust = Trust.from_approval(Generation.from_der(m.cert_chain()[0]))
+
+    port, thread, _ = serve_once(m.server_config(), echo_line)
+    with pytest.raises(CertificateExpiredError):
+        connect(port, trust.client_config())
+    thread.join(10)
+
+    port, thread, result = serve_once(m.server_config(), echo_line)
+    with connect(port, trust.client_config_with([], POLICY, nettls.Expiry.Ignore)) as tls:
+        tls.write(b"x\n")
+        assert tls.read() == b"x\n"
+    thread.join(10)
+    assert "error" not in result
 
 
 def test_trust_promotes_next_once_the_handshake_proves_it():
