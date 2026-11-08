@@ -337,6 +337,13 @@ def test_trust_shares_its_state():
 A = nettls.announcer
 
 
+def test_the_trust_failure_message_never_panics():
+    for observed in ("æøå" * 10, "a" * 15 + "ø"):
+        m = A.Deviation.UnknownCertificate(observed=observed).message("peer")
+        assert f"({observed[:16]}…)" in m
+        assert "must go back to mode 1" in m
+
+
 def test_mode_is_never_negotiated():
     assert A.check_mode(A.Mode.Rolling, A.Mode.Rolling) == A.ModeCheck.Agree(A.Mode.Rolling)
     m = A.check_mode(A.Mode.Rolling, A.Mode.Pinning)

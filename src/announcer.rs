@@ -1844,7 +1844,7 @@ impl Schedule {
 // Falling to mode 1 on an identity deviation (§6.8b, M-8/M-27)
 // --------------------------------------------------------------------------- //
 
-/// Why a connection fell to mode 1.
+/// Why a connection must fall back to mode 1.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Deviation {
     /// The peer presented something that is neither `current` nor a stored `next`.
@@ -1863,23 +1863,28 @@ pub enum Deviation {
 
 impl Deviation {
     /// The message the operator gets. Says what happened and what must be done.
+    ///
+    /// It never fails, whatever `observed` holds *(0.11.0)*: it is cut after
+    /// 16 characters, not 16 bytes, so a multi-byte character there cannot
+    /// make the message panic.
     pub fn message(&self, peer: &str) -> String {
+        let head = |s: &str| s.chars().take(16).collect::<String>();
         let what = match self {
             Deviation::UnknownCertificate { observed } => format!(
                 "presented a certificate we do not know ({}…)",
-                &observed[..16.min(observed.len())]
+                head(observed)
             ),
             Deviation::InvalidSignature(d) => {
                 format!("sent an announcement that did not hold: {d}")
             }
             Deviation::AbandonedCertificate { observed } => format!(
                 "presented a certificate it has abandoned ({}…) — a rollback, or a replay",
-                &observed[..16.min(observed.len())]
+                head(observed)
             ),
         };
         format!(
-            "TRUST FAILURE against {peer}: the peer {what}. Traffic to {peer} is stopped, \
-             and the connection now stands in mode 1 (pinning). An operator must approve the \
+            "TRUST FAILURE against {peer}: the peer {what}. Traffic to {peer} must stop, \
+             and the connection must go back to mode 1 (pinning). An operator must approve the \
              identity anew before it can be used. This is NOT retried automatically — a retry \
              against an identity we cannot verify is just one more chance for whoever stands in \
              the middle."
@@ -1905,7 +1910,8 @@ impl FallToMode1 {
         Self { deviation }
     }
 
-    /// The mode the connection stands in afterwards. Always the same.
+    /// The mode the connection must be put in afterwards — by the consumer;
+    /// nettls switches no mode itself *(0.11.0)*. Always the same.
     pub fn mode(&self) -> Mode {
         Mode::Pinning
     }
@@ -1971,6 +1977,32 @@ mod restart_and_deviation_tests {
         assert!(m.contains("abandoned"), "{m}");
         assert!(m.contains("approve the identity anew"), "{m}");
         assert!(m.contains("NOT retried automatically"), "{m}");
+        // The crate tells what must happen; it does not claim to have switched.
+        assert!(m.contains("must go back to mode 1"), "{m}");
+        assert!(!m.contains("now stands in"), "{m}");
+    }
+
+    #[test]
+    fn a_multi_byte_character_does_not_make_the_message_panic() {
+        // Cut on bytes, "ø" across byte 16 used to panic (0.11.0).
+        for observed in [
+            "æøå".repeat(10),
+            format!("{}ø", "a".repeat(15)),
+            String::new(),
+        ] {
+            for d in [
+                Deviation::UnknownCertificate {
+                    observed: observed.clone(),
+                },
+                Deviation::AbandonedCertificate {
+                    observed: observed.clone(),
+                },
+            ] {
+                let m = d.message("gateway");
+                let head: String = observed.chars().take(16).collect();
+                assert!(m.contains(&format!("({head}…)")), "{m}");
+            }
+        }
     }
 }
 

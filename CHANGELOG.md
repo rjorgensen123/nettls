@@ -79,6 +79,13 @@ The key is now built and locked in memory, and only the locked file is written.
 A staging directory left by an earlier version is removed at start. The locked
 file is the same as before.
 
+### Fixed — the trust-failure message *(2026-11-08)*
+
+`Deviation::message` cut the observed value after 16 bytes, so a multi-byte
+character there made it panic; it now cuts after 16 characters. It also said the
+connection "now stands in mode 1", but nettls switches no mode itself; it now
+says the connection must go back to mode 1.
+
 ## [0.10.0] — krypto 0.8, and fixes for the reported bugs
 
 ### Changed — krypto 0.8 *(2026-11-03)*
