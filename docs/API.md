@@ -527,7 +527,8 @@ impl Schedule {
     pub fn state(&self) -> &ChainState;
     pub fn first_announced(&self) -> Option<i64>;
     pub fn status(&self, now: i64, expires: i64) -> Status;
-    pub fn restore_announced(&mut self, waiting_for: Vec<String>, first_announced: i64);  // after restart
+    pub fn restore_announced(&mut self, waiting_for: Vec<String>, first_announced: i64);  // after restart;
+                                       // only peers in the list given to `new` (0.11.0)
 }
 
 pub fn draw_roll_time(issued: i64) -> Result<i64, TlsError>;   // issued + 7 d ± 2 d (CSPRNG)
@@ -573,6 +574,8 @@ impl Announcer {
     pub fn own_trio(&self) -> Result<OwnTrio, TlsError>;
     pub fn prepare(&self, now: i64) -> Result<Announcement, TlsError>;   // create + persist + announce; idempotent
     pub fn acked(&self, peer: &str) -> Result<(), TlsError>;             // verify the Receipt FIRST; persists
+    pub fn add_peer(&self, name: impl Into<String>) -> Result<(), TlsError>;   // persists (0.11.0)
+    pub fn remove_peer(&self, name: &str) -> Result<(), TlsError>;             // persists (0.11.0)
     pub fn roll_if_ready(&self, now: i64) -> Result<Option<String>, TlsError>;
     pub fn roll_if_ready_gated(&self, now: i64, safe_now: impl FnOnce() -> bool)
         -> Result<Option<String>, TlsError>;   // the consumer's last word; chain+serving switch together

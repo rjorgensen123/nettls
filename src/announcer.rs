@@ -1338,6 +1338,33 @@ impl Announcer {
         self.save_pending()
     }
 
+    /// Register a peer while running *(0.11.0)*. From now on it, too, must ack
+    /// before we roll; a rotation already announced waits for it as well. The
+    /// promise is saved at once, so the change survives a restart.
+    ///
+    /// nettls keeps no register of its own: the consumer's list, which goes
+    /// into [`Schedule::new`] at start, must change too.
+    pub fn add_peer(&self, name: impl Into<String>) -> Result<(), TlsError> {
+        self.schedule
+            .write()
+            .map_err(|_| TlsError::poisoned("the rotation lock"))?
+            .add_peer(name);
+        self.save_pending()
+    }
+
+    /// Remove a peer while running *(0.11.0)* — a decommissioned module that
+    /// stays in the list would block every rotation for good (§6.3b, M-34). A
+    /// rotation already announced stops waiting for it, and the promise is
+    /// saved at once. As with [`Announcer::add_peer`], the consumer's own list
+    /// must change too.
+    pub fn remove_peer(&self, name: &str) -> Result<(), TlsError> {
+        self.schedule
+            .write()
+            .map_err(|_| TlsError::poisoned("the rotation lock"))?
+            .remove_peer(name);
+        self.save_pending()
+    }
+
     /// Switch certificates — **only** if everyone has acked and the rate limit allows it.
     ///
     /// Returns the old fingerprint on a switch, `None` when we are not ready.
@@ -1842,9 +1869,18 @@ impl Schedule {
     /// Preserves **who we have already heard back from** and **when we first
     /// announced** — otherwise a restart would reset the 12-hour clock, and
     /// the alarm would never fire in a service that restarts often.
+    ///
+    /// Only peers that are in the list given to [`Schedule::new`] are waited
+    /// for *(0.11.0)*: a peer the consumer has taken out of its list is not,
+    /// or a decommissioned module would block the rotation for good. A peer
+    /// left out by mistake gets a certificate it has not acked, and the trust
+    /// failure that follows is visible and stops the traffic to it.
     pub fn restore_announced(&mut self, waiting_for: Vec<String>, first_announced: i64) {
         self.state = ChainState::Announced {
-            waiting_for: waiting_for.into_iter().collect(),
+            waiting_for: waiting_for
+                .into_iter()
+                .filter(|p| self.peers.contains(p))
+                .collect(),
             first_announced,
         };
     }

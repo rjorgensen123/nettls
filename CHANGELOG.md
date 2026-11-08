@@ -93,6 +93,14 @@ ignored a failure. It now returns an error naming the file and what a leftover
 would do. A branch for the previous key that did the same was never reached and
 is gone.
 
+### Added — adding and removing a peer while running *(2026-11-08)*
+
+`Announcer::add_peer` and `remove_peer` change who must ack and save the promise
+at once, so a decommissioned peer no longer blocks every rotation. After a
+restart, `Schedule::restore_announced` waits only for peers in the list the
+consumer gives, so a peer taken out of that list is not waited for either.
+Python has both methods.
+
 ## [0.10.0] — krypto 0.8, and fixes for the reported bugs
 
 ### Changed — krypto 0.8 *(2026-11-03)*

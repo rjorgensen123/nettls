@@ -548,13 +548,35 @@ def anchor_material():
     return nettls.TlsMaterial.load(nettls.CertSource.self_signed(A.mode2_params("gw", ["gw"])))
 
 
-def announcer_in(path, anchor):
+def announcer_in(path, anchor, peers=("peer",)):
     """An announcer over `path`, as a service builds one at every start."""
     resolver = nettls.RotatingResolver(anchor)
     own = A.OwnMaterial(None, (anchor.fingerprint_sha256(), anchor.anchor_pkcs8()))
     return A.Announcer.new(
-        "gw", path, A.mode2_params("gw", ["gw"]), resolver, own, A.Schedule(["peer"], 0), "pw"
+        "gw", path, A.mode2_params("gw", ["gw"]), resolver, own, A.Schedule(list(peers), 0), "pw"
     )
+
+
+def test_peers_can_be_added_and_removed_while_running(tmp_path):
+    anchor = anchor_material()
+    a = announcer_in(tmp_path, anchor, ["peer", "gone"])
+    a.prepare(100)
+    a.acked("peer")
+    assert a.roll_if_ready(200) is None, "waits for gone"
+    a.remove_peer("gone")
+    a.add_peer("new")
+    assert a.roll_if_ready(200) is None, "waits for new"
+    a.acked("new")
+    assert a.roll_if_ready(200) == anchor.fingerprint_sha256()
+
+
+def test_a_restart_does_not_wait_for_a_peer_taken_out_of_the_list(tmp_path):
+    anchor = anchor_material()
+    a = announcer_in(tmp_path, anchor, ["peer", "gone"])
+    a.prepare(100)
+    a.acked("peer")
+    b = announcer_in(tmp_path, anchor, ["peer"])
+    assert b.roll_if_ready(200) == anchor.fingerprint_sha256()
 
 
 def test_the_announcer_survives_a_restart(tmp_path):

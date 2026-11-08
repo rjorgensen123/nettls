@@ -904,10 +904,15 @@ fn the_daily_cap_holds_across_a_restart() {
 
 /// An `Announcer` with a password, in a fresh directory.
 fn announcer_with_password(dir: &std::path::Path) -> nettls::announcer::Announcer {
+    announcer_for(dir, &generation(), &["service"])
+}
+
+/// An `Announcer` with a password over `dir`, anchored in `c0`, waiting for
+/// `peers` — as a service builds one at every start.
+fn announcer_for(dir: &std::path::Path, c0: &Gen, peers: &[&str]) -> nettls::announcer::Announcer {
     use nettls::RotatingResolver;
     use nettls::announcer::{Announcer, OwnMaterial, Schedule};
 
-    let c0 = generation();
     Announcer::new(
         "gateway",
         dir,
@@ -917,7 +922,7 @@ fn announcer_with_password(dir: &std::path::Path) -> nettls::announcer::Announce
             previous: None,
             current: (c0.fp_bar(), c0.key()),
         },
-        Schedule::new(vec!["service".to_string()], 0),
+        Schedule::new(peers.iter().map(|p| p.to_string()).collect::<Vec<_>>(), 0),
         Some(krypto::SecretString::from_string("secret".into()).unwrap()),
     )
     .unwrap()
@@ -1002,5 +1007,72 @@ fn a_pending_file_that_cannot_be_removed_is_an_error_that_says_why() {
     // Nothing there is fine.
     std::fs::remove_dir(&promise).unwrap();
     kg.save_pending().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_peer_removed_while_waiting_no_longer_blocks_the_rotation() {
+    // Without `Announcer::remove_peer` a decommissioned module blocked every
+    // rotation for good (0.11.0).
+    nettls::install_crypto_provider();
+    let dir = std::env::temp_dir().join(format!("nettls-fs0076-a-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let kg = announcer_for(&dir, &generation(), &["service", "portal"]);
+
+    kg.prepare(100).unwrap();
+    kg.acked("service").unwrap();
+    assert!(
+        kg.roll_if_ready(200).unwrap().is_none(),
+        "rolled without portal"
+    );
+    kg.remove_peer("portal").unwrap();
+    assert!(
+        kg.roll_if_ready(200).unwrap().is_some(),
+        "portal still blocks"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_peer_added_while_waiting_must_ack_too() {
+    nettls::install_crypto_provider();
+    let dir = std::env::temp_dir().join(format!("nettls-fs0076-b-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let kg = announcer_for(&dir, &generation(), &["service"]);
+
+    kg.prepare(100).unwrap();
+    kg.add_peer("portal").unwrap();
+    kg.acked("service").unwrap();
+    assert!(
+        kg.roll_if_ready(200).unwrap().is_none(),
+        "rolled without portal"
+    );
+    kg.acked("portal").unwrap();
+    assert!(kg.roll_if_ready(200).unwrap().is_some(), "could not roll");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn after_a_restart_a_peer_taken_out_of_the_list_is_not_waited_for() {
+    // The waiting list on disk names `portal`; the consumer's list at the
+    // next start does not. Before 0.11.0 the restart kept waiting for it.
+    nettls::install_crypto_provider();
+    let dir = std::env::temp_dir().join(format!("nettls-fs0076-c-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let c0 = generation();
+    {
+        let kg = announcer_for(&dir, &c0, &["service", "portal"]);
+        kg.prepare(100).unwrap();
+        kg.acked("service").unwrap();
+    } // the process "dies"
+
+    let kg = announcer_for(&dir, &c0, &["service"]);
+    assert!(
+        kg.roll_if_ready(200).unwrap().is_some(),
+        "the restart still waits for a peer that is no longer in the list"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

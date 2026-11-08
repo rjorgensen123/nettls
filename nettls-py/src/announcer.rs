@@ -429,6 +429,14 @@ impl Announcer {
         py.detach(|| self.inner.acked(peer)).map_err(err)
     }
 
+    fn add_peer(&self, py: Python<'_>, name: String) -> PyResult<()> {
+        py.detach(|| self.inner.add_peer(name)).map_err(err)
+    }
+
+    fn remove_peer(&self, py: Python<'_>, name: &str) -> PyResult<()> {
+        py.detach(|| self.inner.remove_peer(name)).map_err(err)
+    }
+
     fn roll_if_ready(&self, py: Python<'_>, now: i64) -> PyResult<Option<String>> {
         py.detach(|| self.inner.roll_if_ready(now)).map_err(err)
     }
