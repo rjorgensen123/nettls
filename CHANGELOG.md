@@ -25,6 +25,16 @@ The `require_*` checks in `canonical` take `field: &str` instead of
 `&'static str`, so a name from Python fits. The second parameter of
 `Receipt::verify` is now called `expected_new_fp`. No call changes.
 
+### Fixed — the expiry colour in the status report *(2026-11-08)*
+
+`Report::collect` warned at 30 days left, so a mode 2 certificate, which lives
+30 days, was amber from its first hour and the report was never green. It now
+warns once half the certificate's lifetime has passed, whatever the lifetime,
+and is red from the last day before expiry and after it. Everything counts from
+`now`; the report no longer reads the clock. `days_until_expiry` rounds down, so
+it is negative from the first second after expiry instead of 0 for the first
+day.
+
 ## [0.10.0] — krypto 0.8, and fixes for the reported bugs
 
 ### Changed — krypto 0.8 *(2026-11-03)*

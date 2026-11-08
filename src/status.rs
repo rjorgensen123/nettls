@@ -24,7 +24,7 @@
 
 use serde::Serialize;
 
-use crate::announcer::{Status, mode1_should_warn};
+use crate::announcer::{DAY_S, Status};
 use crate::generations::Generations;
 use crate::material::TlsMaterial;
 
@@ -37,7 +37,8 @@ pub enum Level {
     Ok,
     /// Something needs attention soon (expiry approaching, rotation pending).
     Warn,
-    /// Something needs an operator NOW (broken trust, alarm, expired cert).
+    /// Something needs an operator NOW (broken trust, alarm, a certificate in
+    /// its last day or expired).
     Alert,
 }
 
@@ -108,10 +109,12 @@ pub struct IdentityReport {
     pub origin: String,
     /// Unix seconds when the certificate expires (`None` = unparsable).
     pub not_after: Option<i64>,
-    /// Whole days until expiry (negative = expired).
+    /// Whole days until expiry, counted from `now` and rounded down: negative
+    /// from the first second after expiry *(0.11.0)*.
     pub days_until_expiry: i64,
-    /// The crate's own expiry warning (same threshold as the rotation rule —
-    /// owned HERE, never re-derived by a consumer).
+    /// The crate's own expiry warning: half the certificate's lifetime has
+    /// passed, or less than a day is left *(0.11.0)*. Owned HERE, never
+    /// re-derived by a consumer.
     pub expiry_warning: bool,
 }
 
@@ -158,6 +161,11 @@ impl Report {
     /// Collect the report. `now` is Unix seconds (the caller owns the clock,
     /// as everywhere else in the crate); `announcer_status` is `None` for a
     /// service that runs plain pinning without the §6 announcer.
+    ///
+    /// The expiry rule is the same for every lifetime and counts from `now`
+    /// *(0.11.0)*: amber once half the certificate's lifetime has passed, red
+    /// from the last day before expiry and after it. In mode 2, which rotates
+    /// after about a week, amber therefore means the rotation has failed.
     pub fn collect(
         now: i64,
         material: &TlsMaterial,
@@ -165,8 +173,17 @@ impl Report {
         peers: Vec<PeerReport>,
     ) -> Report {
         let not_after = material.not_after();
-        let days = material.days_until_expiry();
-        let expiry_warning = not_after.map(|e| mode1_should_warn(now, e)).unwrap_or(true);
+        // Both dates are always there for loaded material. Were one missing,
+        // the report would warn rather than reassure.
+        let left = not_after.map(|e| e - now);
+        let days = left.map(|s| s.div_euclid(DAY_S)).unwrap_or(0);
+        let expiry_warning = material
+            .not_before()
+            .zip(not_after)
+            .map(|(nb, na)| na - now <= ((na - nb) / 2).max(DAY_S))
+            .unwrap_or(true);
+        let last_day = left.is_some_and(|s| s <= DAY_S);
+        let expired = left.is_some_and(|s| s <= 0);
         let identity = IdentityReport {
             fingerprint_sha256: material.fingerprint_sha256(),
             origin: format!("{:?}", material.origin()),
@@ -190,7 +207,6 @@ impl Report {
             .filter(|p| p.state == PeerState::RotationPending)
             .map(|p| p.name.as_str())
             .collect();
-        let expired = days < 0;
         let alarm = rotation.as_ref().map(|r| r.alarm).unwrap_or(false);
         let stopping = rotation
             .as_ref()
@@ -213,6 +229,11 @@ impl Report {
             (
                 Level::Alert,
                 "certificate expired — communication stops".to_string(),
+            )
+        } else if last_day {
+            (
+                Level::Alert,
+                "certificate expires within a day — communication stops then".to_string(),
             )
         } else if alarm {
             (

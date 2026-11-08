@@ -433,12 +433,14 @@ impl TlsMaterial {
         Some(self.not_before)
     }
 
-    /// Days until expiry, negative if already expired.
+    /// Days until expiry, rounded down: negative from the first second after
+    /// expiry *(0.11.0; it rounded towards zero, so the first day after expiry
+    /// read 0)*.
     ///
     /// The consumer should `warn!` below 30 days and `error!` below 7 (L2-014
     /// ch. 4.5) — the crate does not log by itself.
     pub fn days_until_expiry(&self) -> i64 {
-        (self.not_after - now_unix()) / 86_400
+        (self.not_after - now_unix()).div_euclid(86_400)
     }
 
     /// Is the certificate within its validity window right now?

@@ -669,6 +669,12 @@ Everything serializes with serde — drop it straight into your status JSON. No 
 you pass `now` (Unix seconds). The `expiry_warning` flag and the `level` are the crate's own
 rules — never re-derive them.
 
+**The expiry rule** *(0.11.0)* is the same for every lifetime and counts from `now`: `Warn`
+once half the certificate's lifetime has passed, `Alert` from the last day before expiry and
+after it. In mode 2, which rotates after about a week, `Warn` therefore means the rotation has
+failed. `days_until_expiry` is rounded down, so it is negative from the first second after
+expiry.
+
 ---
 
 ## `signature` — the §6 rules over krypto's primitives

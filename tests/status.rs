@@ -51,14 +51,64 @@ fn broken_peer_is_alert_and_named_in_the_headline() {
     assert!(r.headline.contains("operator action required"));
 }
 
+const DAY: i64 = 86_400;
+
 #[test]
-fn expiry_warning_is_warn_with_days_in_the_headline() {
-    // The crate's own threshold (mode1_should_warn) fires well inside 5 days.
-    let m = material(3);
+fn a_fresh_thirty_day_certificate_is_ok() {
+    // Mode 2 lifetime. A fixed 30-day threshold made this amber from the
+    // first hour, so the report could never be green in mode 2.
+    let m = material(30);
     let r = Report::collect(now(), &m, None, vec![]);
+    assert_eq!(r.level, Level::Ok, "{}", r.headline);
+    assert!(!r.identity.expiry_warning);
+}
+
+#[test]
+fn expiry_warning_is_warn_once_half_the_lifetime_has_passed() {
+    let m = material(30);
+    let (nb, na) = (m.not_before().unwrap(), m.not_after().unwrap());
+    let half = nb + (na - nb) / 2;
+
+    let before = Report::collect(half - 60, &m, None, vec![]);
+    assert_eq!(before.level, Level::Ok, "{}", before.headline);
+
+    let r = Report::collect(half, &m, None, vec![]);
     assert_eq!(r.level, Level::Warn);
-    assert!(r.headline.contains("expires in"), "{}", r.headline);
+    assert!(r.headline.contains("expires in 15 days"), "{}", r.headline);
     assert!(r.identity.expiry_warning);
+}
+
+#[test]
+fn the_last_day_and_after_expiry_are_alert() {
+    let m = material(30);
+    let na = m.not_after().unwrap();
+
+    let r = Report::collect(na - DAY - 1, &m, None, vec![]);
+    assert_eq!(r.level, Level::Warn, "{}", r.headline);
+
+    let r = Report::collect(na - DAY, &m, None, vec![]);
+    assert_eq!(r.level, Level::Alert);
+    assert!(r.headline.contains("within a day"), "{}", r.headline);
+
+    // An hour after expiry: red and a negative day count, not "0 days".
+    let r = Report::collect(na + 3600, &m, None, vec![]);
+    assert_eq!(r.level, Level::Alert);
+    assert!(r.headline.contains("expired"), "{}", r.headline);
+    assert_eq!(r.identity.days_until_expiry, -1);
+}
+
+#[test]
+fn days_until_expiry_is_negative_from_the_first_second_after_expiry() {
+    // Expired an hour ago. `SelfSignedParams` cannot make that, so rcgen
+    // builds it and the PEM is loaded.
+    let mut p = rcgen::CertificateParams::new(vec!["expired-test".to_string()]).unwrap();
+    let t = time::OffsetDateTime::now_utc();
+    p.not_before = t - time::Duration::days(2);
+    p.not_after = t - time::Duration::hours(1);
+    let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+    let cert = p.self_signed(&key).unwrap();
+    let m = TlsMaterial::load(&CertSource::pem(cert.pem(), key.serialize_pem())).unwrap();
+    assert_eq!(m.days_until_expiry(), -1);
 }
 
 #[test]

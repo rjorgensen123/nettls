@@ -617,6 +617,7 @@ def test_status_report_is_the_rust_json():
     assert data["version"] == nettls.VERSION
     assert data["identity"]["fingerprint_sha256"] == m.fingerprint_sha256()
     assert data["peers"][0]["state"] == "ok"
+    assert data["level"] == "ok", data["headline"]  # a fresh mode 2 certificate is green
     assert report.summary().level == report.level
 
 
