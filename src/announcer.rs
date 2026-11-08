@@ -77,15 +77,14 @@ fn tilfeldig_under(tak: u64) -> Result<u64, TlsError> {
     }
     let grense = u64::MAX - (u64::MAX % tak);
     for _ in 0..64 {
-        let b =
-            krypto::random_bytes(8).map_err(|_| TlsError::Generate("CSPRNG unavailable".into()))?;
+        let b = krypto::random_bytes(8).map_err(|e| TlsError::Random(e.to_string()))?;
         let x = u64::from_le_bytes(b.try_into().expect("random_bytes(8) is 8 bytes"));
         if x < grense {
             return Ok(x % tak);
         }
     }
-    Err(TlsError::Generate(
-        "CSPRNG produced 64 rejected values in a row — something is wrong".into(),
+    Err(TlsError::Random(
+        "64 values in a row were rejected — something is wrong with the generator".into(),
     ))
 }
 
@@ -418,14 +417,14 @@ impl Announcer {
         if let Some(at) = read_back.rolled_at {
             self.schedule
                 .write()
-                .map_err(|_| TlsError::Rustls("the rotation lock is poisoned".into()))?
+                .map_err(|_| TlsError::poisoned("the rotation lock"))?
                 .restore_last_rolled(at);
         }
 
         *self
             .material
             .write()
-            .map_err(|_| TlsError::Rustls("the material lock is poisoned".into()))? = OwnMaterial {
+            .map_err(|_| TlsError::poisoned("the material lock"))? = OwnMaterial {
             // `hold` zeroizes the deserialized Vec as it moves it into the lock.
             previous: Some((
                 std::mem::take(&mut read_back.fingerprint),
@@ -1248,11 +1247,11 @@ impl Announcer {
         let m = self
             .material
             .read()
-            .map_err(|_| TlsError::Rustls("the material lock is poisoned".into()))?;
+            .map_err(|_| TlsError::poisoned("the material lock"))?;
         let p = self
             .pending
             .read()
-            .map_err(|_| TlsError::Rustls("the pending lock is poisoned".into()))?;
+            .map_err(|_| TlsError::poisoned("the pending lock"))?;
         Ok(OwnTrio {
             previous_fingerprint: m.previous.as_ref().map(|(fp, _)| fp.clone()),
             current_fingerprint: m.current.0.clone(),
@@ -1301,7 +1300,7 @@ impl Announcer {
         let m = self
             .material
             .read()
-            .map_err(|_| TlsError::Rustls("the material lock is poisoned".into()))?;
+            .map_err(|_| TlsError::poisoned("the material lock"))?;
         let k = Announcement::new(
             &self.name,
             m.previous.as_ref().map(|(fp, pk)| (fp.as_str(), pk)),
@@ -1314,15 +1313,14 @@ impl Announcer {
         *self
             .pending
             .write()
-            .map_err(|_| TlsError::Rustls("the pending lock is poisoned".into()))? =
-            Some(Pending {
-                announcement: k.clone(),
-                new_cert_pem: pem,
-                new_pkcs8,
-            });
+            .map_err(|_| TlsError::poisoned("the pending lock"))? = Some(Pending {
+            announcement: k.clone(),
+            new_cert_pem: pem,
+            new_pkcs8,
+        });
         self.schedule
             .write()
-            .map_err(|_| TlsError::Rustls("the rotation lock is poisoned".into()))?
+            .map_err(|_| TlsError::poisoned("the rotation lock"))?
             .announced(now);
         self.save_pending()?;
         Ok(k)
@@ -1333,7 +1331,7 @@ impl Announcer {
     pub fn acked(&self, peer: &str) -> Result<(), TlsError> {
         self.schedule
             .write()
-            .map_err(|_| TlsError::Rustls("the rotation lock is poisoned".into()))?
+            .map_err(|_| TlsError::poisoned("the rotation lock"))?
             .acked(peer);
         self.save_pending()
     }
@@ -1376,7 +1374,7 @@ impl Announcer {
             let r = self
                 .schedule
                 .read()
-                .map_err(|_| TlsError::Rustls("the rotation lock is poisoned".into()))?;
+                .map_err(|_| TlsError::poisoned("the rotation lock"))?;
             if !r.can_roll(now) {
                 return Ok(None);
             }
@@ -1387,7 +1385,7 @@ impl Announcer {
             let g = self
                 .pending
                 .read()
-                .map_err(|_| TlsError::Rustls("the pending lock is poisoned".into()))?;
+                .map_err(|_| TlsError::poisoned("the pending lock"))?;
             let Some(p) = g.as_ref() else {
                 return Ok(None);
             };
@@ -1406,14 +1404,14 @@ impl Announcer {
         let mut next = self
             .schedule
             .read()
-            .map_err(|_| TlsError::Rustls("the rotation lock is poisoned".into()))?
+            .map_err(|_| TlsError::poisoned("the rotation lock"))?
             .clone();
         next.rolled(now)?;
         let previous = {
             let m = self
                 .material
                 .read()
-                .map_err(|_| TlsError::Rustls("the material lock is poisoned".into()))?;
+                .map_err(|_| TlsError::poisoned("the material lock"))?;
             (m.current.0.clone(), crate::secret::copy(&m.current.1)?)
         };
         self.save_previous(Some(&previous), &new_fp, Some(now))?;
@@ -1425,18 +1423,18 @@ impl Announcer {
         *self
             .material
             .write()
-            .map_err(|_| TlsError::Rustls("the material lock is poisoned".into()))? = OwnMaterial {
+            .map_err(|_| TlsError::poisoned("the material lock"))? = OwnMaterial {
             previous: Some(previous),
             current: (new_fp.clone(), new_pkcs8),
         };
         *self
             .pending
             .write()
-            .map_err(|_| TlsError::Rustls("the pending lock is poisoned".into()))? = None;
+            .map_err(|_| TlsError::poisoned("the pending lock"))? = None;
         *self
             .schedule
             .write()
-            .map_err(|_| TlsError::Rustls("the rotation lock is poisoned".into()))? = next;
+            .map_err(|_| TlsError::poisoned("the rotation lock"))? = next;
         self.clean_up_switch(&new_fp)?;
         Ok(Some(old))
     }
@@ -1454,7 +1452,7 @@ impl Announcer {
         Ok(self
             .schedule
             .read()
-            .map_err(|_| TlsError::Rustls("the rotation lock is poisoned".into()))?
+            .map_err(|_| TlsError::poisoned("the rotation lock"))?
             .status(now, expires))
     }
 
@@ -1742,7 +1740,7 @@ impl Announcer {
         let v = self
             .pending
             .read()
-            .map_err(|_| TlsError::Rustls("the pending lock is poisoned".into()))?;
+            .map_err(|_| TlsError::poisoned("the pending lock"))?;
         let Some(v) = v.as_ref() else {
             // Nothing to store: remove any old file so a restart does not
             // think a promise is lying there.
@@ -1752,7 +1750,7 @@ impl Announcer {
         let r = self
             .schedule
             .read()
-            .map_err(|_| TlsError::Rustls("the rotation lock is poisoned".into()))?;
+            .map_err(|_| TlsError::poisoned("the rotation lock"))?;
         let on_disk = PendingOnDisk {
             announcement: v.announcement.to_json(),
             new_cert_pem: v.new_cert_pem.clone(),
@@ -1789,7 +1787,7 @@ impl Announcer {
         let current = self
             .material
             .read()
-            .map_err(|_| TlsError::Rustls("the material lock is poisoned".into()))?
+            .map_err(|_| TlsError::poisoned("the material lock"))?
             .current
             .0
             .clone();
@@ -1811,17 +1809,16 @@ impl Announcer {
         *self
             .pending
             .write()
-            .map_err(|_| TlsError::Rustls("the pending lock is poisoned".into()))? =
-            Some(Pending {
-                announcement: k,
-                new_cert_pem: on_disk.new_cert_pem,
-                new_pkcs8,
-            });
+            .map_err(|_| TlsError::poisoned("the pending lock"))? = Some(Pending {
+            announcement: k,
+            new_cert_pem: on_disk.new_cert_pem,
+            new_pkcs8,
+        });
 
         let mut r = self
             .schedule
             .write()
-            .map_err(|_| TlsError::Rustls("the rotation lock is poisoned".into()))?;
+            .map_err(|_| TlsError::poisoned("the rotation lock"))?;
         r.restore_announced(on_disk.waiting_for, on_disk.first_announced);
         Ok(true)
     }

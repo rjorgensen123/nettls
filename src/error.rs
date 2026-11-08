@@ -78,6 +78,19 @@ pub enum TlsError {
     /// connection must fail — never silently weaken. Fallback happens only to
     /// an algorithm the peer has SIGNED that it supports.
     Negotiation(String),
+    /// The sealed envelope ([`crate::envelope`]) or the password lock
+    /// ([`crate::lockbox`]) failed: an input that is too short or of the wrong
+    /// format, or a key, derivation or sealing step that did not succeed
+    /// *(0.11.0)*. A wrong key or password is [`TlsError::ProofInvalid`].
+    Envelope(String),
+    /// A secret could not be held in locked memory — typically `mlock` against
+    /// a low `RLIMIT_MEMLOCK` *(0.11.0)*.
+    LockedMemory(String),
+    /// The operating system could not supply random numbers *(0.11.0)*.
+    Random(String),
+    /// A thread panicked while holding one of the crate's locks, so the state
+    /// it guards may be half-updated *(0.11.0)*. A bug, not an input error.
+    LockPoisoned(String),
 }
 
 impl fmt::Display for TlsError {
@@ -117,6 +130,21 @@ impl fmt::Display for TlsError {
                 f,
                 "AEAD negotiation failed (the connection must fail — never silently weaken): {s}"
             ),
+            TlsError::Envelope(s) => write!(f, "sealing or opening failed: {s}"),
+            TlsError::LockedMemory(s) => write!(
+                f,
+                "could not hold {s} in locked memory (mlock — check RLIMIT_MEMLOCK)"
+            ),
+            TlsError::Random(s) => {
+                write!(
+                    f,
+                    "the operating system could not supply random numbers: {s}"
+                )
+            }
+            TlsError::LockPoisoned(s) => write!(
+                f,
+                "{s} is poisoned: a thread panicked while holding it, so the state it guards may be half-updated"
+            ),
         }
     }
 }
@@ -129,5 +157,46 @@ impl TlsError {
             path: Some(path.into()),
             detail: e.to_string(),
         }
+    }
+
+    /// A secret (`what`) that could not be held in locked memory, with
+    /// krypto's reason *(0.11.0)*.
+    pub(crate) fn locked_memory(what: &str, e: impl fmt::Display) -> Self {
+        TlsError::LockedMemory(format!("{what} ({e})"))
+    }
+
+    /// The named lock is poisoned *(0.11.0)*.
+    pub(crate) fn poisoned(lock: &str) -> Self {
+        TlsError::LockPoisoned(lock.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each new variant says what actually failed (0.11.0).
+    #[test]
+    fn the_new_variants_say_what_failed() {
+        let e = TlsError::locked_memory("a private key", "mlock refused");
+        assert_eq!(
+            e.to_string(),
+            "could not hold a private key (mlock refused) in locked memory (mlock — check RLIMIT_MEMLOCK)"
+        );
+        let e = TlsError::Random("getrandom failed".into());
+        assert!(
+            e.to_string()
+                .contains("could not supply random numbers: getrandom failed")
+        );
+        let e = TlsError::poisoned("the rotation lock");
+        assert!(
+            e.to_string()
+                .starts_with("the rotation lock is poisoned: a thread panicked")
+        );
+        let e = TlsError::Envelope("the envelope is too short".into());
+        assert_eq!(
+            e.to_string(),
+            "sealing or opening failed: the envelope is too short"
+        );
     }
 }

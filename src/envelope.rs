@@ -18,14 +18,20 @@
 //! cannot read.** Neither is anything alone, and it takes a human to bring
 //! them together.
 //!
-//! ## The transport does not need to be encrypted
+//! ## What the envelope protects, and what it does not
 //!
-//! The payload is already encrypted to the recipient. An eavesdropper gets a
-//! blob he cannot open, and a MITM cannot swap it without the seal breaking.
-//! That is **better** than sending it over TLS, not merely as good: the
-//! security does not depend on the channel. And that is what removes the
-//! chicken-and-egg at startup — delivery can happen to a module that cannot
-//! yet terminate TLS.
+//! The payload is encrypted to the recipient. An eavesdropper gets a blob he
+//! cannot open, and an envelope altered on the way does not open. That is what
+//! removes the chicken-and-egg at startup — delivery can happen to a module
+//! that cannot yet terminate TLS.
+//!
+//! The envelope has **no sender**. It is sealed with a key made for that one
+//! envelope, so anyone who knows the recipient's public key can seal a new
+//! one, and an old envelope can be delivered again: it does not say who sealed
+//! it or when. Where that matters, it must come from the channel or from the
+//! content. In the delivery above it is the content: a secret that does not
+//! fit the lock it is meant to open is refused there *(0.11.0: this text used
+//! to say a man in the middle could not swap the envelope)*.
 //!
 //! ## The construction
 //!
@@ -91,7 +97,7 @@ impl RecipientKey {
     /// Draws a new pair. Returns `(key, public part)`.
     pub fn generate() -> Result<(Self, Vec<u8>), TlsError> {
         let (privat, public) = exchange::x25519_keypair()
-            .map_err(|e| TlsError::Generate(format!("key generation failed: {e}")))?;
+            .map_err(|e| TlsError::Envelope(format!("key generation failed: {e}")))?;
         Ok((Self { privat }, public.to_vec()))
     }
 
@@ -100,7 +106,7 @@ impl RecipientKey {
     pub fn public(&self) -> Result<Vec<u8>, TlsError> {
         exchange::x25519_public(&self.privat)
             .map(|p| p.to_vec())
-            .map_err(|e| TlsError::Generate(format!("invalid X25519 private key: {e}")))
+            .map_err(|e| TlsError::Envelope(format!("invalid X25519 private key: {e}")))
     }
 }
 
@@ -131,7 +137,7 @@ pub fn seal_with(recipient_public: &[u8], plaintext: &[u8], alg: Alg) -> Result<
     // "Ephemeral" is a LIFETIME property here — the secret half is dropped at
     // the end of this function, having existed only inside a SecretBuf.
     let (ephemeral, ephemeral_pub) = exchange::x25519_keypair()
-        .map_err(|e| TlsError::Generate(format!("key generation failed: {e}")))?;
+        .map_err(|e| TlsError::Envelope(format!("key generation failed: {e}")))?;
 
     // Rejects a non-contributory result (low-order recipient point) with an
     // error — an envelope whose key an attacker could predict is never made.
@@ -155,10 +161,10 @@ pub fn seal_with(recipient_public: &[u8], plaintext: &[u8], alg: Alg) -> Result<
 /// Opens an envelope. **Only** the recipient can.
 pub fn open(key: &RecipientKey, envelope: &[u8]) -> Result<SecretBuf, TlsError> {
     if envelope.len() < MAGIC.len() + X25519_LEN {
-        return Err(TlsError::Pem("the envelope is too short".into()));
+        return Err(TlsError::Envelope("the envelope is too short".into()));
     }
     if &envelope[..MAGIC.len()] != MAGIC {
-        return Err(TlsError::Pem(
+        return Err(TlsError::Envelope(
             "unknown format — this is not a nettls envelope. (Wrong FORMAT, not a wrong key.)"
                 .into(),
         ));
@@ -194,9 +200,9 @@ fn seal_inner(
 ) -> Result<Vec<u8>, TlsError> {
     let dk = derive(shared, ephemeral_pub, recipient_pub)?;
     let pt = SecretBuf::from_vec(plaintext.to_vec())
-        .map_err(|e| TlsError::Generate(format!("could not hold the plaintext: {e}")))?;
+        .map_err(|e| TlsError::locked_memory("the plaintext", e))?;
     krypto::seal(&dk, &KEY_ID, &pt, alg)
-        .map_err(|e| TlsError::Generate(format!("sealing failed: {e}")))
+        .map_err(|e| TlsError::Envelope(format!("sealing failed: {e}")))
 }
 
 /// Derives the AEAD key from the shared secret, **bound to both public
@@ -224,11 +230,11 @@ fn derive(
     });
 
     let mk = krypto::MasterKey::from_bytes(
-        SecretBuf::from_vec(ikm).map_err(|e| TlsError::Generate(e.to_string()))?,
+        SecretBuf::from_vec(ikm).map_err(|e| TlsError::locked_memory("the key material", e))?,
     )
-    .map_err(|e| TlsError::Generate(format!("could not build the key root: {e}")))?;
+    .map_err(|e| TlsError::Envelope(format!("could not build the key root: {e}")))?;
     mk.derive(INFO, ephemeral_pub)
-        .map_err(|e| TlsError::Generate(format!("key derivation failed: {e}")))
+        .map_err(|e| TlsError::Envelope(format!("key derivation failed: {e}")))
 }
 
 #[cfg(test)]
@@ -307,7 +313,16 @@ mod tests {
     fn wrong_format_says_it_is_the_format() {
         let (n, _) = RecipientKey::generate().unwrap();
         let err = open(&n, b"this is quite definitely not an envelope at all").unwrap_err();
+        assert!(matches!(err, TlsError::Envelope(_)), "{err:?}");
         assert!(format!("{err}").contains("unknown format"), "{err}");
+    }
+
+    #[test]
+    fn too_short_envelope_is_an_envelope_error() {
+        let (n, _) = RecipientKey::generate().unwrap();
+        let err = open(&n, b"short").unwrap_err();
+        assert!(matches!(err, TlsError::Envelope(_)), "{err:?}");
+        assert!(format!("{err}").contains("too short"), "{err}");
     }
 
     #[test]

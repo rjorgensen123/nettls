@@ -35,6 +35,17 @@ and is red from the last day before expiry and after it. Everything counts from
 it is negative from the first second after expiry instead of 0 for the first
 day.
 
+### Fixed — errors name what failed *(2026-11-08)*
+
+New `TlsError` variants `Envelope`, `LockedMemory`, `Random` and `LockPoisoned`
+replace `Pem`, `Generate`, `Sign`, `Rustls` and `Chain` where those named the
+wrong cause. Python has a matching exception for each.
+
+### Fixed — the envelope text *(2026-11-08)*
+
+It said a man in the middle could not swap an envelope. The envelope has no
+sender, and the text now says so.
+
 ## [0.10.0] — krypto 0.8, and fixes for the reported bugs
 
 ### Changed — krypto 0.8 *(2026-11-03)*

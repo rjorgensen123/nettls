@@ -469,7 +469,7 @@ def test_altered_file_rejected():
 
 
 def test_wrong_format_says_it_is_the_format():
-    with pytest.raises(nettls.TlsError, match="unknown file format"):
+    with pytest.raises(nettls.EnvelopeError, match="unknown file format"):
         L.unlock("x", b"this is quite definitely not a locked file at all")
 
 
@@ -498,9 +498,9 @@ def test_wrong_recipient_does_not_get_in():
 
 def test_envelope_wrong_format_and_length():
     key, _ = E.RecipientKey.generate()
-    with pytest.raises(nettls.TlsError, match="not a nettls envelope"):
+    with pytest.raises(nettls.EnvelopeError, match="not a nettls envelope"):
         E.open(key, b"NETTLS\x01\x00 this is a locked file, not an envelope")
-    with pytest.raises(nettls.TlsError, match="too short"):
+    with pytest.raises(nettls.EnvelopeError, match="too short"):
         E.open(key, b"short")
     with pytest.raises(nettls.TlsError, match="32 bytes"):
         E.seal(b"too short", b"x")

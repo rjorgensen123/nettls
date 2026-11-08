@@ -65,8 +65,7 @@ pub fn lock(password: &SecretString, plaintext: &[u8]) -> Result<Vec<u8>, TlsErr
 pub fn lock_with(password: &SecretString, plaintext: &[u8], alg: Alg) -> Result<Vec<u8>, TlsError> {
     // `random_bytes` and not `SecretBuf::random`: the salt is stored in
     // cleartext right in front of the blob — it is public by design.
-    let salt = krypto::random_bytes(SALT_LEN)
-        .map_err(|_| TlsError::Generate("CSPRNG unavailable".into()))?;
+    let salt = krypto::random_bytes(SALT_LEN).map_err(|e| TlsError::Random(e.to_string()))?;
 
     let blob = seal(password, &salt, plaintext, alg)?;
 
@@ -80,12 +79,12 @@ pub fn lock_with(password: &SecretString, plaintext: &[u8], alg: Alg) -> Result<
 /// Unlocks. **A wrong password gives an authentication failure**, not an empty result.
 pub fn unlock(password: &SecretString, file: &[u8]) -> Result<SecretBuf, TlsError> {
     if file.len() < MAGIC.len() + SALT_LEN {
-        return Err(TlsError::Pem(
+        return Err(TlsError::Envelope(
             "the locked file is too short to contain header and salt".into(),
         ));
     }
     if &file[..MAGIC.len()] != MAGIC {
-        return Err(TlsError::Pem(
+        return Err(TlsError::Envelope(
             "unknown file format — this is not a locked nettls state file. \
              (A wrong FORMAT, not a wrong password: look for the right file, not the right password.)"
                 .into(),
@@ -97,7 +96,7 @@ pub fn unlock(password: &SecretString, file: &[u8]) -> Result<SecretBuf, TlsErro
     let key = derive(password, salt)?;
     let dk = krypto::MasterKey::from_bytes(key)
         .and_then(|mk| mk.derive(b"nettls/local-state/v1", salt))
-        .map_err(|e| TlsError::Generate(format!("key derivation failed: {e}")))?;
+        .map_err(|e| TlsError::Envelope(format!("key derivation failed: {e}")))?;
 
     krypto::open(&dk, blob).map_err(|_| {
         TlsError::ProofInvalid(
@@ -117,16 +116,16 @@ fn seal(
     let key = derive(password, salt)?;
     let dk = krypto::MasterKey::from_bytes(key)
         .and_then(|mk| mk.derive(b"nettls/local-state/v1", salt))
-        .map_err(|e| TlsError::Generate(format!("key derivation failed: {e}")))?;
+        .map_err(|e| TlsError::Envelope(format!("key derivation failed: {e}")))?;
     let pt = SecretBuf::from_vec(plaintext.to_vec())
-        .map_err(|e| TlsError::Generate(format!("could not hold the plaintext: {e}")))?;
+        .map_err(|e| TlsError::locked_memory("the plaintext", e))?;
     krypto::seal(&dk, &KEY_ID, &pt, alg)
-        .map_err(|e| TlsError::Generate(format!("sealing failed: {e}")))
+        .map_err(|e| TlsError::Envelope(format!("sealing failed: {e}")))
 }
 
 fn derive(password: &SecretString, salt: &[u8]) -> Result<SecretBuf, TlsError> {
     krypto::password::derive_key(password, salt, krypto::password::Preset::Interactive)
-        .map_err(|e| TlsError::Generate(format!("argon2 derivation failed: {e}")))
+        .map_err(|e| TlsError::Envelope(format!("argon2 derivation failed: {e}")))
 }
 
 #[cfg(test)]
@@ -190,12 +189,14 @@ mod tests {
             b"this is quite definitely not a locked state file",
         )
         .unwrap_err();
+        assert!(matches!(err, TlsError::Envelope(_)), "{err:?}");
         assert!(format!("{err}").contains("unknown file format"), "{err}");
     }
 
     #[test]
     fn too_short_file_is_rejected() {
-        assert!(unlock(&pw("x"), b"kort").is_err());
+        let err = unlock(&pw("x"), b"kort").unwrap_err();
+        assert!(matches!(err, TlsError::Envelope(_)), "{err:?}");
     }
 
     #[test]

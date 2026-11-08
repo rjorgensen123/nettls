@@ -474,7 +474,7 @@ impl Trust {
         let mut g = self
             .state
             .write()
-            .map_err(|_| TlsError::Chain("the trust lock is poisoned".into()))?;
+            .map_err(|_| TlsError::poisoned("the trust lock"))?;
         g.receive(k)
     }
 
@@ -483,7 +483,7 @@ impl Trust {
         self.state
             .read()
             .map(|g| g.clone())
-            .map_err(|_| TlsError::Chain("the trust lock is poisoned".into()))
+            .map_err(|_| TlsError::poisoned("the trust lock"))
     }
 
     /// `ClientConfig` that accepts `current` + `next`.
@@ -721,6 +721,32 @@ mod restore_tests {
         assert!(
             Generations::restore(Some(c0.g.clone()), c1.g.clone(), None).is_ok(),
             "the legal shape must still pass"
+        );
+    }
+}
+
+#[cfg(test)]
+mod poisoned_tests {
+    use super::tester::new_gen;
+    use super::*;
+
+    /// A thread that panics while holding the trust lock leaves it poisoned.
+    /// That is a bug, and it is reported as one — not as a broken chain,
+    /// which would send the operator to re-approve the peer (0.11.0).
+    #[test]
+    fn a_poisoned_trust_lock_is_reported_as_lock_poisoned() {
+        let trust = Trust::from_approval(new_gen("c0").g.clone());
+        let state = Arc::clone(&trust.state);
+        let _ = std::thread::spawn(move || {
+            let _held = state.write().unwrap();
+            panic!("poison the lock");
+        })
+        .join();
+        let err = trust.state().unwrap_err();
+        assert!(matches!(err, TlsError::LockPoisoned(_)), "{err:?}");
+        assert!(
+            format!("{err}").contains("the trust lock is poisoned"),
+            "{err}"
         );
     }
 }

@@ -92,7 +92,7 @@ impl RotatingResolver {
         let mut cur = self
             .current
             .write()
-            .map_err(|_| TlsError::Rustls("the RotatingResolver lock is poisoned".to_string()))?;
+            .map_err(|_| TlsError::poisoned("the RotatingResolver lock"))?;
         let old = std::mem::replace(&mut *cur, fresh);
         Ok(old.fingerprint)
     }

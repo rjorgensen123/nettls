@@ -724,6 +724,10 @@ Whoever seals holds no key and cannot open. `seal_with(_, _, Alg::Aes256Gcm)` is
 bridge for a recipient without AEGIS; `open` reads the algorithm from the header.
 The key exchange is `krypto::exchange` (0.8.0) — a low-order recipient point is **rejected at
 sealing** (non-contributory result), it no longer yields an envelope.
+The envelope has **no sender** *(0.11.0)*: anyone with the recipient's public key can seal one,
+and an old one can be delivered again. Who sealed it, and when, must come from the channel or
+the content. Envelope and lock failures are `TlsError::Envelope`; a wrong key or password is
+`ProofInvalid`.
 
 ## `lockbox` — lock with a password
 
@@ -757,6 +761,10 @@ pub enum TlsError {
     Chain(String),           // the continuity chain is broken — the system's best-explained error
     Sign(String),
     Negotiation(String),     // no authenticated common AEAD — hard failure (0.8.2)
+    Envelope(String),        // the envelope or the password lock failed (0.11.0)
+    LockedMemory(String),    // a secret could not be held in locked memory (0.11.0)
+    Random(String),          // the operating system gave no random numbers (0.11.0)
+    LockPoisoned(String),    // a thread panicked holding a lock — a bug (0.11.0)
 }
 ```
 
@@ -776,6 +784,10 @@ pub enum TlsError {
 | `Chain` | the chain does not connect |
 | `Sign` | signing failed |
 | `Negotiation` | no *authenticated* common AEAD — the connection must fail, never silently weaken *(0.8.2)* |
+| `Envelope` | the sealed envelope or the password lock failed: too short, wrong format, or a key, derivation or sealing step *(0.11.0)* |
+| `LockedMemory` | a secret could not be held in locked memory (`mlock`, `RLIMIT_MEMLOCK`) *(0.11.0)* |
+| `Random` | the operating system could not supply random numbers *(0.11.0)* |
+| `LockPoisoned` | a thread panicked while holding one of the crate's locks — a bug, not an input error *(0.11.0)* |
 
 The `Proof` / `ProofInvalid` split is worth noting: the first is a shape error, the second is a
 signature that does not hold. Only the second is a security finding. `#[non_exhaustive]` — new

@@ -39,11 +39,7 @@ use crate::error::TlsError;
 
 /// Moves `v` into locked memory. The source is zeroized by `from_vec`.
 pub(crate) fn hold(v: Vec<u8>) -> Result<SecretBuf, TlsError> {
-    SecretBuf::from_vec(v).map_err(|e| {
-        TlsError::Sign(format!(
-            "could not hold a private key in locked memory (mlock — check RLIMIT_MEMLOCK): {e}"
-        ))
-    })
+    SecretBuf::from_vec(v).map_err(|e| TlsError::locked_memory("a private key", e))
 }
 
 /// A second locked copy. `SecretBuf` is deliberately not `Clone`; this is the
