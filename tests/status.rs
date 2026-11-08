@@ -42,6 +42,30 @@ fn quiet_state_is_ok_and_summary_is_safe_for_users() {
 }
 
 #[test]
+fn a_peer_that_does_not_answer_is_alert_and_named() {
+    let m = material(365);
+    let peers = vec![PeerReport::unreachable("gateway", "aa".repeat(32))];
+    let r = Report::collect(now(), &m, None, peers);
+    assert_eq!(r.level, Level::Alert);
+    assert_eq!(r.headline, "no answer from gateway");
+    assert_eq!(r.peers[0].state, PeerState::Unreachable);
+    let json = serde_json::to_value(&r.peers[0]).unwrap();
+    assert_eq!(json["state"], "unreachable");
+
+    // A broken trust chain says more, so it is the headline when both hold.
+    let peers = vec![
+        PeerReport::unreachable("gateway", "aa".repeat(32)),
+        PeerReport::broken("service", "bb".repeat(32)),
+    ];
+    let r = Report::collect(now(), &m, None, peers);
+    assert!(
+        r.headline.contains("trust chain broken to service"),
+        "{}",
+        r.headline
+    );
+}
+
+#[test]
 fn broken_peer_is_alert_and_named_in_the_headline() {
     let m = material(365);
     let peers = vec![PeerReport::broken("service", "aa".repeat(32))];

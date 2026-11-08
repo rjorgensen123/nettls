@@ -7,8 +7,8 @@ use pyo3::types::PyModule;
 
 use crate::announcer::Status;
 use crate::generations::Generations;
-use crate::json_err;
 use crate::material::TlsMaterial;
+use crate::{err, json_err};
 use nettls::status as st;
 
 /// `nettls::status::Level`.
@@ -63,14 +63,21 @@ pub(crate) enum PeerState {
     Ok,
     RotationPending,
     Broken,
+    Unreachable,
 }
 
-impl From<st::PeerState> for PeerState {
-    fn from(s: st::PeerState) -> Self {
+impl PeerState {
+    /// `PeerState` is `#[non_exhaustive]` (0.11.0): a state this binding does
+    /// not know is an error, never a guess.
+    fn from_rust(s: st::PeerState) -> PyResult<Self> {
         match s {
-            st::PeerState::Ok => Self::Ok,
-            st::PeerState::RotationPending => Self::RotationPending,
-            st::PeerState::Broken => Self::Broken,
+            st::PeerState::Ok => Ok(Self::Ok),
+            st::PeerState::RotationPending => Ok(Self::RotationPending),
+            st::PeerState::Broken => Ok(Self::Broken),
+            st::PeerState::Unreachable => Ok(Self::Unreachable),
+            other => Err(err(nettls::TlsError::Params(format!(
+                "nettls_py does not know the peer state {other:?}; update nettls-py"
+            )))),
         }
     }
 }
@@ -81,6 +88,7 @@ impl From<PeerState> for st::PeerState {
             PeerState::Ok => st::PeerState::Ok,
             PeerState::RotationPending => st::PeerState::RotationPending,
             PeerState::Broken => st::PeerState::Broken,
+            PeerState::Unreachable => st::PeerState::Unreachable,
         }
     }
 }
@@ -102,13 +110,13 @@ pub(crate) struct PeerReport {
 }
 
 impl PeerReport {
-    fn from_rust(p: st::PeerReport) -> Self {
-        Self {
+    fn from_rust(p: st::PeerReport) -> PyResult<Self> {
+        Ok(Self {
             name: p.name,
-            state: p.state.into(),
+            state: PeerState::from_rust(p.state)?,
             current_fingerprint: p.current_fingerprint,
             next_fingerprint: p.next_fingerprint,
-        }
+        })
     }
 
     fn to_rust(&self) -> st::PeerReport {
@@ -124,13 +132,18 @@ impl PeerReport {
 #[pymethods]
 impl PeerReport {
     #[staticmethod]
-    fn from_generations(name: String, g: &Generations) -> Self {
+    fn from_generations(name: String, g: &Generations) -> PyResult<Self> {
         Self::from_rust(st::PeerReport::from_generations(name, &g.get()))
     }
 
     #[staticmethod]
-    fn broken(name: String, last_known_fingerprint: String) -> Self {
+    fn broken(name: String, last_known_fingerprint: String) -> PyResult<Self> {
         Self::from_rust(st::PeerReport::broken(name, last_known_fingerprint))
+    }
+
+    #[staticmethod]
+    fn unreachable(name: String, last_known_fingerprint: String) -> PyResult<Self> {
+        Self::from_rust(st::PeerReport::unreachable(name, last_known_fingerprint))
     }
 
     /// The JSON serde writes in Rust.
@@ -259,15 +272,19 @@ pub(crate) struct Report {
 }
 
 impl Report {
-    fn from_rust(r: st::Report) -> Self {
-        Self {
+    fn from_rust(r: st::Report) -> PyResult<Self> {
+        Ok(Self {
             version: r.version.to_string(),
             level: r.level.into(),
             headline: r.headline,
             identity: IdentityReport::from_rust(r.identity),
             rotation: r.rotation.map(RotationReport::from_rust),
-            peers: r.peers.into_iter().map(PeerReport::from_rust).collect(),
-        }
+            peers: r
+                .peers
+                .into_iter()
+                .map(PeerReport::from_rust)
+                .collect::<PyResult<_>>()?,
+        })
     }
 
     fn to_rust(&self) -> st::Report {
@@ -290,7 +307,7 @@ impl Report {
         material: &TlsMaterial,
         announcer_status: Option<Status>,
         peers: Vec<PeerReport>,
-    ) -> Self {
+    ) -> PyResult<Self> {
         let status = announcer_status.map(|s| s.to_rust());
         Self::from_rust(st::Report::collect(
             now,

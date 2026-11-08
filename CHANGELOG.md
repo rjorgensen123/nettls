@@ -55,6 +55,13 @@ from expired; Python raises `UntrustedPeerError`, `CertificateExpiredError` or
 `CertificateNotYetValidError`. `TlsError::NotValidNow`, which nothing produced,
 is gone.
 
+### Added — a peer that does not answer *(2026-11-08)*
+
+`PeerState::Unreachable`, set with `PeerReport::unreachable`, makes the status
+report red with "no answer from <names>". `PeerState` is now `#[non_exhaustive]`:
+a `match` on it outside the crate needs a `_` arm, and later states change
+nothing for anyone.
+
 ## [0.10.0] — krypto 0.8, and fixes for the reported bugs
 
 ### Changed — krypto 0.8 *(2026-11-03)*

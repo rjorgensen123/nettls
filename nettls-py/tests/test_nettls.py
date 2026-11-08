@@ -621,6 +621,17 @@ def test_status_report_is_the_rust_json():
     assert report.summary().level == report.level
 
 
+def test_a_peer_that_does_not_answer_is_alert():
+    st = nettls.status
+    m = nettls.TlsMaterial.load(nettls.CertSource.self_signed(A.mode2_params("gw", ["gw"])))
+    peer = st.PeerReport.unreachable("peer", "aa" * 32)
+    assert peer.state == st.PeerState.Unreachable
+    report = st.Report.collect(m.not_before(), m, None, [peer])
+    data = json.loads(report.dumps())
+    assert data["level"] == "alert" and data["headline"] == "no answer from peer"
+    assert data["peers"][0]["state"] == "unreachable"
+
+
 def test_the_version_is_the_crates():
     manifest = (ROOT / "Cargo.toml").read_text()
     declared = re.search(r'^version\s*=\s*"([^"]+)"', manifest, re.M).group(1)

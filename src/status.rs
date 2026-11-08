@@ -37,18 +37,25 @@ pub enum Level {
     Ok,
     /// Something needs attention soon (expiry approaching, rotation pending).
     Warn,
-    /// Something needs an operator NOW (broken trust, alarm, a certificate in
-    /// its last day or expired).
+    /// Something needs an operator NOW (broken trust, a peer that does not
+    /// answer, alarm, a certificate in its last day or expired).
     Alert,
 }
 
 /// The state of one peer, in the crate's vocabulary.
 ///
 /// [`PeerReport::from_generations`] derives what the generation pair can
-/// tell; `Broken` is the consumer's to set — only it sees the `Chain` error
-/// from a failed restore/receive.
+/// tell; `Broken` and `Unreachable` are the consumer's to set — only it sees
+/// the `Chain` error from a failed restore/receive, and only it tries to
+/// connect.
+///
+/// **`#[non_exhaustive]` since 0.11.0**, when `Unreachable` was added: a
+/// `match` on `PeerState` outside the crate needs a `_` arm, and how a state
+/// it does not know is shown is the consumer's choice. Later states then
+/// change nothing for anyone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum PeerState {
     /// Trust is established and quiet.
     Ok,
@@ -56,6 +63,9 @@ pub enum PeerState {
     RotationPending,
     /// The continuity chain is broken — operator action required.
     Broken,
+    /// The peer does not answer *(0.11.0)*. The consumer decides when that is
+    /// so — after how many failed attempts, or how long.
+    Unreachable,
 }
 
 /// One peer's row in the detailed view (admin).
@@ -94,6 +104,16 @@ impl PeerReport {
         PeerReport {
             name: name.into(),
             state: PeerState::Broken,
+            current_fingerprint: last_known_fingerprint.into(),
+            next_fingerprint: None,
+        }
+    }
+
+    /// The consumer cannot reach this peer *(0.11.0)* — only it tries.
+    pub fn unreachable(name: impl Into<String>, last_known_fingerprint: impl Into<String>) -> Self {
+        PeerReport {
+            name: name.into(),
+            state: PeerState::Unreachable,
             current_fingerprint: last_known_fingerprint.into(),
             next_fingerprint: None,
         }
@@ -207,6 +227,11 @@ impl Report {
             .filter(|p| p.state == PeerState::RotationPending)
             .map(|p| p.name.as_str())
             .collect();
+        let unreachable: Vec<&str> = peers
+            .iter()
+            .filter(|p| p.state == PeerState::Unreachable)
+            .map(|p| p.name.as_str())
+            .collect();
         let alarm = rotation.as_ref().map(|r| r.alarm).unwrap_or(false);
         let stopping = rotation
             .as_ref()
@@ -234,6 +259,11 @@ impl Report {
             (
                 Level::Alert,
                 "certificate expires within a day — communication stops then".to_string(),
+            )
+        } else if !unreachable.is_empty() {
+            (
+                Level::Alert,
+                format!("no answer from {}", unreachable.join(", ")),
             )
         } else if alarm {
             (

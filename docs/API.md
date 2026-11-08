@@ -654,12 +654,14 @@ place) and the **headline**; the consumer owns the transport.
 
 ```rust
 pub enum Level { Ok, Warn, Alert }                       // the traffic light, crate-derived
-pub enum PeerState { Ok, RotationPending, Broken }
+#[non_exhaustive]
+pub enum PeerState { Ok, RotationPending, Broken, Unreachable }   // Unreachable, non_exhaustive: 0.11.0
 
 pub struct PeerReport { pub name, pub state, pub current_fingerprint, pub next_fingerprint }
 impl PeerReport {
     pub fn from_generations(name, g: &Generations) -> Self;  // derives Ok/RotationPending
     pub fn broken(name, last_known_fingerprint) -> Self;     // only the consumer sees Chain errors
+    pub fn unreachable(name, last_known_fingerprint) -> Self; // only the consumer tries to connect (0.11.0)
 }
 
 pub struct IdentityReport { fingerprint_sha256, origin, not_after, days_until_expiry, expiry_warning }
@@ -685,6 +687,13 @@ pub struct Summary { version, level, headline }
 Everything serializes with serde — drop it straight into your status JSON. No I/O, no clock:
 you pass `now` (Unix seconds). The `expiry_warning` flag and the `level` are the crate's own
 rules — never re-derive them.
+
+**A peer that does not answer** *(0.11.0)* is `PeerState::Unreachable`, set by the consumer with
+`PeerReport::unreachable` — it decides after how many failed attempts, or how long. The report is
+`Alert` with the headline `no answer from <names>`; a broken trust chain or an expiring
+certificate of our own takes the headline first. **`PeerState` is `#[non_exhaustive]` from
+0.11.0:** a `match` on it outside the crate needs a `_` arm, and how a state it does not know is
+shown is the consumer's own choice. A state added later changes nothing for anyone.
 
 **The expiry rule** *(0.11.0)* is the same for every lifetime and counts from `now`: `Warn`
 once half the certificate's lifetime has passed, `Alert` from the last day before expiry and
