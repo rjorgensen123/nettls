@@ -761,7 +761,6 @@ mod receipt_tests {
 // The archive (§6.9) — audit trail, not a recovery mechanism
 // --------------------------------------------------------------------------- //
 
-/// The file the announcements are archived in, next to the certificate.
 /// Upper bound for an incoming certificate PEM (D-item, 2026-08-11 review).
 pub const MAX_CERT_PEM_LEN: usize = 16 * 1024;
 

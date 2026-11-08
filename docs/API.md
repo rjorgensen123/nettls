@@ -60,9 +60,9 @@ Re-exported from the root: `TlsMaterial`, `CertSource`, `SelfSignedParams`, `Cer
 `pub use rustls` — so you do not have to list rustls as a dependency just for the types (and
 risk a line of your own with the wrong features).
 
-**Tests only** (`#[doc(hidden)]`): `fingerprint_for_test` — plus `pkcs8_for_test` and
-`pem_encode_for_test`, both **deprecated since 0.8.1**: the real APIs are
-`TlsMaterial::anchor_pkcs8()` (wish #4) and `pem::encode` (wish #2).
+The test helpers `pkcs8_for_test`, `pem_encode_for_test` and `fingerprint_for_test` are gone
+*(0.11.0)*; they were made for the cross-test against the Python twin. Use
+`TlsMaterial::anchor_pkcs8()`, `pem::encode` and `cert_fingerprint_sha256`.
 
 **`pem` — building PEM** *(public since 0.8.1, wish #2)*:
 

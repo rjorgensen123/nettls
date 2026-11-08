@@ -148,37 +148,6 @@ pub use provider::{install_crypto_provider, provider};
 pub use resolver::RotatingResolver;
 pub use transport::{TransportCipher, TransportPolicy};
 
-/// PKCS#8 from key material — **only for tests**.
-///
-/// Lives here and not in `signature` because it is not part of §6. It was made
-/// for the cross-test against the Python twin, which went with the twin in
-/// 0.11.0. A general signing oracle on TLS key material is a surface we do not
-/// want.
-#[doc(hidden)]
-#[deprecated(
-    since = "0.8.1",
-    note = "use TlsMaterial::anchor_pkcs8() — the proper anchor API (wish #4)"
-)]
-pub fn pkcs8_for_test(m: &TlsMaterial) -> Result<krypto::SecretBuf, TlsError> {
-    m.anchor_pkcs8()
-}
-
-/// PEM encoding — **only for examples and tests** (the ring node).
-#[doc(hidden)]
-#[deprecated(
-    since = "0.8.1",
-    note = "use nettls::pem::encode — public since 0.8.1 (wish #2)"
-)]
-pub fn pem_encode_for_test(label: &str, der: &[u8]) -> Vec<u8> {
-    pem::encode(label, der)
-}
-
-/// SHA-256 over DER as hex — **only for examples and tests**.
-#[doc(hidden)]
-pub fn fingerprint_for_test(der: &[u8]) -> String {
-    krypto::hex::encode(&krypto::sha256(der))
-}
-
 /// Re-export, so consumers can name rustls types without listing `rustls`
 /// themselves — and thus without risking a line of their own with wrong features.
 pub use rustls;

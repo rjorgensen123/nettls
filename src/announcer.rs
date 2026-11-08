@@ -1495,7 +1495,7 @@ impl Announcer {
 }
 
 // --------------------------------------------------------------------------- //
-// Clock exchange and time drift (§6.7b) — internal only
+// Clock exchange and time drift (§6.7b)
 // --------------------------------------------------------------------------- //
 
 /// Below this the deviation is normal and is not logged.

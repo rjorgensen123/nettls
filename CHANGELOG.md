@@ -101,6 +101,13 @@ restart, `Schedule::restore_announced` waits only for peers in the list the
 consumer gives, so a peer taken out of that list is not waited for either.
 Python has both methods.
 
+### Removed — the test helpers for the Python twin *(2026-11-08)*
+
+`pkcs8_for_test`, `pem_encode_for_test` and `fingerprint_for_test` are gone: they
+were hidden, made for the cross-test against the Python twin, and nothing used
+them. Use `TlsMaterial::anchor_pkcs8`, `pem::encode` and
+`cert_fingerprint_sha256`. Two doc comments in the wrong place are fixed.
+
 ## [0.10.0] — krypto 0.8, and fixes for the reported bugs
 
 ### Changed — krypto 0.8 *(2026-11-03)*
