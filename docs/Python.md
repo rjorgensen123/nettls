@@ -1,8 +1,9 @@
 # How to use nettls from Python
 
 **In short:** `nettls-py` is nettls in Python *(0.11.0)*. It has the same modules, functions, types
-and constants as the Rust crate, with the same names, and the same Rust code runs inside it — the
-TLS too, which is rustls. There is one implementation, not two.
+and constants as the Rust crate, with the same names, plus two parts that exist only in Python
+(`stream` and `sslcontext`, below), and the same Rust code runs inside it — the TLS too, which is
+rustls. There is one implementation, not two.
 
 This page shows the Python code. The *why* behind each step is the same in both languages and
 lives in **[Using nettls](Usage.md)**, the Rust guide; each section here links to its counterpart
@@ -38,9 +39,12 @@ print(material.origin(), material.fingerprint_sha256(), material.days_until_expi
 Log `origin()` at startup, for the reason Usage gives. A stored identity that cannot be loaded is
 an error, not a reason for a new one.
 
-The connection is `nettls_py.stream`, the one part that exists only in Python: Rust consumers drive
-rustls themselves, and Python has nothing that can. It takes a socket Python has accepted or
-connected, and runs TLS over it with the config nettls gives:
+The connection is `nettls_py.stream`, which exists only in Python, as does `nettls_py.sslcontext`
+(below): Rust consumers drive rustls themselves, and Python has nothing that can. A caller with its
+own event loop uses its
+[`TlsConnection`](API.md#tlsconnection--the-same-connection-without-a-socket-0120), which has no
+socket. `Stream` takes a socket Python has accepted or connected, and runs TLS over it with the
+config nettls gives:
 
 ```python
 import socket
@@ -92,6 +96,35 @@ except CertificateExpiredError as e:
 An expired certificate can be accepted on purpose:
 `nettls.pinned_client_config_with(fp, [], policy, nettls.Expiry.Ignore)`, and the same last
 argument on `Trust.client_config_with`.
+
+## Libraries that take an `ssl.SSLContext` *(0.12.0)*
+
+`nettls_py.sslcontext.SSLContext` makes an `ssl.SSLContext` from a nettls config, for asyncio and
+the servers and clients that take one. The TLS is still rustls, with the config's decisions.
+
+```python
+import uvicorn
+from nettls_py.sslcontext import SSLContext
+
+server_config = material.server_config_with_alpn([b"http/1.1"])
+uvicorn.run(app, host="0.0.0.0", port=8443,
+            ssl_context_factory=lambda config, default: SSLContext(server_config))
+```
+
+```python
+import httpx
+
+with httpx.Client(verify=SSLContext(nettls.pinned_client_config(fingerprint))) as client:
+    client.get("https://localhost:8443/")
+```
+
+Give an HTTP/1.1 server `server_config_with_alpn([b"http/1.1"])`: the default server config offers
+`h2` first. On the synchronous path (`httpx.Client`), `h2` is dropped from the ALPN list httpx sets;
+a `ClientConfig` made with its own ALPN list is used as it is. Methods that would configure
+OpenSSL, such as `load_cert_chain` or `set_ciphers`, raise `ValueError`, and a refused certificate
+is `ssl.SSLCertVerificationError` and the nettls exception at once, which httpx reports as
+`httpx.ConnectError`. The details are in
+[API](API.md#nettls_pysslcontextsslcontext--for-libraries-that-take-an-sslsslcontext-0120).
 
 ## Enrollment: looking before trusting — [API: the enrollment rule](API.md#the-enrollment-rule--trust-over-an-unverified-connection-contract)
 

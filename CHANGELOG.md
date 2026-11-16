@@ -8,6 +8,61 @@ and the project follows [Semantic Versioning](https://semver.org/).
 > marked with the version it applies from, so a reader sees what holds for their version
 > without guessing.
 
+## [0.12.0] — not yet released
+
+### Added — an `ssl.SSLContext` for Python libraries *(2026-11-16)*
+
+Since 0.11.0 the TLS in Python is rustls, and a `ClientConfig` or `ServerConfig`
+could only be used by `nettls_py.stream.Stream`. Libraries that take an
+`ssl.SSLContext`, such as asyncio, uvicorn and httpx, had no way to use them.
+`nettls_py.sslcontext.SSLContext(config)` is an `ssl.SSLContext` whose
+connections are rustls, with the config's decisions: the pin or `Trust`, and
+the certificate a `RotatingResolver` shows. A refused certificate is
+`ssl.SSLCertVerificationError` and the nettls exception at once.
+
+In front of an HTTP/1.1 server, make the server config with
+`server_config_with_alpn([b"http/1.1"])`: the default offers `h2` first.
+Methods that would configure OpenSSL, such as `load_cert_chain`, raise
+`ValueError`. See `docs/Python.md`.
+
+### Added — `TlsConnection`, a connection without a socket *(2026-11-16)*
+
+`nettls_py.stream.TlsConnection` is the rustls connection with no socket: the
+caller moves the ciphertext (`receive`, `take_outgoing`) and the plaintext
+(`read`, `write`). The context above is built on it.
+
+### Changed — `nettls-py` holds Python code *(2026-11-16)*
+
+The package now has Python modules beside the compiled one. Existing imports
+are unchanged. The tests use uvicorn and httpx, pinned in
+`nettls-py/requirements-ci.txt`; the package itself still depends on nothing.
+The packages uvicorn and httpx pull in are pinned too: anyio, certifi, click,
+h11, httpcore, idna and typing_extensions. `nettls-py/pyproject.toml` now
+names the Python source directory (`python-source = "python"`) and keeps
+`__pycache__` and `.pyc` files out of the wheel and the sdist.
+
+### Changed — krypto 0.8.1 in the lock file *(2026-11-16)*
+
+`Cargo.lock` moves from krypto 0.8.0 to 0.8.1. The requirement is still
+`krypto = "0.8"`. The Python tests take `krypto-py` 0.8.1, pinned in
+`nettls-py/requirements-ci.txt`.
+
+### Changed — the supported version in `SECURITY.md` *(2026-11-16)*
+
+The table of supported versions now names 0.12.x, and versions below 0.12 get
+no fixes.
+
+### Fixed — `docs/API.md` agrees with the code *(2026-11-16)*
+
+The document was compared with the code in both directions. `next_retry` and
+`alarm` are shown under `Schedule`, where they are, not under `Status`. The
+envelope and lock errors name each variant the code returns: `Params`,
+`ProofInvalid`, `Random` and `LockedMemory` besides `Envelope`. The GIL row
+names the calls that release it, `Stream.read` raises `OSError` at an end
+without `close_notify`, and the context's ALPN rule says that a list given
+with `set_alpn_protocols` replaces the config's own. Signatures, defaults and
+field types that were missing are now given.
+
 ## [0.11.0] — Python runs the Rust code
 
 ### Changed — Python uses the Rust code, through `nettls-py` *(2026-11-06)*

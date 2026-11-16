@@ -27,6 +27,9 @@ Changelog = "https://github.com/rjorgensen123/nettls/blob/main/CHANGELOG.md"
 
 [tool.maturin]
 module-name = "nettls_py"
+python-source = "python"
+# Bytecode that running the tests leaves in the source tree.
+exclude = ["**/__pycache__/**", "**/*.pyc"]
 
 [tool.pytest.ini_options]
 markers = ["slow: ring tests that start subprocesses and build the Rust node"]

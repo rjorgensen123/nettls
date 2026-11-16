@@ -5,9 +5,10 @@ the crate from. To get started, or to understand the order things are done in, r
 **[Usage](Usage.md)** first. What the crate is and is not, is in **[Home](Home.md)**.
 
 **The authoritative source is `src/` + `CHANGELOG.md`; on divergence the code wins.** The
-version (the `VERSION` constant, derived from `Cargo.toml`) is the anchor for the active feature
-set — the mapping version → capabilities lives in `CHANGELOG.md`. Every public name must
-appear in this file (enforced by a doc-guard test).
+version (the `VERSION: &str` constant, derived from `Cargo.toml`; in Python also
+`nettls_py.__version__`, the same value) is the anchor for the active feature set — the mapping
+version → capabilities lives in `CHANGELOG.md`. Every public name must appear in this file
+(enforced by a doc-guard test).
 
 Everything returns `Result<_, TlsError>` where something can fail. The crate does not panic on
 input.
@@ -35,7 +36,7 @@ it is breaking regardless of semver:**
 | Canonical form | UTF-8, LF between lines, **no** trailing LF; `prev` serializes as `-` when absent |
 | JSON field names | all English: `approved_by`, `timestamp`, `mode`, `announcement`, … |
 | Mode values | `"pinning"` and `"rolling"` |
-| File names on disk | `cert.pem` · `key.pem` · `pending-rotation.json` · `announcements.jsonl` |
+| File names on disk | `cert.pem` · `key.pem` · `pending-rotation.json` · `announcements.jsonl` · `material.locked` (the material, locked with the password) · `previous-key.locked`, or `previous-key.json` without a password (the previous key) · `new/` (the next identity, before the switch) |
 | Blob magics | `NETTLS\x01\x00` (lockbox) · `NETENV\x01\x00` (envelope) · FAFN (krypto) |
 | KDF labels | `nettls/local-state/v1` + `nettls-local-st1` · `nettls/envelope/v1` + `nettls-envelope1` |
 | Test vectors | `testvectors/canonical.json` + `errors.json` — `canonical_hex` values byte-identical since 0.6 |
@@ -90,7 +91,7 @@ unmaintained).
 
 Where the certificate came from. **Log this.**
 
-`Files` · `Pem` · `Generated` · `Reused` · `ReusedExpired` · `Ephemeral`
+`Files` · `Pem` · `Generated` · `Reused` · `ReusedExpired` · `Ephemeral` — `#[non_exhaustive]`
 
 > `Ephemeral` means the directory was not writable → a new fingerprint on every restart →
 > everyone who pinned you loses you. `ReusedExpired` means an expired certificate was kept
@@ -110,7 +111,8 @@ impl SelfSignedParams {
     pub fn valid_days(self, days: u32) -> Self;
 }
 ```
-Has `Default`. Strings that parse as IP addresses become IP SANs, the rest DNS SANs.
+`Default` is CN `"nettls self-signed"`, SANs `localhost` and `127.0.0.1`, 365 days; `new` also
+sets 365 days. Strings that parse as IP addresses become IP SANs, the rest DNS SANs.
 
 ### `CertSource`
 
@@ -291,7 +293,7 @@ rustls widens the nonce, so the exit is announced by the build.
 impl RotatingResolver {
     pub fn new(material: &TlsMaterial) -> Result<Self, TlsError>;
     pub fn swap(&self, material: &TlsMaterial) -> Result<String, TlsError>;  // → the old fingerprint
-    pub fn fingerprint_sha256(&self) -> String;                              // what is served NOW
+    pub fn fingerprint_sha256(&self) -> String;                              // what is served NOW; "" if the lock is poisoned
     pub fn server_config(&self) -> Result<Arc<ServerConfig>, TlsError>;
     pub fn server_config_with_alpn(&self, alpn: &[Vec<u8>]) -> Result<Arc<ServerConfig>, TlsError>;
     pub fn server_config_with(&self, alpn: &[Vec<u8>], transport: &TransportPolicy)
@@ -307,7 +309,7 @@ replaces one that works.
 ## `generations` — which certificates apply
 
 ```rust
-pub struct Generation;
+pub struct Generation { .. }
 impl Generation {
     pub fn from_der(der: impl Into<Vec<u8>>) -> Self;
     pub fn from_pem(pem: &str) -> Result<Self, TlsError>;
@@ -432,7 +434,8 @@ impl Receipt {
 
 ### `IdentityJson` — what a service publishes
 
-Fields: `fingerprint` (with `sha256:` prefix) · `cert_pem` · `not_after` · `mode` · `sent_at` ·
+Fields: `fingerprint` (stored as given: `new` neither adds nor checks a `sha256:` prefix) ·
+`cert_pem` · `not_after` · `mode` · `sent_at` ·
 `announcement` *(field names ARE the wire names — the wire went fully English in 0.7.0; old⇄new table in CHANGELOG, note removed in a later version)*
 
 ```rust
@@ -503,8 +506,10 @@ pub enum ModeCheck { Agree(Mode), Disagree { ours: Mode, theirs: Mode } }
 pub fn check_mode(ours: Mode, theirs: Mode) -> ModeCheck;  // compares, NEVER negotiates
 impl ModeCheck { pub fn message(&self, peer: &str) -> Option<String>; pub fn can_roll(&self) -> bool; }
 
-pub fn mode2_params(common_name, sans) -> SelfSignedParams;                        // always 30 days
-pub fn mode1_params(common_name, sans, days: Option<u32>) -> Result<SelfSignedParams, TlsError>;
+pub fn mode2_params(common_name: impl Into<String>, sans: impl IntoIterator<Item = impl Into<String>>)
+    -> SelfSignedParams;                                                           // always 30 days
+pub fn mode1_params(common_name: impl Into<String>, sans: impl IntoIterator<Item = impl Into<String>>,
+                    days: Option<u32>) -> Result<SelfSignedParams, TlsError>;
 pub fn mode1_should_warn(now: i64, expires: i64) -> bool;                          // at 30 days left
 ```
 
@@ -527,6 +532,8 @@ impl Schedule {
     pub fn state(&self) -> &ChainState;
     pub fn first_announced(&self) -> Option<i64>;
     pub fn status(&self, now: i64, expires: i64) -> Status;
+    pub fn next_retry(&self, now: i64) -> Option<i64>;
+    pub fn alarm(&self, now: i64) -> bool;
     pub fn restore_announced(&mut self, waiting_for: Vec<String>, first_announced: i64);  // after restart;
                                        // only peers in the list given to `new` (0.11.0)
 }
@@ -541,9 +548,7 @@ pub fn interval_after(elapsed_s: i64) -> i64;                  // retry cadence:
 pub struct Status { pub waiting_for: Vec<String>, pub alarm: bool, pub seconds_until_stop: i64 }
 impl Status {
     pub fn countdown(&self) -> String;                          // "d days hh:mm:ss"
-    pub fn message(&self, own_peer_name: &str) -> Option<String>; // always names WHO is blocking
-    pub fn next_retry(&self, now: i64) -> Option<i64>;
-    pub fn alarm(&self, now: i64) -> bool;
+    pub fn message(&self, own_name: &str) -> Option<String>;      // always names WHO is blocking
 }
 ```
 
@@ -566,22 +571,22 @@ pub struct OwnTrio {                           // fingerprints only — never ke
 }
 
 impl Announcer {
-    pub fn new(name, dir, params: SelfSignedParams, resolver: Arc<RotatingResolver>,
-               anchor: OwnMaterial, schedule: Schedule,
+    pub fn new(name: impl Into<String>, dir: impl Into<PathBuf>, params: SelfSignedParams,
+               resolver: Arc<RotatingResolver>, anchor: OwnMaterial, schedule: Schedule,
                password: Option<krypto::SecretString>) -> Result<Self, TlsError>;
         // load-or-init, fail-closed: disk state overrides the anchor; unreadable state = error
 
     pub fn own_trio(&self) -> Result<OwnTrio, TlsError>;
     pub fn prepare(&self, now: i64) -> Result<Announcement, TlsError>;   // create + persist + announce; idempotent
-    pub fn acked(&self, peer: &str) -> Result<(), TlsError>;             // verify the Receipt FIRST; persists
+    pub fn acked(&self, peer: &str) -> Result<(), TlsError>;             // the caller verifies first (Receipt::verify); persists
     pub fn add_peer(&self, name: impl Into<String>) -> Result<(), TlsError>;   // persists (0.11.0)
     pub fn remove_peer(&self, name: &str) -> Result<(), TlsError>;             // persists (0.11.0)
     pub fn roll_if_ready(&self, now: i64) -> Result<Option<String>, TlsError>;
     pub fn roll_if_ready_gated(&self, now: i64, safe_now: impl FnOnce() -> bool)
         -> Result<Option<String>, TlsError>;   // the consumer's last word; chain+serving switch together
-    pub fn should_announce(&self, now: i64) -> bool;
+    pub fn should_announce(&self, now: i64) -> bool;      // false if the lock is poisoned
     pub fn status(&self, now: i64, expires: i64) -> Result<Status, TlsError>;
-    pub fn pending(&self) -> Option<Announcement>;
+    pub fn pending(&self) -> Option<Announcement>;        // None if the lock is poisoned
     pub fn save_pending(&self) -> Result<(), TlsError>;   // prepare/acked call it (0.10.0); NOT the key
 }
 ```
@@ -606,7 +611,7 @@ impl Deviation { pub fn message(&self, peer: &str) -> String; }
 
 pub struct FallToMode1 { pub deviation: Deviation }
 impl FallToMode1 {
-    pub fn at(deviation: Deviation) -> Self;   // the only constructor — no way back without an operator
+    pub fn at(deviation: Deviation) -> Self;   // or the struct literal, `deviation` being pub; no way back without an operator
     pub fn mode(&self) -> Mode;            // always Pinning
     pub fn can_retry(&self) -> bool;       // always false
 }
@@ -642,9 +647,9 @@ pub fn algsupport_v1(component: &str, algs: &str, timestamp: i64) -> Result<Vec<
 pub fn alg_token(alg: Alg) -> &'static str;                    // krypto-cli's vocabulary
 pub fn alg_from_token(token: &str) -> Result<Alg, TlsError>;   // fail-closed
 
-pub struct SupportStatement { component, supported: Vec<String>, timestamp, signature }
+pub struct SupportStatement { pub component: String, pub supported: Vec<String>, pub timestamp: i64, pub signature: String }
 impl SupportStatement {
-    pub fn signed(component, supported: &[Alg], timestamp, anchor_pkcs8: &krypto::SecretBuf) -> Result<Self, TlsError>;
+    pub fn signed(component: &str, supported: &[Alg], timestamp: i64, anchor_pkcs8: &krypto::SecretBuf) -> Result<Self, TlsError>;
     pub fn verify(&self, signer_cert_der: &[u8]) -> Result<Vec<Alg>, TlsError>;
 }
 
@@ -672,24 +677,29 @@ pub enum Level { Ok, Warn, Alert }                       // the traffic light, c
 #[non_exhaustive]
 pub enum PeerState { Ok, RotationPending, Broken, Unreachable }   // Unreachable, non_exhaustive: 0.11.0
 
-pub struct PeerReport { pub name, pub state, pub current_fingerprint, pub next_fingerprint }
+pub struct PeerReport { pub name: String, pub state: PeerState, pub current_fingerprint: String,
+                        pub next_fingerprint: Option<String> }
 impl PeerReport {
-    pub fn from_generations(name, g: &Generations) -> Self;  // derives Ok/RotationPending
-    pub fn broken(name, last_known_fingerprint) -> Self;     // only the consumer sees Chain errors
-    pub fn unreachable(name, last_known_fingerprint) -> Self; // only the consumer tries to connect (0.11.0)
+    pub fn from_generations(name: impl Into<String>, g: &Generations) -> Self;   // derives Ok/RotationPending
+    pub fn broken(name: impl Into<String>, last_known_fingerprint: impl Into<String>) -> Self;
+        // only the consumer sees Chain errors
+    pub fn unreachable(name: impl Into<String>, last_known_fingerprint: impl Into<String>) -> Self;
+        // only the consumer tries to connect (0.11.0)
 }
 
-pub struct IdentityReport { fingerprint_sha256, origin, not_after, days_until_expiry, expiry_warning }
-pub struct RotationReport { waiting_for, alarm, seconds_until_stop }
+pub struct IdentityReport { pub fingerprint_sha256: String, pub origin: String,   // CertOrigin's Debug form
+                            pub not_after: Option<i64>, pub days_until_expiry: i64, pub expiry_warning: bool }
+pub struct RotationReport { pub waiting_for: Vec<String>, pub alarm: bool, pub seconds_until_stop: i64 }
 
-pub struct Report { version, level, headline, identity, rotation: Option<RotationReport>, peers }
+pub struct Report { pub version: &'static str, pub level: Level, pub headline: String,
+                    pub identity: IdentityReport, pub rotation: Option<RotationReport>, pub peers: Vec<PeerReport> }
 impl Report {
     pub fn collect(now: i64, material: &TlsMaterial,
                    announcer_status: Option<&Status>, peers: Vec<PeerReport>) -> Report;
     pub fn summary(&self) -> Summary;
 }
 
-pub struct Summary { version, level, headline }
+pub struct Summary { pub version: &'static str, pub level: Level, pub headline: String }
 ```
 
 **The instruction to consumers — two views, two audiences:**
@@ -737,10 +747,18 @@ pub fn verify_p256(cert_der: &[u8], message: &[u8], signature: &[u8]) -> Result<
 
 Domain separators: `APPROVE_V1` · `ROTATE_V2` · `ROTATE_ACK_V2` · `PAIRSECRET_V1`
 
-Builders: `approve_v1(..)` · `rotate_v2(..)` · `rotate_ack_v2(..)` · `pairsecret_v1(..)`
+```rust
+pub fn approve_v1(peer: &str, fingerprint: &str, approved_by: &str, timestamp: i64) -> Result<Vec<u8>, TlsError>;
+pub fn rotate_v2(announcer: &str, prev_fp: Option<&str>, curr_fp: &str, new_fp: &str, sent_at: i64)
+    -> Result<Vec<u8>, TlsError>;
+pub fn rotate_ack_v2(acker: &str, announcer: &str, new_fp: &str, sent_at: i64) -> Result<Vec<u8>, TlsError>;
+pub fn pairsecret_v1(a: &str, b: &str, sealed_a_sha256: &str, sealed_b_sha256: &str, sent_at: i64)
+    -> Result<Vec<u8>, TlsError>;
 
-Validation: `require_fingerprint(v, field)` · `require_component_name(v, field)` (strict:
-`[a-z0-9-]{1,32}`) · `require_name(v, field, max)` (usernames: looser, but no control chars)
+pub fn require_fingerprint(v: &str, field: &str) -> Result<(), TlsError>;
+pub fn require_component_name(v: &str, field: &str) -> Result<(), TlsError>;   // strict: [a-z0-9-]{1,32}
+pub fn require_name(v: &str, field: &str, max: usize) -> Result<(), TlsError>; // usernames: looser, no control chars
+```
 
 > Use these if you verify outside the crate. Building the string yourself is a fine way to get a
 > signature that looks right and is not.
@@ -767,14 +785,17 @@ The key exchange is `krypto::exchange` (0.8.0) — a low-order recipient point i
 sealing** (non-contributory result), it no longer yields an envelope.
 The envelope has **no sender** *(0.11.0)*: anyone with the recipient's public key can seal one,
 and an old one can be delivered again. Who sealed it, and when, must come from the channel or
-the content. Envelope and lock failures are `TlsError::Envelope`; a wrong key or password is
-`ProofInvalid`.
+the content. Envelope and lock failures are `TlsError::Envelope` (too short, wrong format, key
+generation, derivation or sealing), except: a recipient key of the wrong length, or a low-order
+public key, is `Params`; a wrong key or password, and an invalid ephemeral key in `open`, are
+`ProofInvalid`; a lock whose salt cannot be drawn is `Random`; plaintext that cannot be held in
+locked memory is `LockedMemory`.
 
 ## `lockbox` — lock with a password
 
 ```rust
 pub fn lock(password: &krypto::SecretString, plaintext: &[u8]) -> Result<Vec<u8>, TlsError>;      // AEGIS-256
-pub fn lock_with(password, plaintext, alg: krypto::Alg) -> Result<Vec<u8>, TlsError>;
+pub fn lock_with(password: &krypto::SecretString, plaintext: &[u8], alg: krypto::Alg) -> Result<Vec<u8>, TlsError>;
 pub fn unlock(password: &krypto::SecretString, file: &[u8]) -> Result<krypto::SecretBuf, TlsError>;
 ```
 
@@ -842,9 +863,8 @@ re-approves, so it must be the system's best-explained error.
 
 ## The enrollment rule — trust over an unverified connection (CONTRACT)
 
-Before a peer is approved (`PeerState::RotationPending`), or when the chain is broken
-(`PeerState::Broken`),
-three principles apply for every consumer of this crate:
+Before a peer is approved, or when the chain is broken (`PeerState::Broken`), three principles
+apply for every consumer of this crate:
 
 1. **Observing an identity is not trusting it.** A certificate is public — connecting
    unverified *only to read the peer's certificate/fingerprint* gives an attacker nothing new.
@@ -876,10 +896,11 @@ Do not build one of your own.
 **Safe to build on:** the wire format (the frozen table
 at the top — changing it is breaking regardless of semver) · the `TlsError` branches
 (`#[non_exhaustive]`) · the `CertSource`/`TlsMaterial` surface · the pinning model (full
-signature verification, constant time, resumption off) · the §6 message forms and verification
-orders · the generation pair's two roles · the `Announcer::new` contract (load-or-init,
-fail-closed) · the switch point (chain + serving together, consumer's port) · the algorithm
-layers (AEGIS-256 default, AES-256-GCM as the bridge, algorithm from the header, hard failure).
+signature verification, constant-time fingerprint comparison in `pin`, resumption off) · the §6
+message forms and verification orders · the generation pair's two roles · the `Announcer::new`
+contract (load-or-init, fail-closed) · the switch point (chain + serving together, consumer's
+port) · the algorithm layers (AEGIS-256 default, AES-256-GCM as the bridge, algorithm from the
+header, hard failure).
 
 **Deliberate non-mechanisms** *(decided 2026-08-27)*: the Ed25519 **request-signing keys do
 not rotate on a schedule** — §6 rotates certificates; the signing keys are static, and their
@@ -923,7 +944,8 @@ Recorded here, and every entry above carries the version it applies from.
 The same API from Python 3.11 or newer: `pip install nettls-py`, then `import nettls_py`. Every
 function, type, constant and module in this document exists there, with the same name, and does the
 same thing, because it is the same Rust code. A test (`nettls-py/tests/surface.rs`) fails the build
-if a name is on one side only without a written reason. What differs is what can be guaranteed
+if a name is on one side only without a written reason; `nettls_py.sslcontext` is pure Python and
+outside that test. What differs is what can be guaranteed
 (below). How to use it, with examples: **[Python](Python.md)**.
 
 How the Rust forms read in Python:
@@ -936,28 +958,31 @@ How the Rust forms read in Python:
 | `impl Into<PathBuf>`, `&Path` | `str` or a path object |
 | `Option<T>` | `T` or `None` |
 | `Result<T, TlsError>` | `T`, or an exception |
-| `TlsError::Pem`, `TlsError::Params`, … | `PemError`, `ParamsError`, …, all subclasses of `TlsError`, also in `nettls_py.error` |
+| `TlsError::Pem`, `TlsError::Params`, … | `PemError`, `ParamsError`, …, all subclasses of `TlsError`, also in `nettls_py.error`. `IoError` has no `path` or `detail` attribute; its message carries them |
 | `Mode::Rolling`, `ChainState::Idle { attempt_at }`, … | `Mode.Rolling`, `ChainState.Idle(attempt_at=…)`, … — enums with data too |
-| A struct's `pub` fields | Attributes. `SelfSignedParams::valid_days` is both a field and a builder in Rust; in Python it is the field |
-| `X::new(…)` | `X.new(…)`; where Rust has a plain constructor or `Default`, `X(…)` too |
+| A set (`ChainState::Announced`'s `waiting_for`) | A sorted `list` |
+| A struct's `pub` fields | Attributes. `SelfSignedParams::valid_days` is both a field and a builder in Rust; in Python it is the field. Read-only: `OwnMaterial.previous` and `.current` (copies of the private keys, as `bytes`), `Report.version`, `Summary.version` |
+| `X::new(…)` | `X.new(…)`. `X(…)` too for `AnnouncementJson`, `ReceiptJson`, `ApprovalJson`, `Context`, `SupportStatement`, `Status`, `OwnMaterial`, `Schedule`, `Announcer`, `ClockDrift` and `RotatingResolver`; `SelfSignedParams()` and `TransportPolicy()` give the `Default` |
 | `&krypto::SecretBuf`, `krypto::SecretString` taken in | `bytes`, `str`, copied straight into locked memory |
 | `krypto::SecretBuf` handed out (`unlock`, `open`, `anchor_pkcs8`) | `bytes` |
-| `krypto::Alg` | `nettls_py.Alg` |
+| `krypto::Alg` | `nettls_py.Alg`: `Aegis256`, `XChaCha20Poly1305`, `Aes256Gcm` |
 | A closure (`roll_if_ready_gated`, an approval's key lookup) | A function. An exception it raises fails the call closed, and is raised afterwards |
-| A value taken by value (`OwnMaterial` into `Announcer::new`) | The object is taken; using it afterwards is a `ValueError` |
+| A value taken by value (`OwnMaterial` into `Announcer::new`) | The `OwnMaterial` is taken; using it afterwards is a `ValueError`. A `Schedule` given to `Announcer.new` and `Generations` given to `Trust.from_state` are copied and stay usable |
 | `serde_json` on the JSON types and the status report | `x.dumps()`, and `X.loads(s)` where Rust can read it back |
-| rustls `ClientConfig`, `ServerConfig` | Objects only `nettls_py.stream` takes |
+| rustls `ClientConfig`, `ServerConfig` | Objects that `nettls_py.stream` and `nettls_py.sslcontext` take |
 
 No Python form: `pub use rustls`, `provider()`, `aegis::suite()` and `TlsMaterial::certified_key`
-give rustls values with no meaning outside rustls; the crate never hands out a `Pending`; and the
-`#[doc(hidden)]` test helpers.
+give rustls values with no meaning outside rustls; the crate never hands out a `Pending`; and
+`pin::classify` and `Rejection` read a Rust error, where Python has the three exceptions of
+`stream` instead.
 
-### `stream` — TLS over a Python socket (Python only)
+### `stream` — TLS over a Python socket, or without one (Python only)
 
 ```python
 Stream.connect(sock, config: ClientConfig, server_name: str) -> Stream   # the client side
 Stream.accept(sock, config: ServerConfig) -> Stream                      # the server side
-stream.read(n=65536) -> bytes          # b"" once the peer has closed; at most MAX_READ
+stream.read(n=65536) -> bytes          # b"" after the peer's close_notify, OSError at an end
+                                       # without one; n at most MAX_READ (16 MiB)
 stream.write(data) -> int              # all of it, flushed
 stream.flush(); stream.close()         # close sends close_notify; closing twice does nothing
 stream.peer_fingerprint() -> str | None
@@ -970,15 +995,114 @@ that can, so this is that piece, with no nettls logic in it. Whom to trust is th
 decision — `Trust::client_config` accepts `current` and `next` and promotes on proof (§6.7),
 `pinned_client_config` accepts one fingerprint — and the certificate shown is the server config's,
 so a `RotatingResolver` server follows the rotation. Both constructors complete the handshake
-before they return. The stream takes the socket over (`socket.detach()`); its timeout carries over,
-and waiting happens without the GIL. A non-blocking socket is refused and left to the caller.
+before they return; an invalid `server_name` is `ParamsError`. `Stream` is a context manager that
+closes on exit, and its methods raise `ValueError` after `close`. The stream takes the socket over
+(`socket.detach()`), and its timeout carries over. `read`, `write`, `flush`, `close` and the
+handshake wait without the GIL; `peer_fingerprint`, `peer_certificate` and `alpn_protocol` wait
+for the stream's lock while holding it. A non-blocking socket is refused and left to the caller.
 The stream does one thing at a time: a read that waits holds it, so a write from another thread
 waits for that read. Serve each connection from one thread.
 Socket and TLS failures are `OSError`, as Python's `ssl` gives them, and a timeout is
 `TimeoutError`. A refused server certificate is one of three `OSError` subclasses, as `classify`
 names it *(0.11.0)*: `UntrustedPeerError`, `CertificateExpiredError` (with `now` and `not_after`)
-and `CertificateNotYetValidError` (with `now` and `not_before`), Unix seconds. There is no asyncio
-form.
+and `CertificateNotYetValidError` (with `now` and `not_before`), Unix seconds. For asyncio and
+other event loops there is `TlsConnection`, and `nettls_py.sslcontext` on top of it (below).
+
+#### `TlsConnection` — the same connection without a socket *(0.12.0)*
+
+```python
+TlsConnection.client(config: ClientConfig, server_name: str, alpn: list[bytes] | None = None)
+TlsConnection.server(config: ServerConfig)
+conn.receive(data)                  # ciphertext from the peer
+conn.receive_eof()                  # the transport has ended
+conn.take_outgoing() -> bytes       # ciphertext to send; after a failure, the alert
+conn.read(n=65536) -> bytes | None  # b"" while nothing has arrived; None after close_notify;
+                                    # n above MAX_READ is ValueError
+conn.write(data) -> int             # how much rustls took
+conn.send_close_notify()
+conn.is_handshaking() -> bool;  conn.peer_closed() -> bool
+conn.pending() -> int               # plaintext held, plus ciphertext waiting for room;
+                                    # can raise the connection's failure
+conn.alpn_protocol() -> bytes | None;  conn.peer_certificate() -> bytes | None
+conn.protocol_version() -> str | None   # "TLSv1.3" or "TLSv1.2"
+conn.cipher_suite() -> str | None       # rustls's name, e.g. "TLS13_AES_256_GCM_SHA384";
+                                        # nettls's AEGIS-256 suite is its code point "0xff06"
+```
+
+The caller moves the ciphertext; nothing waits, and nothing calls back into Python. `alpn`
+replaces the config's protocols for that connection, and an empty list offers none; an invalid
+`server_name` is `ParamsError`. While rustls holds plaintext, ciphertext that arrives
+waits in the connection until `read` has taken that plaintext, and `pending()` counts it. `write`
+can take less than it is given: take the output, then write the rest. A transport that ended
+without `close_notify` is `ConnectionResetError` once the plaintext that arrived has been read.
+Other failures are the stream's exceptions, a refused certificate included. A handshake or
+certificate failure is raised by `receive` or `receive_eof`; a failure that arrives behind
+plaintext is raised by `read` once that plaintext has been taken.
+
+#### `nettls_py.sslcontext.SSLContext` — for libraries that take an `ssl.SSLContext` *(0.12.0)*
+
+```python
+from nettls_py.sslcontext import SSLContext
+
+SSLContext(config: ClientConfig | ServerConfig)   # a subclass of ssl.SSLContext
+ctx.wrap_bio(incoming, outgoing, server_side=False, server_hostname=None, session=None)
+ctx.wrap_socket(sock, server_side=False, do_handshake_on_connect=True,
+                suppress_ragged_eofs=True, server_hostname=None, session=None)
+ctx.set_alpn_protocols(alpn_protocols)   # client only; str values of 1 to 255 bytes, else ValueError
+```
+
+The context is for libraries that take an `ssl.SSLContext`: asyncio, uvicorn
+(`ssl_context_factory`), httpx (`verify=`). Each connection is a `TlsConnection`; the context
+holds no TLS logic. `SSLContext` with anything but a nettls config is `TypeError`.
+
+`wrap_bio` gives the `ssl.SSLObject` methods asyncio and anyio use. `shared_ciphers`,
+`compression`, `selected_npn_protocol` and `get_channel_binding` give `None`, `session` is
+`None`, and `get_verified_chain`, `get_unverified_chain` and `verify_client_post_handshake` are
+absent. Its `pending()` counts plaintext plus queued ciphertext, where Python's own counts
+plaintext only, and its `unwrap()` drops application data that arrives while it waits for the
+peer's `close_notify`. `wrap_socket` gives a blocking socket with the methods httpx's synchronous
+client uses (`recv`, `send`, `sendall`, `settimeout`, `close`); it has no `makefile` or
+`recv_into`, so `http.client` and the libraries built on it cannot use it. `read` on the
+`wrap_bio` object and `recv` on the socket form cap the size at `MAX_READ`.
+
+- **ALPN.** In front of an HTTP/1.1 server, such as uvicorn, make the server config with
+  `server_config_with_alpn([b"http/1.1"])`: the default server config offers `h2` first. A list
+  given with `set_alpn_protocols` replaces the `ClientConfig`'s own on both forms; the config's
+  list is used as it is only where `set_alpn_protocols` was never called. `wrap_socket` drops
+  `h2` from that list, which httpx sets on every connection, because httpx speaks HTTP/1.1 over
+  any socket that is not a real `ssl.SSLSocket`. A server's protocols are fixed in its
+  `ServerConfig`, so `set_alpn_protocols` on a server context raises `ValueError`.
+- **Refused configuration.** The OpenSSL context the class inherits never carries a connection.
+  The following raise `ValueError`:
+  `load_cert_chain`, `load_verify_locations`, `load_default_certs`, `set_default_verify_paths`,
+  `set_ciphers`, `set_ecdh_curve`, `load_dh_params`, `set_servername_callback`, and assigning
+  `verify_mode`, `check_hostname`, `minimum_version`, `maximum_version`, `options`,
+  `verify_flags`, `sni_callback`, `post_handshake_auth`, `keylog_filename`, `num_tickets`.
+  Reading them works.
+- **A refused certificate** is `ssl.SSLCertVerificationError` and also the nettls exception
+  (`UntrustedPeerError`, `CertificateExpiredError` or `CertificateNotYetValidError`, with its
+  times), raised from it. httpx turns it into `httpx.ConnectError`, with the nettls exception in
+  its exception chain.
+- **Other failures.** Any other TLS failure is `ssl.SSLError`. A transport that ended during the
+  handshake or without `close_notify` is `ssl.SSLEOFError`; with `suppress_ragged_eofs=True`,
+  `recv` on the socket form gives `b""` for a missing `close_notify` after the handshake, while an
+  end during the handshake stays `ssl.SSLEOFError`. On the socket form, socket errors pass through
+  unchanged: a timeout is `TimeoutError`, a reset `ConnectionResetError`. The wrong side
+  (`server_side=True` on a client context, or the reverse) is `ssl.SSLError`; a client without
+  `server_hostname`, and any `session`, are `ValueError`.
+- **The socket form.** `wrap_socket` refuses a non-blocking socket with `ValueError` and leaves it
+  to the caller, and closes the socket after a failed handshake; with
+  `do_handshake_on_connect=False` the first `recv` or `send` does the handshake. One thread can
+  send while another waits in `recv`, unlike `Stream`. After a failed send the connection is
+  unusable, and every later `recv`, `send` and `sendall` raises `ssl.SSLError`. `close()` sends
+  `close_notify` unless another thread is sending, and shuts the socket down so a blocked thread
+  wakes; closing twice does nothing. It also has `gettimeout`, `fileno`, `getsockname`,
+  `getpeername`, `do_handshake`, `selected_alpn_protocol` and context-manager support;
+  `settimeout(0)` raises `ValueError`.
+- **What the connection reports.** `getpeercert()` gives `{}`, the DER with `binary_form=True`,
+  and `None` when the peer showed no certificate; during the handshake it raises `ValueError`.
+  `version()` and `cipher()` give `None` during the handshake. `cipher()` is the rustls suite
+  name, the version and the key bits, with nettls's AEGIS-256 suite as `"0xff06"`.
 
 ### What is guaranteed, and where Python differs
 
@@ -989,8 +1113,8 @@ form.
 | What comes out | `SecretBuf` | `bytes`: a copy Python holds, neither locked nor wiped |
 | Locked memory | Counted against `RLIMIT_MEMLOCK` of the process | The same, in the Python process |
 | `fork` | The child's copies of locked pages are not locked | The same |
-| TLS | rustls, with the configs above | The same rustls, through `stream`; Python's `ssl` is not used |
-| Long calls | — | Key generation, Argon2 in `lockbox`, the announcer's writes and the stream's waiting release the GIL |
+| TLS | rustls, with the configs above | The same rustls, through `stream` and `sslcontext`; OpenSSL never carries a connection |
+| Long calls | — | These release the GIL: `TlsMaterial.load` and `save_pem`; `lockbox.lock`, `lock_with` and `unlock`; `announcement.archive` and `read_archive`; the `Announcer`'s constructor, `prepare`, `acked`, `add_peer`, `remove_peer`, `roll_if_ready` and `save_pending`; and `Stream`'s handshake, `read`, `write`, `flush` and `close`. Every other call holds it, `roll_if_ready_gated` and `RecipientKey.generate()` included |
 | A panic inside nettls | Unwinds to the caller | Becomes `pyo3_runtime.PanicException` |
 | `unsafe` | None in `nettls` (`forbid(unsafe_code)`) | One block in the binding: taking over the socket's descriptor |
 

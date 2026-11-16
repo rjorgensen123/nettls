@@ -11,8 +11,10 @@
 //! `Result<T, TlsError>` becomes a return value or an exception: `TlsError`,
 //! with one subclass per variant (`TlsError::Pem` is `PemError`, and so on).
 //!
-//! One part exists only in Python: `nettls_py.stream`, which runs a rustls
-//! connection over a Python socket. Rust consumers drive rustls themselves.
+//! Two parts exist only in Python: `nettls_py.stream`, which runs a rustls
+//! connection over a Python socket or over bytes the caller moves, and
+//! `nettls_py.sslcontext`, an `ssl.SSLContext` built on it. Rust consumers
+//! drive rustls themselves.
 
 mod aegis;
 mod announcement;

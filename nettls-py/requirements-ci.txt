@@ -3,14 +3,25 @@
 # The module itself needs nothing: the protocol, the certificates and TLS are
 # the Rust code inside it. Here are the build tool, the test runner, and
 # krypto-py, which the tests take Ed25519 from (it is krypto's, in Rust too).
+# uvicorn and httpx, with what they pull in, are the server and client that
+# test nettls_py.sslcontext with libraries that take an ssl.SSLContext.
 #
 # Usage:  python3 -m venv .venv && .venv/bin/pip install -r nettls-py/requirements-ci.txt
 #         VIRTUAL_ENV=.venv .venv/bin/maturin develop --locked -m nettls-py/Cargo.toml
 #         .venv/bin/pytest nettls-py/tests -q
+anyio==4.16.0
+certifi==2026.10.23
+click==8.5.1
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.20
 iniconfig==2.3.0
-krypto-py==0.8.0
+krypto-py==0.8.1
 maturin==1.16.0
 packaging==26.3
 pluggy==1.6.0
 Pygments==2.20.0
 pytest==9.1.1
+typing_extensions==4.16.0
+uvicorn==0.54.0

@@ -124,7 +124,8 @@ reasons are in **[Usage](Usage.md)**.
 `#![forbid(unsafe_code)]` — the library contains zero `unsafe`.
 
 **Python** runs this same crate through PyO3: **`nettls-py`** has the same modules, names and
-types, with the Rust code inside — the TLS too, which is rustls *(0.11.0)*. A Python service
+types, with the Rust code inside — the TLS too, which is rustls *(0.11.0)* — plus two parts for
+the connection that exist only in Python. A Python service
 creates its own identity, takes part in the rotation, and connects through the same verifier as a
 Rust one. Up to 0.10.0 Python had its own implementation, `python/nettls.py`; there is one now.
 See **[Python](Python.md)**.

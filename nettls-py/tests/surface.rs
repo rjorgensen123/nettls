@@ -60,6 +60,8 @@ const CLASSIFY: &str =
 
 const STREAM: &str =
     "the TLS connection over a Python socket: Rust consumers drive rustls themselves";
+const TLS_CONNECTION: &str =
+    "the TLS connection for a Python event loop: Rust consumers drive rustls themselves";
 const ALG: &str = "krypto::Alg, which lockbox, envelope and capability take";
 const SERDE: &str = "what serde_json does with the type in Rust";
 
@@ -87,6 +89,22 @@ const PYTHON_ONLY: &[(&str, &str)] = &[
     ("stream.Stream.peer_fingerprint", STREAM),
     ("stream.Stream.alpn_protocol", STREAM),
     ("stream.Stream.peer_certificate", STREAM),
+    ("stream.TlsConnection", TLS_CONNECTION),
+    ("stream.TlsConnection.client", TLS_CONNECTION),
+    ("stream.TlsConnection.server", TLS_CONNECTION),
+    ("stream.TlsConnection.receive", TLS_CONNECTION),
+    ("stream.TlsConnection.receive_eof", TLS_CONNECTION),
+    ("stream.TlsConnection.read", TLS_CONNECTION),
+    ("stream.TlsConnection.write", TLS_CONNECTION),
+    ("stream.TlsConnection.take_outgoing", TLS_CONNECTION),
+    ("stream.TlsConnection.send_close_notify", TLS_CONNECTION),
+    ("stream.TlsConnection.is_handshaking", TLS_CONNECTION),
+    ("stream.TlsConnection.peer_closed", TLS_CONNECTION),
+    ("stream.TlsConnection.pending", TLS_CONNECTION),
+    ("stream.TlsConnection.alpn_protocol", TLS_CONNECTION),
+    ("stream.TlsConnection.peer_certificate", TLS_CONNECTION),
+    ("stream.TlsConnection.protocol_version", TLS_CONNECTION),
+    ("stream.TlsConnection.cipher_suite", TLS_CONNECTION),
     ("stream.UntrustedPeerError", STREAM),
     ("stream.CertificateExpiredError", STREAM),
     ("stream.CertificateNotYetValidError", STREAM),

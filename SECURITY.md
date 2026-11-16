@@ -34,8 +34,8 @@ vulnerability is to upgrade.
 
 | Version | Supported |
 |---------|-----------|
-| 0.11.x  | yes       |
-| < 0.11  | no        |
+| 0.12.x  | yes       |
+| < 0.12  | no        |
 
 ## Reporting a vulnerability
 
