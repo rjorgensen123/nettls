@@ -63,6 +63,15 @@ without `close_notify`, and the context's ALPN rule says that a list given
 with `set_alpn_protocols` replaces the config's own. Signatures, defaults and
 field types that were missing are now given.
 
+### Changed — why the private AEGIS-256 code point stays, stated in `src/aegis.rs` *(2026-11-16)*
+
+The comment now names the public suite, `TLS_AEGIS_256_SHA512` (`0x1306`,
+from `draft-denis-tls-aegis`), and the three ways this one differs: code
+point, hash and IV. It says that rustls 0.23 has a 12-byte IV, so the public
+suite cannot be built yet, and that the public number on this construction
+would make it fail against the real suite and against a later nettls. No
+code changed.
+
 ## [0.11.0] — Python runs the Rust code
 
 ### Changed — Python uses the Rust code, through `nettls-py` *(2026-11-06)*

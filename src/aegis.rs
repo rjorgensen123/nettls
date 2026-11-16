@@ -5,41 +5,62 @@
 //!
 //! A TLS 1.3 cipher suite with AEGIS-256 as the record AEAD, offered when a
 //! consumer puts [`TransportCipher::Aegis256`] in its [`TransportPolicy`]. It is
-//! **not** `TLS_AEGIS_256_SHA512` (IANA `0x13,0x06`, draft-irtf-cfrg-aegis-aead)
-//! and must not claim to be. Only two nettls ends can speak it, from Rust or
-//! from Python (`nettls-py`); every other party (OpenSSL, browsers) never sees
-//! it offered unless the consumer asks, and skips it as an unknown suite if it
-//! does.
+//! **not** the public suite `TLS_AEGIS_256_SHA512` and must not claim to be.
+//! That suite has the code point `0x13,0x06`, a permanent entry in the IANA TLS
+//! Cipher Suites registry, and is defined in `draft-denis-tls-aegis` (revision
+//! 07, 2026-09-18); AEGIS itself is RFC 10032, which has no TLS part. Only two
+//! nettls ends can speak this one, from Rust or from Python (`nettls-py`);
+//! every other party (OpenSSL, browsers) never sees it offered unless the
+//! consumer asks, and skips it as an unknown suite if it does.
 //!
 //! # Why it deviates (decided 2026-09-04, Roger)
 //!
-//! rustls hands every TLS 1.3 AEAD a **12-byte** IV (`Iv`/`Nonce`, `NONCE_LEN`
-//! = 12 in 0.23; `Iv::MAX_LEN` = 16 in 0.24.0-dev.1 *and* on git-main — checked
-//! against the source, not the changelog). AEGIS-256 needs a **32-byte** nonce.
-//! Nobody upstream is working on a wider IV, and we will not build against a
-//! fork. So instead of waiting (the plan until 2026-09-04) we do three things
-//! the standard suite would not, and write each one down:
+//! rustls 0.23, which this crate builds on, gives every TLS 1.3 AEAD a fixed
+//! **12-byte** IV (`Iv` is `[u8; NONCE_LEN]`, `NONCE_LEN` = 12); its
+//! development line (0.24.0-dev.1 and main) allows at most 16 bytes
+//! (`Iv::MAX_LEN`). AEGIS-256 needs a **32-byte** nonce. rustls issue #3428,
+//! opened 2026-11-13, asks for 32 bytes and had no maintainer answer on
+//! 2026-11-16, and we will not build against a fork. So instead of waiting
+//! (the plan until 2026-09-04), this suite differs from the public one in three
+//! things, each written down:
 //!
-//! | Deviation | What we do | Why it is safe here |
-//! |---|---|---|
-//! | **Nonce** | the 12-byte TLS 1.3 nonce (`iv XOR seq`), left-aligned, zero-padded to 32 bytes | AEGIS-256 needs a nonce that is *unique per key*; the TLS nonce already is. Padding preserves uniqueness. |
-//! | **Code point** | `0xFF06` — TLS private use (`0xFF,0x00`–`0xFF,0xFF`), echoing `0x1306` | a non-standard suite must not squat on the IANA code point; foreign peers skip unknown suites (standard TLS) |
-//! | **Hash pairing** | SHA-384 HKDF, reusing ring's `TLS13_AES_256_GCM_SHA384` providers | the standard pairs SHA-512; ring's hash/HMAC types are private to rustls, and we add no primitive glue of our own. SHA-384 is what the transcript and key schedule of our other suites already use |
+//! | Deviation | What we do | The public suite | Why it is safe here |
+//! |---|---|---|---|
+//! | **Nonce** | the 12-byte TLS 1.3 nonce (`iv XOR seq`), left-aligned, zero-padded to 32 bytes | derives a 32-byte IV | AEGIS-256 needs a nonce that is *unique per key*; the TLS nonce already is. Padding preserves uniqueness. |
+//! | **Code point** | `0xFF06` — TLS private use (`0xFF,0x00`–`0xFF,0xFF`), echoing `0x1306` | `0x1306` | see "Why the private code point stays" below |
+//! | **Hash pairing** | SHA-384 HKDF, reusing ring's `TLS13_AES_256_GCM_SHA384` providers | SHA-512 | ring's hash/HMAC types are private to rustls, and we add no primitive glue of our own. SHA-384 is what the transcript and key schedule of our other suites already use |
 //!
-//! The AEAD itself is untouched: the `aegis` crate (by a co-author of the
-//! draft, verified against its vectors — the same primitive krypto uses at
-//! rest), 256-bit key, 128-bit tag, TLS 1.3 record AAD exactly as rustls
-//! computes it (`make_tls13_aad`). Nothing cryptographic is implemented here;
-//! this file is the *seam* between rustls' record layer and the primitive.
+//! Everything else is the same as in the public suite: the AEGIS-256 primitive
+//! (the `aegis` crate, by a co-author of the draft, verified against its
+//! vectors — the same primitive krypto uses at rest), the 32-byte key, the
+//! 16-byte tag, the TLS 1.3 record AAD exactly as rustls computes it
+//! (`make_tls13_aad`), and the limit of 2^48 records per key. Nothing
+//! cryptographic is implemented here; this file is the *seam* between rustls'
+//! record layer and the primitive.
+//!
+//! # Why the private code point stays
+//!
+//! With the IV and the hash above, this construction is not the public suite,
+//! and giving it the public number would not make it one:
+//!
+//! - two nettls peers would still understand each other;
+//! - a peer with the real `0x1306` would agree on the number and then fail the
+//!   handshake, because the two sides derive different keys;
+//! - once nettls builds the real suite, an old and a new nettls would both say
+//!   `0x1306` and fail against each other. With the private number they see
+//!   that they share no AEGIS suite, and use what the transport policy
+//!   otherwise allows.
 //!
 //! # The exit
 //!
-//! The day rustls ships AEGIS suites, or a release carries a 32-byte IV
-//! (`Iv::MAX_LEN >= 32`), this file is **replaced**, not extended: drop the
-//! nonce padding, drop the private code point, use `0x1306` with SHA-512, keep
-//! [`TransportCipher::Aegis256`] as the consumer's name for it. The test
-//! `the_deviation_still_has_its_reason` fails the moment rustls widens the
-//! nonce, so the exit is not something to remember — it is something the build
+//! The day rustls ships AEGIS suites, or allows a 32-byte IV
+//! (`Iv::MAX_LEN >= 32`), this file is **replaced**, not extended: the nonce
+//! padding and the private code point go, `0x1306` with SHA-512 comes in, and
+//! [`TransportCipher::Aegis256`] stays as the name a consumer uses. The test
+//! `the_deviation_still_has_its_reason` asserts that rustls's `NONCE_LEN` is
+//! still 12, so it fails only if rustls changes that constant; a larger
+//! `Iv::MAX_LEN` does not fail it. Check the IV length by hand when rustls is
+//! upgraded: only a changed `NONCE_LEN` is something the build
 //! tells you. The tracking case is **L2-076**.
 //!
 //! [`TransportCipher::Aegis256`]: crate::transport::TransportCipher::Aegis256
@@ -61,8 +82,11 @@ use rustls::{
 };
 use zeroize::Zeroizing;
 
-/// The private-use code point this suite is offered under. **Not** the IANA
-/// `TLS_AEGIS_256_SHA512` (`0x1306`) — see the module docs for why.
+/// The private-use code point this suite is offered under, kept on purpose.
+/// **Not** the IANA `TLS_AEGIS_256_SHA512` (`0x1306`): this construction has a
+/// different IV and hash, so under `0x1306` it would fail against the real
+/// suite, and against a later nettls that builds it. See "Why the private code
+/// point stays" in the module docs.
 pub const CODEPOINT: u16 = 0xFF06;
 
 /// AEGIS-256 tag length in the record: 128 bits, as the draft's TLS profile.
@@ -289,9 +313,10 @@ mod tests {
         assert_eq!(s.tls13().unwrap().aead_alg.key_len(), KEY_LEN);
     }
 
-    /// **The exit condition, checked by the build.** rustls 0.23 fixes the
-    /// TLS 1.3 nonce at 12 bytes. When a rustls we build against widens it,
-    /// this fails — and that is the signal to replace this file with the
+    /// **The part of the exit condition the build can check.** rustls 0.23
+    /// fixes the TLS 1.3 nonce at 12 bytes (`NONCE_LEN`); a larger
+    /// `Iv::MAX_LEN` alone does not fail this. When a rustls we build against
+    /// changes `NONCE_LEN`, this fails — and that is the signal to replace this file with the
     /// standard suite (L2-076), not to fix the test.
     #[test]
     fn the_deviation_still_has_its_reason() {

@@ -268,9 +268,10 @@ ends speak it, from Rust or from Python (`nettls-py`, 0.11.0); a foreign peer (O
 skips it as an unknown suite — the fallback rule realised by TLS itself: list `[Aegis256, Aes256Gcm]`
 and a nettls peer lands on AEGIS, everyone else on AES-256-GCM, with no negotiation code of ours.
 
-**Why it deviates (decided 2026-09-04):** rustls gives every TLS 1.3 AEAD a 12-byte nonce
-(`NONCE_LEN`; 16 in 0.24-dev and on git-main, checked against the source), AEGIS-256 needs 32,
-and nobody upstream is working on it. So this suite, written down as what it is:
+**Why it deviates (decided 2026-09-04):** rustls 0.23 gives every TLS 1.3 AEAD a fixed 12-byte
+IV (`NONCE_LEN`), its development line allows at most 16 (`Iv::MAX_LEN`), and AEGIS-256 needs
+32; rustls issue #3428 (opened 2026-11-13) asks for 32 and had no maintainer answer on
+2026-11-16. So this suite, written down as what it is:
 
 | Deviation | What we do |
 |---|---|
@@ -284,8 +285,9 @@ implemented here — the file is the seam between rustls' record layer and the p
 
 **The exit:** when rustls ships AEGIS suites or a 32-byte IV, `aegis.rs` is *replaced* — drop the
 padding and the private point, use `0x1306` with SHA-512 — and `TransportCipher::Aegis256` stays
-as the consumer's name. The unit test `the_deviation_still_has_its_reason` fails the moment
-rustls widens the nonce, so the exit is announced by the build.
+as the consumer's name. The unit test `the_deviation_still_has_its_reason` fails only if
+rustls changes `NONCE_LEN`; a larger `Iv::MAX_LEN` does not fail it, so the IV length is checked by
+hand when rustls is upgraded.
 
 ### `RotatingResolver` — change certificates without a restart
 
