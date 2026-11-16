@@ -285,9 +285,9 @@ implemented here — the file is the seam between rustls' record layer and the p
 
 **The exit:** when rustls ships AEGIS suites or a 32-byte IV, `aegis.rs` is *replaced* — drop the
 padding and the private point, use `0x1306` with SHA-512 — and `TransportCipher::Aegis256` stays
-as the consumer's name. The unit test `the_deviation_still_has_its_reason` fails only if
-rustls changes `NONCE_LEN`; a larger `Iv::MAX_LEN` does not fail it, so the IV length is checked by
-hand when rustls is upgraded.
+as the consumer's name. The unit test `the_deviation_still_has_its_reason` fails once rustls's
+TLS 1.3 IV is no longer a fixed 12-byte array (`NONCE_LEN` or the size of `Iv` changes), so the
+exit is announced by the build.
 
 ### `RotatingResolver` — change certificates without a restart
 

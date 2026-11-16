@@ -72,6 +72,13 @@ suite cannot be built yet, and that the public number on this construction
 would make it fail against the real suite and against a later nettls. No
 code changed.
 
+### Fixed — the AEGIS reminder test notices a changed IV type *(2026-11-16)*
+
+The test `the_deviation_still_has_its_reason` checked only `NONCE_LEN == 12`.
+rustls's development line keeps that constant but makes `Iv` a buffer with a
+length, up to `Iv::MAX_LEN`, so a longer IV would have passed unnoticed. The
+test now also checks that `Iv` is exactly a 12-byte array.
+
 ## [0.11.0] — Python runs the Rust code
 
 ### Changed — Python uses the Rust code, through `nettls-py` *(2026-11-06)*

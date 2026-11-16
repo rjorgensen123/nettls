@@ -57,10 +57,11 @@
 //! (`Iv::MAX_LEN >= 32`), this file is **replaced**, not extended: the nonce
 //! padding and the private code point go, `0x1306` with SHA-512 comes in, and
 //! [`TransportCipher::Aegis256`] stays as the name a consumer uses. The test
-//! `the_deviation_still_has_its_reason` asserts that rustls's `NONCE_LEN` is
-//! still 12, so it fails only if rustls changes that constant; a larger
-//! `Iv::MAX_LEN` does not fail it. Check the IV length by hand when rustls is
-//! upgraded: only a changed `NONCE_LEN` is something the build
+//! `the_deviation_still_has_its_reason` asserts that `NONCE_LEN` is 12 and that
+//! `Iv` is exactly that size, the plain 12-byte array of rustls 0.23. rustls's
+//! development line keeps `NONCE_LEN` at 12 but makes `Iv` a buffer with a
+//! length (up to `Iv::MAX_LEN`), so a rustls whose IV is no longer the fixed
+//! 12-byte array fails the test: the exit is something the build
 //! tells you. The tracking case is **L2-076**.
 //!
 //! [`TransportCipher::Aegis256`]: crate::transport::TransportCipher::Aegis256
@@ -313,17 +314,21 @@ mod tests {
         assert_eq!(s.tls13().unwrap().aead_alg.key_len(), KEY_LEN);
     }
 
-    /// **The part of the exit condition the build can check.** rustls 0.23
-    /// fixes the TLS 1.3 nonce at 12 bytes (`NONCE_LEN`); a larger
-    /// `Iv::MAX_LEN` alone does not fail this. When a rustls we build against
-    /// changes `NONCE_LEN`, this fails — and that is the signal to replace this file with the
+    /// **The exit condition, checked by the build.** In rustls 0.23 the TLS 1.3
+    /// IV is a fixed 12-byte array: `NONCE_LEN` is 12 and `Iv` is that array
+    /// and nothing more. The development line keeps `NONCE_LEN` but gives `Iv`
+    /// a length and a larger buffer, so the size of `Iv` is checked too. When
+    /// this fails, see whether rustls allows a 32-byte IV; that is the signal
+    /// to replace this file with the
     /// standard suite (L2-076), not to fix the test.
     #[test]
     fn the_deviation_still_has_its_reason() {
         assert_eq!(
-            NONCE_LEN, 12,
-            "rustls has changed its TLS 1.3 nonce length — revisit aegis.rs: can the \
-             standard TLS_AEGIS_256_SHA512 (0x1306, 32-byte IV, SHA-512) replace this deviation? (L2-076)"
+            (NONCE_LEN, size_of::<Iv>()),
+            (12, 12),
+            "rustls has changed its TLS 1.3 IV (NONCE_LEN or the Iv type) — revisit aegis.rs: if a \
+             32-byte IV is now possible, the standard TLS_AEGIS_256_SHA512 (0x1306, 32-byte IV, \
+             SHA-512) replaces this deviation (L2-076)"
         );
     }
 }
