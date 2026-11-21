@@ -938,6 +938,47 @@ fn announcer_for(dir: &std::path::Path, c0: &Gen, peers: &[&str]) -> nettls::ann
 }
 
 #[test]
+fn a_password_over_krypto_limit_is_refused_at_construction() {
+    // 0.12.0: refused before anything on disk is read or written, with the
+    // answer the lockbox gives for it.
+    use nettls::RotatingResolver;
+    use nettls::announcer::{Announcer, OwnMaterial, Schedule};
+
+    nettls::install_crypto_provider();
+    let dir = std::env::temp_dir().join(format!("nettls-fs0162-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let c0 = generation();
+    let max = krypto::password::MAX_PASSWORD_BYTES;
+    let err = Announcer::new(
+        "gateway",
+        &dir,
+        SelfSignedParams::new("localhost", ["localhost"]),
+        Arc::new(RotatingResolver::new(&c0.material).unwrap()),
+        OwnMaterial {
+            previous: None,
+            current: (c0.fp_bar(), c0.key()),
+        },
+        Schedule::new(vec!["service".to_string()], 0),
+        Some(krypto::SecretString::from_string("p".repeat(max + 1)).unwrap()),
+    )
+    .err()
+    .expect("a password over the limit is refused");
+    assert!(matches!(err, nettls::TlsError::Params(_)), "{err:?}");
+    assert!(
+        err.to_string()
+            .contains(&format!("password is {} bytes — max {max}", max + 1)),
+        "{err}"
+    );
+    assert!(
+        std::fs::read_dir(&dir).unwrap().next().is_none(),
+        "the refused announcer created something in {}",
+        dir.display()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn saving_with_a_password_writes_nothing_in_cleartext_first() {
     // Up to 0.10 `save` wrote the key in cleartext to `.tmp-material/`, then
     // read it back, locked it and deleted the directory. Now it is built and

@@ -2,7 +2,8 @@
 #
 # The module itself needs nothing: the protocol, the certificates and TLS are
 # the Rust code inside it. Here are the build tool, the test runner, and
-# krypto-py, which the tests take Ed25519 from (it is krypto's, in Rust too).
+# krypto-py: the tests take Ed25519 from it (it is krypto's, in Rust too), and
+# krypto's size limits for data and passwords.
 # uvicorn and httpx, with what they pull in, are the server and client that
 # test nettls_py.sslcontext with libraries that take an ssl.SSLContext.
 #

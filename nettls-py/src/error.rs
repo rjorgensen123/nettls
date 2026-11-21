@@ -94,7 +94,7 @@ pyo3::create_exception!(
     nettls_py,
     EnvelopeError,
     TlsError,
-    "`TlsError::Envelope`: the sealed envelope or the password lock failed (0.11.0), or its input is too long (0.12.0)."
+    "`TlsError::Envelope`: the sealed envelope or the password lock failed (0.11.0); also an input that is too long, and content krypto refuses as too large after opening (0.12.0)."
 );
 pyo3::create_exception!(
     nettls_py,
@@ -106,7 +106,7 @@ pyo3::create_exception!(
     nettls_py,
     RandomError,
     TlsError,
-    "`TlsError::Random`: the operating system could not supply random numbers (0.11.0)."
+    "`TlsError::Random`: random numbers could not be obtained; the message says why (0.11.0)."
 );
 pyo3::create_exception!(
     nettls_py,

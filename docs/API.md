@@ -620,7 +620,9 @@ nothing, and the next call tries again. At start, the stored chain is checked ag
 and the 24-hour cap holds across the restart.
 
 `password: None` means **key material in cleartext on disk**. Legitimate (mode 1 with an
-operator-uploaded certificate), but it is a choice, and it must be visible as one.
+operator-uploaded certificate), but it is a choice, and it must be visible as one. *(0.12.0)* A
+password over `krypto::password::MAX_PASSWORD_BYTES` is `Params`, refused before anything on disk
+is read or written.
 
 ### Deviation and downgrade
 
@@ -810,13 +812,16 @@ The envelope has **no sender** *(0.11.0)*: anyone with the recipient's public ke
 and an old one can be delivered again. Who sealed it, and when, must come from the channel or
 the content. Envelope and lock failures are `TlsError::Envelope` (too short, wrong format, key
 generation, derivation or sealing), except: a recipient key of the wrong length, or a low-order
-public key, is `Params`; a wrong key or password, and an invalid ephemeral key in `open`, are
-`ProofInvalid`; a lock whose salt cannot be drawn is `Random`; plaintext that cannot be held in
-locked memory is `LockedMemory`, and *(0.12.0)* so is the content `open` or `unlock` has opened, or
-the shared secret of the key exchange, when it cannot be held. *(0.12.0)* A plaintext over `krypto::MAX_DATA_BYTES`, or a
-password over `krypto::password::MAX_PASSWORD_BYTES`, is `Params`, and a locked file or envelope
-whose blob is over krypto's limit for a blob (`krypto::MAX_DATA_BYTES` + 86 bytes) is `Envelope`,
-refused before the password or key is used.
+public key, is `Params`; a wrong key or password, sealed content that was altered, and an invalid
+ephemeral key in `open`, are `ProofInvalid`; a lock whose salt cannot be drawn is `Random`;
+plaintext, or the envelope's key material, that cannot be held in locked memory is
+`LockedMemory`, and *(0.12.0)* so is the content `open` or `unlock` has opened, or the shared
+secret of the key exchange, when it cannot be held. *(0.12.0)* A plaintext over
+`krypto::MAX_DATA_BYTES`, or a password over `krypto::password::MAX_PASSWORD_BYTES`, is `Params`,
+and a locked file or envelope whose blob is over krypto's limit for a blob
+(`krypto::MAX_DATA_BYTES` + 86 bytes) is `Envelope`, refused before the password or key is used.
+*(0.12.0)* An inner blob that is not a krypto blob, or content krypto refuses as too large after
+opening, is `Envelope`.
 
 ## `lockbox` — lock with a password
 
@@ -849,9 +854,9 @@ pub enum TlsError {
     Chain(String),           // the continuity chain is broken — the system's best-explained error
     Sign(String),
     Negotiation(String),     // no authenticated common AEAD — hard failure (0.8.2)
-    Envelope(String),        // the envelope or the password lock failed (0.11.0); too long (0.12.0)
+    Envelope(String),        // the envelope or the password lock failed (0.11.0); too long (0.12.0); content too large after opening (0.12.0)
     LockedMemory(String),    // a secret could not be held in locked memory (0.11.0)
-    Random(String),          // the operating system gave no random numbers (0.11.0)
+    Random(String),          // random numbers could not be obtained; the message says why (0.11.0)
     LockPoisoned(String),    // a thread panicked holding a lock — a bug (0.11.0)
     Encode(String),          // a value could not be encoded as hex, base64 or PEM (0.12.0)
 }
@@ -872,9 +877,9 @@ pub enum TlsError {
 | `Chain` | the chain does not connect |
 | `Sign` | signing failed |
 | `Negotiation` | no *authenticated* common AEAD — the connection must fail, never silently weaken *(0.8.2)* |
-| `Envelope` | the sealed envelope or the password lock failed: too short, wrong format, or a key, derivation or sealing step *(0.11.0)*; too long for krypto's largest blob *(0.12.0)* |
+| `Envelope` | the sealed envelope or the password lock failed: too short, wrong format, or a key, derivation or sealing step *(0.11.0)*; too long for krypto's largest blob *(0.12.0)*; content krypto refuses as too large after opening *(0.12.0)* |
 | `LockedMemory` | a secret could not be held in locked memory (`mlock`, `RLIMIT_MEMLOCK`) *(0.11.0)*; a secret over krypto's size limit is `Params` *(0.12.0)* |
-| `Random` | the operating system could not supply random numbers *(0.11.0)* |
+| `Random` | random numbers could not be obtained; the message says why *(0.11.0)* |
 | `LockPoisoned` | a thread panicked while holding one of the crate's locks — a bug, not an input error *(0.11.0)* |
 | `Encode` | a value could not be encoded as hex, base64 or PEM: it is over krypto's size limit, or the memory for the text could not be reserved *(0.12.0)* |
 

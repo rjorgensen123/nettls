@@ -57,8 +57,16 @@ pub(crate) fn hold(b: &[u8], what: &str) -> PyResult<krypto::SecretBuf> {
     krypto::SecretBuf::from_vec(b.to_vec()).map_err(|e| err(not_held(what, e)))
 }
 
-/// A password from Python, held in locked memory.
+/// A password from Python, held in locked memory. A password over
+/// `krypto::password::MAX_PASSWORD_BYTES` is `Params`, with the text krypto
+/// gives for it, refused before anything is locked, so a long password under a
+/// low memlock limit is not reported as locked memory (0.12.0).
 pub(crate) fn hold_str(s: &str, what: &str) -> PyResult<krypto::SecretString> {
+    let max = krypto::password::MAX_PASSWORD_BYTES;
+    if s.len() > max {
+        let refused = krypto::Error::Format(format!("password is {} bytes — max {max}", s.len()));
+        return Err(err(not_held(what, refused)));
+    }
     krypto::SecretString::from_string(s.to_owned()).map_err(|e| err(not_held(what, e)))
 }
 

@@ -101,7 +101,7 @@ Just as important as what it can:
 | Key type on own certificates | **ECDSA P-256** |
 | Signatures when identity changes | ECDSA P-256 and **Ed25519** — via krypto |
 | Sealing to one recipient | **X25519** — via krypto |
-| Secrets in memory, encryption at rest | **krypto** — AEGIS-256 by default, AES-256-GCM as the interop bridge |
+| Secrets in memory, encryption at rest | **krypto** — nettls's `lock` and `seal` use AEGIS-256 by default, AES-256-GCM as the interop bridge |
 | Max lifetime of an own certificate | 397 days — browsers reject longer |
 | Python | **PyO3** — `nettls-py` runs this same Rust code *(0.11.0)* |
 

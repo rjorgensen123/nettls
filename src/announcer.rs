@@ -1212,6 +1212,10 @@ impl Announcer {
     /// silently wrong state: you either get a correct one, or an error you
     /// must handle. (This used to be two separate calls the consumer had to
     /// remember — the trap SPEC-nettls §6.11b exists to remove.)
+    ///
+    /// A password over `krypto::password::MAX_PASSWORD_BYTES` is
+    /// [`TlsError::Params`], refused before anything on disk is read or
+    /// written *(0.12.0)*.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: impl Into<String>,
@@ -1222,6 +1226,9 @@ impl Announcer {
         schedule: Schedule,
         password: Option<krypto::SecretString>,
     ) -> Result<Self, TlsError> {
+        if let Some(pw) = &password {
+            crate::lockbox::check_password_len(pw)?;
+        }
         if password.is_none() {
             warn_cleartext();
         }

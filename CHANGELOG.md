@@ -103,6 +103,13 @@ error naming another cause, such as a wrong password. It is now `Params` for a
 password or secret that is too large, `Envelope` for a locked file or envelope
 that is too long, and `LockedMemory` when the content cannot be held.
 
+### Fixed — more errors name the real cause *(2026-11-21)*
+
+A locked file or envelope that krypto refuses as malformed, or as too large
+after opening, is `Envelope`, not `ProofInvalid`. A password over krypto's limit
+is `Params` before anything is locked or read, also in `Announcer::new`. The
+text of `Random` no longer names the operating system.
+
 ## [0.11.0] — Python runs the Rust code
 
 ### Changed — Python uses the Rust code, through `nettls-py` *(2026-11-06)*

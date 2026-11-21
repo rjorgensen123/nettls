@@ -72,6 +72,7 @@ pub fn lock(password: &SecretString, plaintext: &[u8]) -> Result<Vec<u8>, TlsErr
 /// A password or plaintext over krypto's limit is [`TlsError::Params`], as
 /// for [`lock`] *(0.12.0)*.
 pub fn lock_with(password: &SecretString, plaintext: &[u8], alg: Alg) -> Result<Vec<u8>, TlsError> {
+    check_password_len(password)?;
     // `random_bytes` and not `SecretBuf::random`: the salt is stored in
     // cleartext right in front of the blob — it is public by design.
     let salt = krypto::random_bytes(SALT_LEN).map_err(|e| TlsError::Random(e.to_string()))?;
@@ -87,12 +88,14 @@ pub fn lock_with(password: &SecretString, plaintext: &[u8], alg: Alg) -> Result<
 
 /// Unlocks. **A wrong password gives an authentication failure**, not an empty result.
 ///
-/// A file longer than header, salt and krypto's largest blob is
-/// [`TlsError::Envelope`], refused before the password is used, a password
-/// over `krypto::password::MAX_PASSWORD_BYTES` is [`TlsError::Params`], and
-/// unlocked content that cannot be held in locked memory is
-/// [`TlsError::LockedMemory`] *(0.12.0)*.
+/// *(0.12.0)* A password over `krypto::password::MAX_PASSWORD_BYTES` is
+/// [`TlsError::Params`], checked first. A file longer than header, salt and
+/// krypto's largest blob is [`TlsError::Envelope`], refused before a key is
+/// derived from the password; so is a blob that is not a krypto blob, and
+/// content krypto refuses as too large once unlocked. Unlocked content that
+/// cannot be held in locked memory is [`TlsError::LockedMemory`].
 pub fn unlock(password: &SecretString, file: &[u8]) -> Result<SecretBuf, TlsError> {
+    check_password_len(password)?;
     if file.len() < MAGIC.len() + SALT_LEN {
         return Err(TlsError::Envelope(
             "the locked file is too short to contain header and salt".into(),
@@ -122,6 +125,9 @@ pub fn unlock(password: &SecretString, file: &[u8]) -> Result<SecretBuf, TlsErro
 
     krypto::open(&dk, blob).map_err(|e| match e {
         krypto::Error::Hardening(_) => TlsError::not_held("the unlocked content", e),
+        krypto::Error::Format(_) => {
+            TlsError::Envelope(format!("the locked file was not accepted: {e}"))
+        }
         _ => TlsError::ProofInvalid(
             "could not unlock the local state — wrong password, or the file was altered. \
              (We store no verification hash, so this is the AEAD speaking up.)"
@@ -151,12 +157,30 @@ fn seal(
 fn derive(password: &SecretString, salt: &[u8]) -> Result<SecretBuf, TlsError> {
     krypto::password::derive_key(password, salt, krypto::password::Preset::Interactive).map_err(
         |e| match e {
-            krypto::Error::Format(_) => {
-                TlsError::Params(format!("the password was not accepted: {e}"))
-            }
+            krypto::Error::Format(_) => password_not_accepted(e),
             _ => TlsError::Envelope(format!("argon2 derivation failed: {e}")),
         },
     )
+}
+
+/// Refuses a password over `krypto::password::MAX_PASSWORD_BYTES` with the
+/// answer krypto's own check gives, before the password is used for anything
+/// *(0.12.0)*. [`lock_with`], [`unlock`] and `Announcer::new` call it first.
+pub(crate) fn check_password_len(password: &SecretString) -> Result<(), TlsError> {
+    let max = krypto::password::MAX_PASSWORD_BYTES;
+    if password.len() > max {
+        return Err(password_not_accepted(krypto::Error::Format(format!(
+            "password is {} bytes — max {max}",
+            password.len()
+        ))));
+    }
+    Ok(())
+}
+
+/// A password krypto refuses, as [`TlsError::Params`] with krypto's text
+/// *(0.12.0)*.
+fn password_not_accepted(e: krypto::Error) -> TlsError {
+    TlsError::Params(format!("the password was not accepted: {e}"))
 }
 
 #[cfg(test)]
@@ -256,12 +280,14 @@ mod tests {
 
     #[test]
     fn a_password_over_krypto_limit_is_params() {
-        // 0.12.0: krypto refuses it before Argon2 runs; the message says so.
+        // 0.12.0: refused before Argon2 runs, and before the file is looked
+        // at; the message says so.
         let max = krypto::password::MAX_PASSWORD_BYTES;
         let long = pw(&"p".repeat(max + 1));
         for err in [
             lock(&long, b"x").unwrap_err(),
             unlock(&long, &framed(b"FAFN")).unwrap_err(),
+            unlock(&long, b"short").unwrap_err(),
         ] {
             assert!(matches!(err, TlsError::Params(_)), "{err:?}");
             assert!(format!("{err}").contains(&format!("max {max}")), "{err}");
@@ -283,6 +309,17 @@ mod tests {
         let err = unlock(&pw("secret"), &file).unwrap_err();
         assert!(matches!(err, TlsError::Envelope(_)), "{err:?}");
         assert!(format!("{err}").contains(&file.len().to_string()), "{err}");
+    }
+
+    #[test]
+    fn a_blob_krypto_refuses_as_format_is_envelope() {
+        // 0.12.0: a blob that is not a krypto blob is a format problem, not a
+        // wrong password; the message carries krypto's text.
+        let err = unlock(&pw("secret"), &framed(b"not a krypto blob")).unwrap_err();
+        assert!(matches!(err, TlsError::Envelope(_)), "{err:?}");
+        let text = format!("{err}");
+        assert!(text.contains("the locked file was not accepted"), "{text}");
+        assert!(text.contains("FAFN"), "{text}");
     }
 
     /// The locked file the child run of `unlock_under_a_low_memlock_limit`

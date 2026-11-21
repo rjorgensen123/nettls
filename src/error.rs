@@ -73,13 +73,14 @@ pub enum TlsError {
     /// The sealed envelope ([`crate::envelope`]) or the password lock
     /// ([`crate::lockbox`]) failed: an input that is too short or of the wrong
     /// format, or a key, derivation or sealing step that did not succeed
-    /// *(0.11.0)*, or an input too long for krypto's largest blob *(0.12.0)*.
-    /// A wrong key or password is [`TlsError::ProofInvalid`].
+    /// *(0.11.0)*, or an input too long for krypto's largest blob *(0.12.0)*,
+    /// or content krypto refuses as too large after opening *(0.12.0)*. A
+    /// wrong key or password is [`TlsError::ProofInvalid`].
     Envelope(String),
     /// A secret could not be held in locked memory — typically `mlock` against
     /// a low `RLIMIT_MEMLOCK` *(0.11.0)*.
     LockedMemory(String),
-    /// The operating system could not supply random numbers *(0.11.0)*.
+    /// Random numbers could not be obtained *(0.11.0)*. The message says why.
     Random(String),
     /// A thread panicked while holding one of the crate's locks, so the state
     /// it guards may be half-updated *(0.11.0)*. A bug, not an input error.
@@ -123,12 +124,7 @@ impl fmt::Display for TlsError {
                 f,
                 "could not hold {s} in locked memory (mlock — check RLIMIT_MEMLOCK)"
             ),
-            TlsError::Random(s) => {
-                write!(
-                    f,
-                    "the operating system could not supply random numbers: {s}"
-                )
-            }
+            TlsError::Random(s) => write!(f, "random numbers could not be obtained: {s}"),
             TlsError::LockPoisoned(s) => write!(
                 f,
                 "{s} is poisoned: a thread panicked while holding it, so the state it guards may be half-updated"
@@ -189,7 +185,7 @@ mod tests {
         let e = TlsError::Random("getrandom failed".into());
         assert!(
             e.to_string()
-                .contains("could not supply random numbers: getrandom failed")
+                .contains("random numbers could not be obtained: getrandom failed")
         );
         let e = TlsError::poisoned("the rotation lock");
         assert!(

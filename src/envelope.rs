@@ -168,10 +168,11 @@ pub fn seal_with(recipient_public: &[u8], plaintext: &[u8], alg: Alg) -> Result<
 
 /// Opens an envelope. **Only** the recipient can.
 ///
-/// An envelope longer than header, ephemeral key and krypto's largest blob is
-/// [`TlsError::Envelope`], refused before the key is used, and opened content
-/// or a shared secret that cannot be held in locked memory is
-/// [`TlsError::LockedMemory`] *(0.12.0)*.
+/// *(0.12.0)* An envelope longer than header, ephemeral key and krypto's
+/// largest blob is [`TlsError::Envelope`], refused before the key is used; so
+/// is a blob that is not a krypto blob, and content krypto refuses as too
+/// large once opened. Opened content or a shared secret that cannot be held
+/// in locked memory is [`TlsError::LockedMemory`].
 pub fn open(key: &RecipientKey, envelope: &[u8]) -> Result<SecretBuf, TlsError> {
     if envelope.len() < MAGIC.len() + X25519_LEN {
         return Err(TlsError::Envelope("the envelope is too short".into()));
@@ -205,6 +206,9 @@ pub fn open(key: &RecipientKey, envelope: &[u8]) -> Result<SecretBuf, TlsError> 
     let dk = derive(&shared, ephemeral_pub, &my_pub)?;
     krypto::open(&dk, blob).map_err(|e| match e {
         krypto::Error::Hardening(_) => TlsError::not_held("the opened content", e),
+        krypto::Error::Format(_) => {
+            TlsError::Envelope(format!("the envelope was not accepted: {e}"))
+        }
         _ => TlsError::ProofInvalid(
             "could not open the envelope — it is not sealed to this key, \
              or it was altered"
@@ -360,6 +364,21 @@ mod tests {
             format!("{err}").contains(&envelope.len().to_string()),
             "{err}"
         );
+    }
+
+    #[test]
+    fn a_blob_krypto_refuses_as_format_is_envelope() {
+        // 0.12.0: a blob that is not a krypto blob is a format problem, not a
+        // wrong key; the message carries krypto's text.
+        let (n, public) = RecipientKey::generate().unwrap();
+        let mut envelope = MAGIC.to_vec();
+        envelope.extend_from_slice(&public);
+        envelope.extend_from_slice(b"not a krypto blob");
+        let err = open(&n, &envelope).unwrap_err();
+        assert!(matches!(err, TlsError::Envelope(_)), "{err:?}");
+        let text = format!("{err}");
+        assert!(text.contains("the envelope was not accepted"), "{text}");
+        assert!(text.contains("FAFN"), "{text}");
     }
 
     #[test]

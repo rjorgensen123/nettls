@@ -482,9 +482,19 @@ def test_wrong_format_says_it_is_the_format():
 
 
 def test_password_over_krypto_limit_is_params():
-    # 0.12.0: krypto refuses it before Argon2 runs.
-    with pytest.raises(nettls.ParamsError, match="max 1024"):
-        L.lock("p" * 1025, b"x")
+    # 0.12.0: refused before Argon2 runs, and before the file is looked at.
+    limit = krypto_py.password.MAX_PASSWORD_BYTES
+    with pytest.raises(nettls.ParamsError, match=f"max {limit}"):
+        L.lock("p" * (limit + 1), b"x")
+    with pytest.raises(nettls.ParamsError, match=f"max {limit}"):
+        L.unlock("p" * (limit + 1), b"short")
+
+
+def test_a_long_password_is_params_before_it_is_locked():
+    # 0.12.0: the binding checks the length before it locks the password, so a
+    # password too large for locked memory is still refused by its size.
+    with pytest.raises(nettls.ParamsError, match="the password was not accepted"):
+        L.lock("p" * (2 * 1024 * 1024), b"x")
 
 
 def test_envelope_roundtrip_and_public_part():
