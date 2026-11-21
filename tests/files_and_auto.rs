@@ -6,17 +6,17 @@ use std::path::PathBuf;
 
 use nettls::{CERT_FILE, CertOrigin, CertSource, KEY_FILE, SelfSignedParams, TlsMaterial};
 
-/// Enkel temp-katalog uten dependency. Ryddes i `Drop`.
+/// A simple temp directory without a dependency. Removed in `Drop`.
 struct TempDir(PathBuf);
 
 impl TempDir {
     fn new(name: &str) -> Self {
         let mut p = std::env::temp_dir();
-        let unik = std::time::SystemTime::now()
+        let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        p.push(format!("nettls-test-{name}-{unik}"));
+        p.push(format!("nettls-test-{name}-{unique}"));
         fs::create_dir_all(&p).unwrap();
         TempDir(p)
     }
@@ -38,19 +38,19 @@ fn params() -> SelfSignedParams {
 #[test]
 fn save_pem_and_load_back_from_file_gives_same_fingerprint() {
     let dir = TempDir::new("save");
-    let generert = TlsMaterial::load(&CertSource::self_signed(params())).unwrap();
-    generert.save_pem(dir.path()).unwrap();
+    let generated = TlsMaterial::load(&CertSource::self_signed(params())).unwrap();
+    generated.save_pem(dir.path()).unwrap();
 
     let cert_path = dir.path().join(CERT_FILE);
     let key_path = dir.path().join(KEY_FILE);
     assert!(cert_path.is_file() && key_path.is_file());
 
-    let lastet = TlsMaterial::load(&CertSource::files(&cert_path, &key_path)).unwrap();
-    assert_eq!(generert.fingerprint_sha256(), lastet.fingerprint_sha256());
-    assert_eq!(lastet.origin(), CertOrigin::Files);
-    assert_eq!(lastet.sans(), generert.sans());
+    let loaded = TlsMaterial::load(&CertSource::files(&cert_path, &key_path)).unwrap();
+    assert_eq!(generated.fingerprint_sha256(), loaded.fingerprint_sha256());
+    assert_eq!(loaded.origin(), CertOrigin::Files);
+    assert_eq!(loaded.sans(), generated.sans());
     // The material must still be usable for an actual ServerConfig.
-    lastet.server_config().unwrap();
+    loaded.server_config().unwrap();
 }
 
 #[cfg(unix)]
@@ -80,15 +80,15 @@ fn key_file_is_0600_and_cert_file_0644() {
 #[test]
 fn load_from_pem_in_memory() {
     let dir = TempDir::new("mem");
-    let generert = TlsMaterial::load(&CertSource::self_signed(params())).unwrap();
-    generert.save_pem(dir.path()).unwrap();
+    let generated = TlsMaterial::load(&CertSource::self_signed(params())).unwrap();
+    generated.save_pem(dir.path()).unwrap();
 
     let cert_pem = fs::read(dir.path().join(CERT_FILE)).unwrap();
     let key_pem = fs::read(dir.path().join(KEY_FILE)).unwrap();
-    let lastet = TlsMaterial::load(&CertSource::pem(cert_pem, key_pem)).unwrap();
+    let loaded = TlsMaterial::load(&CertSource::pem(cert_pem, key_pem)).unwrap();
 
-    assert_eq!(lastet.fingerprint_sha256(), generert.fingerprint_sha256());
-    assert_eq!(lastet.origin(), CertOrigin::Pem);
+    assert_eq!(loaded.fingerprint_sha256(), generated.fingerprint_sha256());
+    assert_eq!(loaded.origin(), CertOrigin::Pem);
 }
 
 #[test]
@@ -187,8 +187,8 @@ fn auto_reports_an_unreadable_stored_file_and_leaves_it() {
 
 #[test]
 fn files_gives_understandable_error_on_mismatched_key() {
-    let a = TempDir::new("par-a");
-    let b = TempDir::new("par-b");
+    let a = TempDir::new("pair-a");
+    let b = TempDir::new("pair-b");
     TlsMaterial::load(&CertSource::self_signed(params()))
         .unwrap()
         .save_pem(a.path())
@@ -213,7 +213,7 @@ fn files_gives_understandable_error_on_mismatched_key() {
 
 #[test]
 fn files_gives_understandable_error_on_missing_file_and_empty_pem() {
-    let dir = TempDir::new("mangler");
+    let dir = TempDir::new("missing");
     let e = TlsMaterial::load(&CertSource::files(
         dir.path().join("does-not-exist.pem"),
         dir.path().join("nor-this-one.pem"),
@@ -229,14 +229,14 @@ fn files_gives_understandable_error_on_missing_file_and_empty_pem() {
 fn auto_without_writable_dir_gives_ephemeral_but_works() {
     // /proc is mounted such that create_dir_all fails; should a platform
     // allow it anyway, we skip instead of failing falsely.
-    let umulig = std::path::Path::new("/proc/nettls-cannot-write-here");
-    if fs::create_dir_all(umulig).is_ok() {
-        let _ = fs::remove_dir_all(umulig);
+    let impossible = std::path::Path::new("/proc/nettls-cannot-write-here");
+    if fs::create_dir_all(impossible).is_ok() {
+        let _ = fs::remove_dir_all(impossible);
         eprintln!("skipping: the directory could be created after all");
         return;
     }
 
-    let m = TlsMaterial::load(&CertSource::auto(umulig, params())).unwrap();
+    let m = TlsMaterial::load(&CertSource::auto(impossible, params())).unwrap();
     assert_eq!(
         m.origin(),
         CertOrigin::Ephemeral,

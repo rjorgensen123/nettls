@@ -65,42 +65,42 @@ def test_baseline_is_accepted_and_verifies(kind):
     _verify_kind(kind, READERS[kind](BASELINE[kind]))
 
 
-@pytest.mark.parametrize("post", _entries("announcement"))
-def test_incoming_announcement_is_rejected(post):
-    _require_rejected("announcement", post)
+@pytest.mark.parametrize("entry", _entries("announcement"))
+def test_incoming_announcement_is_rejected(entry):
+    _require_rejected("announcement", entry)
 
 
-@pytest.mark.parametrize("post", _entries("receipt"))
-def test_incoming_receipt_is_rejected(post):
-    _require_rejected("receipt", post)
+@pytest.mark.parametrize("entry", _entries("receipt"))
+def test_incoming_receipt_is_rejected(entry):
+    _require_rejected("receipt", entry)
 
 
-@pytest.mark.parametrize("post", _entries("approval"))
-def test_incoming_approval_is_rejected(post):
-    _require_rejected("approval", post)
+@pytest.mark.parametrize("entry", _entries("approval"))
+def test_incoming_approval_is_rejected(entry):
+    _require_rejected("approval", entry)
 
 
-def _require_rejected(kind: str, post: dict) -> None:
+def _require_rejected(kind: str, entry: dict) -> None:
     """Rejected at the right level, with the right exception type, never passed."""
     try:
-        obj = READERS[kind](post["json"])
+        obj = READERS[kind](entry["json"])
     except (ValueError, nettls.TlsError):
-        if post["level"] == "verify":
+        if entry["level"] == "verify":
             raise AssertionError(
-                f"{post['name']}: rejected while reading, but marked «verify»: "
-                f"something other than «{post['field']}» failed first"
+                f"{entry['name']}: rejected while reading, but marked 'verify': "
+                f"something other than '{entry['field']}' failed first"
             ) from None
         return
     except Exception as e:  # noqa: BLE001
         raise AssertionError(
-            f"{post['name']}: {type(e).__name__} instead of TlsError: the field "
-            f"«{post['field']}» was never validated ({e})"
+            f"{entry['name']}: {type(e).__name__} instead of TlsError: the field "
+            f"'{entry['field']}' was never validated ({e})"
         ) from e
 
-    if post["level"] == "parse":
+    if entry["level"] == "parse":
         raise AssertionError(
-            f"{post['name']}: ACCEPTED while reading; it should be rejected because "
-            f"{post['why']} (field: {post['field']})"
+            f"{entry['name']}: ACCEPTED while reading; it should be rejected because "
+            f"{entry['why']} (field: {entry['field']})"
         )
     try:
         _verify_kind(kind, obj)
@@ -108,11 +108,11 @@ def _require_rejected(kind: str, post: dict) -> None:
         return
     except Exception as e:  # noqa: BLE001
         raise AssertionError(
-            f"{post['name']}: verification failed with {type(e).__name__} instead of TlsError"
+            f"{entry['name']}: verification failed with {type(e).__name__} instead of TlsError"
         ) from e
     raise AssertionError(
-        f"{post['name']}: ACCEPTED by verification; it should be rejected because "
-        f"{post['why']} (field: {post['field']})"
+        f"{entry['name']}: ACCEPTED by verification; it should be rejected because "
+        f"{entry['why']} (field: {entry['field']})"
     )
 
 

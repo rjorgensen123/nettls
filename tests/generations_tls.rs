@@ -116,14 +116,14 @@ fn pkcs8_of(m: &TlsMaterial, _der: &[u8]) -> krypto::SecretBuf {
 /// A server that presents exactly one certificate, and can be restarted with
 /// a different one on the same port.
 async fn server(port: u16, cfg: Arc<rustls::ServerConfig>) -> tokio::task::JoinHandle<()> {
-    let lytter = TcpListener::bind(("127.0.0.1", port)).await.expect("bind");
+    let listener = TcpListener::bind(("127.0.0.1", port)).await.expect("bind");
     tokio::spawn(async move {
-        let akseptor = tokio_rustls::TlsAcceptor::from(cfg);
-        while let Ok((tcp, _)) = lytter.accept().await {
-            let akseptor = akseptor.clone();
+        let acceptor = tokio_rustls::TlsAcceptor::from(cfg);
+        while let Ok((tcp, _)) = listener.accept().await {
+            let acceptor = acceptor.clone();
             tokio::spawn(async move {
-                if let Ok(mut s) = akseptor.accept(tcp).await {
-                    let _ = s.write_all(b"hei").await;
+                if let Ok(mut s) = acceptor.accept(tcp).await {
+                    let _ = s.write_all(b"hey").await;
                     let _ = s.shutdown().await;
                 }
             });
@@ -131,22 +131,25 @@ async fn server(port: u16, cfg: Arc<rustls::ServerConfig>) -> tokio::task::JoinH
     })
 }
 
-/// Ett handshake. `Ok(())` betyr at klienten godtok serverens sertifikat.
+/// One handshake. `Ok(())` means the client accepted the server's certificate.
 async fn connect_to(trust: &Trust, port: u16) -> Result<(), String> {
     let cfg = trust.client_config().map_err(|e| e.to_string())?;
-    let kobler = tokio_rustls::TlsConnector::from(cfg);
+    let connector = tokio_rustls::TlsConnector::from(cfg);
     let tcp = TcpStream::connect(("127.0.0.1", port))
         .await
         .map_err(|e| e.to_string())?;
     let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
-    let mut s = kobler.connect(name, tcp).await.map_err(|e| e.to_string())?;
+    let mut s = connector
+        .connect(name, tcp)
+        .await
+        .map_err(|e| e.to_string())?;
     let mut buf = [0u8; 3];
     s.read_exact(&mut buf).await.map_err(|e| e.to_string())?;
-    assert_eq!(&buf, b"hei");
+    assert_eq!(&buf, b"hey");
     Ok(())
 }
 
-fn ledig_port() -> u16 {
+fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -160,7 +163,7 @@ async fn announced_successor_accepted_without_client_knowing_when() {
 
     let c0 = generation();
     let c1 = generation();
-    let port = ledig_port();
+    let port = free_port();
 
     // The operator has approved c0.
     let trust = Trust::from_approval(
@@ -212,7 +215,7 @@ async fn previous_generation_does_not_get_in_after_promotion() {
 
     let c0 = generation();
     let c1 = generation();
-    let port = ledig_port();
+    let port = free_port();
 
     let trust = Trust::from_approval(
         Generation::from_der(c0.material.cert_chain()[0].as_ref().to_vec()).unwrap(),
@@ -242,7 +245,7 @@ async fn unknown_certificate_is_rejected() {
 
     let c0 = generation();
     let foreign = generation();
-    let port = ledig_port();
+    let port = free_port();
 
     let trust = Trust::from_approval(
         Generation::from_der(c0.material.cert_chain()[0].as_ref().to_vec()).unwrap(),
@@ -271,7 +274,7 @@ impl Gen {
 
 /// Keeps `Arc` in use (keeps the import honest if the tests change).
 #[allow(dead_code)]
-fn _bruk_arc(_: Arc<()>) {}
+fn _use_arc(_: Arc<()>) {}
 
 // --------------------------------------------------------------------------- //
 // 3.6 — the announcer actually drives a rotation, end to end
@@ -292,7 +295,7 @@ async fn announcer_rolls_only_when_receipt_is_in() {
     nettls::install_crypto_provider();
 
     let c0 = generation();
-    let port = ledig_port();
+    let port = free_port();
     let dir = std::env::temp_dir().join(format!("nettls-36-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -314,15 +317,15 @@ async fn announcer_rolls_only_when_receipt_is_in() {
     .unwrap();
 
     // A server that reads the resolver live — it swaps when the resolver does.
-    let lytter = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+    let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
     let r = resolver.clone();
     let srv = tokio::spawn(async move {
-        while let Ok((tcp, _)) = lytter.accept().await {
+        while let Ok((tcp, _)) = listener.accept().await {
             let cfg = r.server_config().unwrap();
             tokio::spawn(async move {
-                let akseptor = tokio_rustls::TlsAcceptor::from(cfg);
-                if let Ok(mut s) = akseptor.accept(tcp).await {
-                    let _ = s.write_all(b"hei").await;
+                let acceptor = tokio_rustls::TlsAcceptor::from(cfg);
+                if let Ok(mut s) = acceptor.accept(tcp).await {
+                    let _ = s.write_all(b"hey").await;
                     let _ = s.shutdown().await;
                 }
             });
@@ -337,7 +340,7 @@ async fn announcer_rolls_only_when_receipt_is_in() {
     // Announce.
     assert!(announcer.should_announce(100));
     let k = announcer.prepare(100).expect("announcement");
-    let nytt_fp = k.new_fingerprint().to_string();
+    let new_fp = k.new_fingerprint().to_string();
 
     // Without a receipt NOTHING may happen — the gate in §6.8a.
     assert!(
@@ -361,7 +364,7 @@ async fn announcer_rolls_only_when_receipt_is_in() {
     connect_to(&trust, port)
         .await
         .expect("the announced successor was not accepted after the swap");
-    assert_eq!(trust.state().unwrap().current().fingerprint(), nytt_fp);
+    assert_eq!(trust.state().unwrap().current().fingerprint(), new_fp);
 
     // And the rate limit blocks an immediate new round (M-22).
     assert!(!announcer.should_announce(201));
@@ -375,17 +378,16 @@ async fn announcer_rolls_only_when_receipt_is_in() {
 /// Not "the fields are preserved", but what actually matters: a **new**
 /// `Announcer` built from disk keeps the promise the previous one gave. The
 /// peer has acked and awaits the new certificate; forget it, and the peer is
-/// left holding a promise
-/// ingen holder.
+/// left holding a promise nobody keeps.
 #[tokio::test(flavor = "multi_thread")]
-async fn loftet_overlever_en_restart() {
+async fn the_promise_survives_a_restart() {
     use nettls::RotatingResolver;
     use nettls::announcer::{Announcer, OwnMaterial, Schedule};
 
     nettls::install_crypto_provider();
 
     let c0 = generation();
-    let port = ledig_port();
+    let port = free_port();
     let dir = std::env::temp_dir().join(format!("nettls-m26-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -396,7 +398,7 @@ async fn loftet_overlever_en_restart() {
 
     // --- "before restart" ------------------------------------------------- //
     let k = {
-        let kg = Announcer::new(
+        let announcer = Announcer::new(
             "gateway",
             &dir,
             params.clone(),
@@ -409,14 +411,14 @@ async fn loftet_overlever_en_restart() {
             None,
         )
         .unwrap();
-        let k = kg.prepare(100).unwrap();
-        kg.acked("service").unwrap();
-        kg.save_pending().unwrap();
+        let k = announcer.prepare(100).unwrap();
+        announcer.acked("service").unwrap();
+        announcer.save_pending().unwrap();
         k
-    }; // kg is dropped — the process "dies"
+    }; // announcer is dropped — the process "dies"
 
     // --- "after restart": everything is rebuilt from disk ------------------ //
-    let kg2 = Announcer::new(
+    let restarted = Announcer::new(
         "gateway",
         &dir,
         params,
@@ -432,33 +434,33 @@ async fn loftet_overlever_en_restart() {
     // `new` restores the promise itself (§6.17.3): the pending next must be
     // visible in the trio without any extra call.
     assert!(
-        kg2.own_trio().unwrap().next_fingerprint.is_some(),
+        restarted.own_trio().unwrap().next_fingerprint.is_some(),
         "M-26 BROKEN: the promise was not read back"
     );
     assert_eq!(
-        kg2.pending().unwrap().new_fingerprint(),
+        restarted.pending().unwrap().new_fingerprint(),
         k.new_fingerprint(),
         "the restored promise covers a different certificate"
     );
 
     // The receipt from before the restart must still count — the peer must
     // not have to ack again for no reason.
-    let lytter = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
+    let listener = TcpListener::bind(("127.0.0.1", port)).await.unwrap();
     let r = resolver.clone();
     let srv = tokio::spawn(async move {
-        while let Ok((tcp, _)) = lytter.accept().await {
+        while let Ok((tcp, _)) = listener.accept().await {
             let cfg = r.server_config().unwrap();
             tokio::spawn(async move {
                 let a = tokio_rustls::TlsAcceptor::from(cfg);
                 if let Ok(mut s) = a.accept(tcp).await {
-                    let _ = s.write_all(b"hei").await;
+                    let _ = s.write_all(b"hey").await;
                     let _ = s.shutdown().await;
                 }
             });
         }
     });
 
-    let old = kg2
+    let old = restarted
         .roll_if_ready(200)
         .unwrap()
         .expect("M-26 BROKEN: the receipt from before the restart did not count");
@@ -496,7 +498,7 @@ async fn keys_are_locked_when_password_is_set() {
     std::fs::create_dir_all(&dir).unwrap();
 
     let pw = krypto::SecretString::from_string("secret".into()).unwrap();
-    let kg = Announcer::new(
+    let announcer = Announcer::new(
         "gateway",
         &dir,
         SelfSignedParams::new("localhost", ["localhost"]),
@@ -510,7 +512,7 @@ async fn keys_are_locked_when_password_is_set() {
     )
     .unwrap();
 
-    kg.prepare(100).unwrap();
+    announcer.prepare(100).unwrap();
 
     // No cleartext key anywhere under the directory.
     let mut found_locked = false;
@@ -525,10 +527,10 @@ async fn keys_are_locked_when_password_is_set() {
         if name == "material.locked" {
             found_locked = true;
             let b = std::fs::read(&e).unwrap();
-            assert_eq!(&b[..8], b"NETTLS\x01\x00", "err filformat");
+            assert_eq!(&b[..8], b"NETTLS\x01\x00", "wrong file format");
             assert!(
                 !String::from_utf8_lossy(&b).contains("PRIVATE KEY"),
-                "M-28 BROKEN: the key is readable in the «locked» file"
+                "M-28 BROKEN: the key is readable in the 'locked' file"
             );
             // Written through the crate's atomic writer, which sets the mode.
             // `fs::write` would have taken whatever the umask says — typically
@@ -548,8 +550,11 @@ async fn keys_are_locked_when_password_is_set() {
 
     // And the material can be read back — locking that cannot be unlocked is
     // not locking, it is loss.
-    kg.acked("service").unwrap();
-    assert!(kg.roll_if_ready(200).unwrap().is_some(), "could not roll");
+    announcer.acked("service").unwrap();
+    assert!(
+        announcer.roll_if_ready(200).unwrap().is_some(),
+        "could not roll"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -575,7 +580,7 @@ fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 /// Reported by the reference implementation: a node that had rotated more than
 /// once could, after a restart, neither sign nor verify the next announcement.
 /// It was left with `current` but `previous = None`, because the previous key
-/// bare levde i minnet.
+/// lived only in memory.
 ///
 /// The test does not check that a field is preserved, but what actually
 /// matters: that a **new** `Announcer` built from disk can still produce a
@@ -601,7 +606,7 @@ async fn previous_key_survives_restart_after_two_rotations() {
     let t2 = t1 + DAY_S + 1;
     let t3 = t2 + DAY_S + 1;
 
-    let bygg = |material| {
+    let build = |material| {
         Announcer::new(
             "gateway",
             &dir,
@@ -619,27 +624,28 @@ async fn previous_key_survives_restart_after_two_rotations() {
 
     // --- "before restart": rotate twice ------------------------------------ //
     {
-        let kg = bygg(gen0()).unwrap();
+        let announcer = build(gen0()).unwrap();
         for t in [t1, t2] {
-            kg.prepare(t).unwrap();
-            kg.acked("service").unwrap();
-            kg.roll_if_ready(t)
+            announcer.prepare(t).unwrap();
+            announcer.acked("service").unwrap();
+            announcer
+                .roll_if_ready(t)
                 .unwrap()
                 .unwrap_or_else(|| panic!("the rotation at {t} did not happen"));
         }
-    } // kg is dropped — the process "dies"
+    } // announcer is dropped — the process "dies"
 
-    // --- «etter restart» --------------------------------------------------- //
+    // --- "after restart" --------------------------------------------------- //
     // The consumer can only supply generation 0: the keys from gen 1 onwards
     // are made and owned by the crate, and never leave it. `new` restores the
     // chain itself (§6.17.3) — the trio must show a previous straight away.
-    let kg2 = bygg(gen0()).unwrap();
+    let restarted = build(gen0()).unwrap();
     assert!(
-        kg2.own_trio().unwrap().previous_fingerprint.is_some(),
+        restarted.own_trio().unwrap().previous_fingerprint.is_some(),
         "§6.17.1 BROKEN: the chain was not read back from disk"
     );
 
-    let k = kg2.prepare(t3).unwrap();
+    let k = restarted.prepare(t3).unwrap();
     assert!(
         !k.is_bootstrap(),
         "§6.17.1 BROKEN: the announcement is single-signed — the previous key \
@@ -664,7 +670,7 @@ async fn the_gate_postpones_the_switch_without_side_effects() {
     c0.material.save_pem(&dir).unwrap();
 
     let resolver = std::sync::Arc::new(RotatingResolver::new(&c0.material).unwrap());
-    let kg = Announcer::new(
+    let announcer = Announcer::new(
         "gateway",
         &dir,
         SelfSignedParams::new("localhost", ["localhost"]),
@@ -678,13 +684,16 @@ async fn the_gate_postpones_the_switch_without_side_effects() {
     )
     .unwrap();
 
-    kg.prepare(100).unwrap();
-    kg.acked("service").unwrap();
+    announcer.prepare(100).unwrap();
+    announcer.acked("service").unwrap();
 
     // Everything is ready — but the consumer says "not now".
     let before = resolver.fingerprint_sha256();
     assert!(
-        kg.roll_if_ready_gated(100, || false).unwrap().is_none(),
+        announcer
+            .roll_if_ready_gated(100, || false)
+            .unwrap()
+            .is_none(),
         "a false gate must postpone the switch"
     );
     assert_eq!(
@@ -693,18 +702,18 @@ async fn the_gate_postpones_the_switch_without_side_effects() {
         "the resolver must be untouched after a postponed switch"
     );
     assert!(
-        kg.own_trio().unwrap().next_fingerprint.is_some(),
+        announcer.own_trio().unwrap().next_fingerprint.is_some(),
         "the pending promise must survive a postponed switch"
     );
 
     // Same call, gate open: the chain and the serving switch together.
-    let old = kg
+    let old = announcer
         .roll_if_ready_gated(100, || true)
         .unwrap()
         .expect("with an open gate the switch must happen");
     assert_eq!(old, before, "swap must return the fingerprint we served");
     assert_ne!(resolver.fingerprint_sha256(), before);
-    assert!(kg.own_trio().unwrap().previous_fingerprint.is_some());
+    assert!(announcer.own_trio().unwrap().previous_fingerprint.is_some());
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -748,7 +757,7 @@ async fn next_without_its_key_does_not_promote() {
     let c0 = generation();
     let c1 = generation();
     let stranger = generation();
-    let port = ledig_port();
+    let port = free_port();
 
     let trust = Trust::from_approval(
         Generation::from_der(c0.material.cert_chain()[0].as_ref().to_vec()).unwrap(),
@@ -938,11 +947,11 @@ fn saving_with_a_password_writes_nothing_in_cleartext_first() {
     let dir = std::env::temp_dir().join(format!("nettls-fs0073-a-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let kg = announcer_with_password(&dir);
+    let announcer = announcer_with_password(&dir);
 
     let staging = dir.join("new").join(".tmp-material");
     std::fs::create_dir_all(&staging).unwrap();
-    kg.prepare(100).unwrap();
+    announcer.prepare(100).unwrap();
 
     assert!(staging.is_dir(), "save went through the staging directory");
     assert!(
@@ -952,8 +961,11 @@ fn saving_with_a_password_writes_nothing_in_cleartext_first() {
     assert!(dir.join("new").join("material.locked").is_file());
 
     // And what was locked in memory reads back.
-    kg.acked("service").unwrap();
-    assert!(kg.roll_if_ready(200).unwrap().is_some(), "could not roll");
+    announcer.acked("service").unwrap();
+    assert!(
+        announcer.roll_if_ready(200).unwrap().is_some(),
+        "could not roll"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -973,7 +985,7 @@ fn a_cleartext_key_left_by_an_old_crash_is_removed_at_start() {
         std::fs::write(d.join(nettls::KEY_FILE), b"-----BEGIN PRIVATE KEY-----\n").unwrap();
     }
 
-    let _kg = announcer_with_password(&dir);
+    let _announcer = announcer_with_password(&dir);
 
     for d in &left {
         assert!(
@@ -994,19 +1006,19 @@ fn a_pending_file_that_cannot_be_removed_is_an_error_that_says_why() {
     let dir = std::env::temp_dir().join(format!("nettls-fs0075-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let kg = announcer_with_password(&dir);
+    let announcer = announcer_with_password(&dir);
 
     // A directory where the file should be: removing it as a file fails.
     let promise = dir.join(nettls::announcer::PENDING_FILE);
     std::fs::create_dir_all(&promise).unwrap();
-    let err = kg.save_pending().unwrap_err().to_string();
+    let err = announcer.save_pending().unwrap_err().to_string();
     assert!(err.contains(nettls::announcer::PENDING_FILE), "{err}");
     assert!(err.contains("nothing is pending"), "{err}");
     assert!(err.contains("promised rotation"), "{err}");
 
     // Nothing there is fine.
     std::fs::remove_dir(&promise).unwrap();
-    kg.save_pending().unwrap();
+    announcer.save_pending().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1018,17 +1030,17 @@ fn a_peer_removed_while_waiting_no_longer_blocks_the_rotation() {
     let dir = std::env::temp_dir().join(format!("nettls-fs0076-a-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let kg = announcer_for(&dir, &generation(), &["service", "portal"]);
+    let announcer = announcer_for(&dir, &generation(), &["service", "portal"]);
 
-    kg.prepare(100).unwrap();
-    kg.acked("service").unwrap();
+    announcer.prepare(100).unwrap();
+    announcer.acked("service").unwrap();
     assert!(
-        kg.roll_if_ready(200).unwrap().is_none(),
+        announcer.roll_if_ready(200).unwrap().is_none(),
         "rolled without portal"
     );
-    kg.remove_peer("portal").unwrap();
+    announcer.remove_peer("portal").unwrap();
     assert!(
-        kg.roll_if_ready(200).unwrap().is_some(),
+        announcer.roll_if_ready(200).unwrap().is_some(),
         "portal still blocks"
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1040,17 +1052,20 @@ fn a_peer_added_while_waiting_must_ack_too() {
     let dir = std::env::temp_dir().join(format!("nettls-fs0076-b-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let kg = announcer_for(&dir, &generation(), &["service"]);
+    let announcer = announcer_for(&dir, &generation(), &["service"]);
 
-    kg.prepare(100).unwrap();
-    kg.add_peer("portal").unwrap();
-    kg.acked("service").unwrap();
+    announcer.prepare(100).unwrap();
+    announcer.add_peer("portal").unwrap();
+    announcer.acked("service").unwrap();
     assert!(
-        kg.roll_if_ready(200).unwrap().is_none(),
+        announcer.roll_if_ready(200).unwrap().is_none(),
         "rolled without portal"
     );
-    kg.acked("portal").unwrap();
-    assert!(kg.roll_if_ready(200).unwrap().is_some(), "could not roll");
+    announcer.acked("portal").unwrap();
+    assert!(
+        announcer.roll_if_ready(200).unwrap().is_some(),
+        "could not roll"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1064,14 +1079,14 @@ fn after_a_restart_a_peer_taken_out_of_the_list_is_not_waited_for() {
     std::fs::create_dir_all(&dir).unwrap();
     let c0 = generation();
     {
-        let kg = announcer_for(&dir, &c0, &["service", "portal"]);
-        kg.prepare(100).unwrap();
-        kg.acked("service").unwrap();
+        let announcer = announcer_for(&dir, &c0, &["service", "portal"]);
+        announcer.prepare(100).unwrap();
+        announcer.acked("service").unwrap();
     } // the process "dies"
 
-    let kg = announcer_for(&dir, &c0, &["service"]);
+    let announcer = announcer_for(&dir, &c0, &["service"]);
     assert!(
-        kg.roll_if_ready(200).unwrap().is_some(),
+        announcer.roll_if_ready(200).unwrap().is_some(),
         "the restart still waits for a peer that is no longer in the list"
     );
     let _ = std::fs::remove_dir_all(&dir);

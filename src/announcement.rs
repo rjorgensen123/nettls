@@ -319,7 +319,7 @@ impl Announcement {
 }
 
 #[cfg(test)]
-mod tester {
+mod tests {
     use super::*;
     use crate::material::TlsMaterial;
     use crate::{CertSource, SelfSignedParams};
@@ -502,8 +502,8 @@ mod tester {
         .unwrap();
 
         let text = serde_json::to_string(&k.to_json().unwrap()).unwrap();
-        let inn: AnnouncementJson = serde_json::from_str(&text).unwrap();
-        assert_eq!(Announcement::from_json(&inn).unwrap(), k);
+        let read_back: AnnouncementJson = serde_json::from_str(&text).unwrap();
+        assert_eq!(Announcement::from_json(&read_back).unwrap(), k);
     }
 
     #[test]
@@ -549,8 +549,8 @@ mod tester {
     fn pem_with_multiple_certificates_rejected() {
         let a = generation("a");
         let b = generation("b");
-        let begge = format!("{}{}", a.pem, b.pem);
-        assert!(fingerprint_from_pem(&begge).is_err());
+        let both = format!("{}{}", a.pem, b.pem);
+        assert!(fingerprint_from_pem(&both).is_err());
         assert!(fingerprint_from_pem("not pem at all").is_err());
     }
 }
@@ -694,7 +694,7 @@ mod receipt_tests {
     use krypto::SecretBuf;
 
     const FP: &str = "aa00112233445566778899aabbccddeeff00112233445566778899aabbccddee";
-    const ANNET_FP: &str = "bb00112233445566778899aabbccddeeff00112233445566778899aabbccddee";
+    const OTHER_FP: &str = "bb00112233445566778899aabbccddeeff00112233445566778899aabbccddee";
 
     fn seed() -> SecretBuf {
         SecretBuf::from_vec(vec![3u8; 32]).unwrap()
@@ -716,7 +716,7 @@ mod receipt_tests {
         // Replay: the receipt is genuine, but applies to something else. It
         // must not make us roll.
         let pk = public(&seed());
-        let k = Receipt::new("service", "gateway", ANNET_FP, 100, &seed()).unwrap();
+        let k = Receipt::new("service", "gateway", OTHER_FP, 100, &seed()).unwrap();
         let err = k.verify(&pk, FP).unwrap_err();
         assert!(
             format!("{err}").contains("a different rotation"),
@@ -726,9 +726,9 @@ mod receipt_tests {
 
     #[test]
     fn receipt_from_wrong_sender_rejected() {
-        let annen = public(&SecretBuf::from_vec(vec![9u8; 32]).unwrap());
+        let other_key = public(&SecretBuf::from_vec(vec![9u8; 32]).unwrap());
         let k = Receipt::new("service", "gateway", FP, 100, &seed()).unwrap();
-        assert!(k.verify(&annen, FP).is_err());
+        assert!(k.verify(&other_key, FP).is_err());
     }
 
     #[test]
@@ -742,16 +742,16 @@ mod receipt_tests {
 
         let mut j2 = k.to_json().unwrap();
         j2.acker = "portal".into();
-        let tuklet2 = Receipt::from_json(&j2).unwrap();
-        assert!(tuklet2.verify(&pk, FP).is_err());
+        let tampered2 = Receipt::from_json(&j2).unwrap();
+        assert!(tampered2.verify(&pk, FP).is_err());
     }
 
     #[test]
     fn json_round_trip_preserves_everything() {
         let k = Receipt::new("service", "gateway", FP, 1_700_000_000, &seed()).unwrap();
         let text = serde_json::to_string(&k.to_json().unwrap()).unwrap();
-        let inn: ReceiptJson = serde_json::from_str(&text).unwrap();
-        assert_eq!(Receipt::from_json(&inn).unwrap(), k);
+        let read_back: ReceiptJson = serde_json::from_str(&text).unwrap();
+        assert_eq!(Receipt::from_json(&read_back).unwrap(), k);
     }
 
     #[test]
@@ -817,21 +817,21 @@ pub fn read_archive(dir: &std::path::Path) -> Result<(Vec<Announcement>, usize),
         Err(e) => return Err(TlsError::io(&path, e)),
     };
     let mut out = Vec::new();
-    let mut hoppet = 0usize;
+    let mut skipped = 0usize;
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
         match serde_json::from_str::<AnnouncementJson>(line)
             .ok()
             .and_then(|j| Announcement::from_json(&j).ok())
         {
             Some(k) => out.push(k),
-            None => hoppet += 1,
+            None => skipped += 1,
         }
     }
-    Ok((out, hoppet))
+    Ok((out, skipped))
 }
 
 #[cfg(test)]
-mod arkiv_tester {
+mod archive_tests {
     use super::*;
     use crate::material::TlsMaterial;
     use crate::{CertSource, SelfSignedParams};
@@ -854,7 +854,7 @@ mod arkiv_tester {
     }
 
     fn tmpdir(name: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("nettls-arkiv-{}-{name}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("nettls-archive-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
@@ -862,16 +862,16 @@ mod arkiv_tester {
 
     #[test]
     fn empty_archive_is_not_an_error() {
-        let d = tmpdir("tom");
-        let (v, hoppet) = read_archive(&d).unwrap();
+        let d = tmpdir("empty");
+        let (v, skipped) = read_archive(&d).unwrap();
         assert!(v.is_empty());
-        assert_eq!(hoppet, 0);
+        assert_eq!(skipped, 0);
         let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
     fn archive_preserves_order() {
-        let d = tmpdir("rekke");
+        let d = tmpdir("order");
         let a = announcement("a");
         let b = announcement("b");
         archive(&d, &a).unwrap();
@@ -897,7 +897,7 @@ mod arkiv_tester {
     fn one_corrupt_line_does_not_make_the_rest_unreadable() {
         // An audit trail must be readable WHEN someone needs it, and then "one
         // line is corrupt, hence everything is lost" is the worst conceivable answer.
-        let d = tmpdir("korrupt");
+        let d = tmpdir("corrupt");
         archive(&d, &announcement("a")).unwrap();
         {
             use std::io::Write;
@@ -909,9 +909,9 @@ mod arkiv_tester {
         }
         archive(&d, &announcement("b")).unwrap();
 
-        let (v, hoppet) = read_archive(&d).unwrap();
+        let (v, skipped) = read_archive(&d).unwrap();
         assert_eq!(v.len(), 2, "the valid lines must be read");
-        assert_eq!(hoppet, 1, "and the broken one must be counted");
+        assert_eq!(skipped, 1, "and the broken one must be counted");
         let _ = std::fs::remove_dir_all(&d);
     }
 }
@@ -983,7 +983,7 @@ impl IdentityJson {
 }
 
 #[cfg(test)]
-mod identitet_tester {
+mod identity_tests {
     use super::*;
     use crate::announcer::Mode;
 

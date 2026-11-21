@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! The error matrix, Rust side (SPEC-nettls §6.14b).
 //!
-//! `nettls-py/tests/test_feil.py` runs the same corpus from Python, and both read
+//! `nettls-py/tests/test_errors.py` runs the same corpus from Python, and both read
 //! **the same file**: `testvectors/errors.json`.
 //!
 //! ## Why the corpus is a file
@@ -50,9 +50,9 @@ use nettls::signature::from_hex;
 const CORPUS_FILE: &str = "testvectors/errors.json";
 
 fn corpus() -> serde_json::Value {
-    let raa = std::fs::read_to_string(CORPUS_FILE)
+    let raw = std::fs::read_to_string(CORPUS_FILE)
         .unwrap_or_else(|e| panic!("could not read {CORPUS_FILE}: {e}"));
-    serde_json::from_str(&raa).expect("the corpus must be valid JSON")
+    serde_json::from_str(&raw).expect("the corpus must be valid JSON")
 }
 
 /// The outcome of reading **and** verifying one entry.
@@ -83,10 +83,10 @@ fn ed25519_pub(k: &serde_json::Value) -> Vec<u8> {
 }
 
 fn try_announcement(k: &serde_json::Value, j: &serde_json::Value) -> Outcome {
-    let Ok(kj) = serde_json::from_value::<AnnouncementJson>(j.clone()) else {
+    let Ok(announcement_json) = serde_json::from_value::<AnnouncementJson>(j.clone()) else {
         return Outcome::RejectedAtParsing;
     };
-    let Ok(obj) = Announcement::from_json(&kj) else {
+    let Ok(obj) = Announcement::from_json(&announcement_json) else {
         return Outcome::RejectedAtParsing;
     };
     let (prev, curr) = prev_curr_der(k);
@@ -97,10 +97,10 @@ fn try_announcement(k: &serde_json::Value, j: &serde_json::Value) -> Outcome {
 }
 
 fn try_receipt(k: &serde_json::Value, j: &serde_json::Value) -> Outcome {
-    let Ok(kj) = serde_json::from_value::<ReceiptJson>(j.clone()) else {
+    let Ok(receipt_json) = serde_json::from_value::<ReceiptJson>(j.clone()) else {
         return Outcome::RejectedAtParsing;
     };
-    let Ok(obj) = Receipt::from_json(&kj) else {
+    let Ok(obj) = Receipt::from_json(&receipt_json) else {
         return Outcome::RejectedAtParsing;
     };
     let pk = ed25519_pub(k);
@@ -112,10 +112,10 @@ fn try_receipt(k: &serde_json::Value, j: &serde_json::Value) -> Outcome {
 }
 
 fn try_approval(k: &serde_json::Value, j: &serde_json::Value) -> Outcome {
-    let Ok(gj) = serde_json::from_value::<ApprovalJson>(j.clone()) else {
+    let Ok(approval_json) = serde_json::from_value::<ApprovalJson>(j.clone()) else {
         return Outcome::RejectedAtParsing;
     };
-    let Ok(obj) = Approval::from_json(&gj) else {
+    let Ok(obj) = Approval::from_json(&approval_json) else {
         return Outcome::RejectedAtParsing;
     };
     let pk = ed25519_pub(k);
@@ -164,20 +164,23 @@ fn the_baseline_is_accepted_and_verifies() {
 // INCOMING Rust — the shared corpus
 // --------------------------------------------------------------------------- //
 
-fn run_kind(kind: &str, proev: fn(&serde_json::Value, &serde_json::Value) -> Outcome) {
+fn run_kind(kind: &str, try_entry: fn(&serde_json::Value, &serde_json::Value) -> Outcome) {
     let k = corpus();
-    let poster = k[kind]
+    let entries = k[kind]
         .as_array()
         .expect("the corpus must have a list here");
-    assert!(!poster.is_empty(), "{kind}: an empty corpus probes nothing");
+    assert!(
+        !entries.is_empty(),
+        "{kind}: an empty corpus probes nothing"
+    );
 
-    for p in poster {
+    for p in entries {
         let name = p["name"].as_str().unwrap();
         let field = p["field"].as_str().unwrap();
         let why = p["why"].as_str().unwrap();
         let level = p["level"].as_str().unwrap();
 
-        let outcome = proev(&k, &p["json"]);
+        let outcome = try_entry(&k, &p["json"]);
 
         match (level, &outcome) {
             ("parse", Outcome::RejectedAtParsing) => {}
@@ -190,16 +193,16 @@ fn run_kind(kind: &str, proev: fn(&serde_json::Value, &serde_json::Value) -> Out
             }
             ("parse", Outcome::RejectedAtVerification) => panic!(
                 "{kind}/{name}: slipped through the parser and was first stopped in \
-                 verification. An invalid «{field}» thus got to live as an object \
+                 verification. An invalid '{field}' thus got to live as an object \
                  inside the program — and verification was the only thing standing \
                  between it and a signed string."
             ),
             ("verify", Outcome::RejectedAtParsing) => panic!(
-                "{kind}/{name}: rejected at PARSING, but is marked «verify». Either \
-                 the marking is wrong, or something other than «{field}» failed first — \
+                "{kind}/{name}: rejected at PARSING, but is marked 'verify'. Either \
+                 the marking is wrong, or something other than '{field}' failed first — \
                  and then the entry does not probe what it should."
             ),
-            (other, _) => panic!("{kind}/{name}: unknown level «{other}» in the corpus"),
+            (other, _) => panic!("{kind}/{name}: unknown level '{other}' in the corpus"),
         }
     }
 }
@@ -259,7 +262,7 @@ fn outgoing_fingerprints_are_rejected() {
         ("uppercase", VALID_FP.to_uppercase()),
         ("too short", "abc".into()),
         ("too long", format!("{VALID_FP}ab")),
-        ("with a «sha256:» prefix", format!("sha256:{VALID_FP}")),
+        ("with a 'sha256:' prefix", format!("sha256:{VALID_FP}")),
         ("not hex", "g".repeat(64)),
         ("empty", String::new()),
     ] {

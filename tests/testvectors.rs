@@ -30,7 +30,7 @@ use std::collections::BTreeMap;
 
 use nettls::canonical;
 
-const VEKTORFIL: &str = "testvectors/canonical.json";
+const VECTOR_FILE: &str = "testvectors/canonical.json";
 
 #[derive(serde::Serialize, serde::Deserialize, PartialEq, Eq, Debug)]
 struct Vector {
@@ -143,7 +143,7 @@ fn build() -> BTreeMap<String, Vector> {
 #[test]
 fn vectors_match_byte_for_byte() {
     let built = build();
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(VEKTORFIL);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(VECTOR_FILE);
 
     if std::env::var("WRITE_VECTORS").is_ok() {
         let json = serde_json::to_string_pretty(&built).unwrap();
@@ -177,12 +177,12 @@ fn vectors_match_byte_for_byte() {
         let actual = &built[name];
         assert_eq!(
             actual.canonical_hex, expected.canonical_hex,
-            "\nvector «{name}» ({}) does not match.\n  reference: {}\n  actual:    {}\n",
+            "\nvector '{name}' ({}) does not match.\n  reference: {}\n  actual:    {}\n",
             expected.what, expected.canonical_hex, actual.canonical_hex
         );
         assert_eq!(
             actual.ed25519_sig_hex, expected.ed25519_sig_hex,
-            "\nthe Ed25519 signature for «{name}» does not match. Ed25519 is deterministic, \
+            "\nthe Ed25519 signature for '{name}' does not match. Ed25519 is deterministic, \
              so this means either the message changed or the signing did.\n"
         );
     }

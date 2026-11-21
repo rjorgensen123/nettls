@@ -139,7 +139,7 @@ fn debug_never_leaks_the_key() {
 }
 
 // --------------------------------------------------------------------------- #
-// SAN/CN-validering (sak L2-054)
+// SAN/CN validation (case L2-054)
 //
 // The minimum requirement in SPEC-nettls also covers configuration input. The
 // crate previously accepted an empty string, 300 characters, spaces and `..`
@@ -190,19 +190,19 @@ fn valid_dns_names_are_accepted() {
 
 #[test]
 fn illegal_names_are_rejected_with_explanation() {
-    let tilfeller: &[(&str, &str)] = &[
+    let cases: &[(&str, &str)] = &[
         ("", "empty"),
         ("foo bar", "illegal characters (space)"),
         ("..", "dots only"),
         ("a..b", "empty part between dots"),
         (".start", "leading dot"),
         ("-start.no", "hyphen first in the part"),
-        ("slutt-.no", "hyphen last in the part"),
+        ("end-.no", "hyphen last in the part"),
         ("ap*.example.no", "wildcard mid-part"),
         ("example.*.no", "wildcard that is not the first part"),
         ("æøå.no", "non-ASCII"),
     ];
-    for (name, what) in tilfeller {
+    for (name, what) in cases {
         let err =
             generate(&[name]).expect_err(&format!("{what}: {name:?} should have been rejected"));
         let message = err.to_string();
@@ -218,18 +218,18 @@ fn illegal_names_are_rejected_with_explanation() {
 #[test]
 fn too_long_names_are_rejected() {
     // One label above 63 characters.
-    let lang_label = format!("{}.no", "a".repeat(64));
+    let long_label = format!("{}.no", "a".repeat(64));
     assert!(
-        generate(&[lang_label.as_str()]).is_err(),
+        generate(&[long_label.as_str()]).is_err(),
         "a 64-character label should have been rejected"
     );
     // Above 253 characters in total (each label legal on its own).
-    let mange = std::iter::repeat_n("abcdefgh", 40)
+    let many = std::iter::repeat_n("abcdefgh", 40)
         .collect::<Vec<_>>()
         .join(".");
-    assert!(mange.len() > 253);
+    assert!(many.len() > 253);
     assert!(
-        generate(&[mange.as_str()]).is_err(),
+        generate(&[many.as_str()]).is_err(),
         "a name above 253 characters should have been rejected"
     );
 }
@@ -258,14 +258,14 @@ fn readable_common_name_with_spaces_is_legal() {
 
 #[test]
 fn invalid_common_name_is_rejected() {
-    let ulovlige: &[(String, &str)] = &[
+    let illegal: &[(String, &str)] = &[
         ("".to_string(), "empty"),
         ("   ".to_string(), "spaces only"),
         ("a".repeat(65), "above X.509's limit of 64 characters"),
         ("portal\u{0}hidden".to_string(), "control character"),
         ("portal\nline2".to_string(), "newline"),
     ];
-    for (cn, what) in ulovlige {
+    for (cn, what) in illegal {
         let p = SelfSignedParams::new(cn.clone(), vec!["localhost".to_string()]);
         let err = TlsMaterial::load(&CertSource::self_signed(p))
             .expect_err(&format!("CN ({what}) should have been rejected: {cn:?}"));

@@ -8,7 +8,7 @@ use nettls::{
     CertSource, SelfSignedParams, TlsMaterial, pinned_client_config, pinned_client_config_with_alpn,
 };
 
-fn en_fingerprint() -> String {
+fn fresh_fingerprint() -> String {
     TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::default()))
         .unwrap()
         .fingerprint_sha256()
@@ -16,35 +16,35 @@ fn en_fingerprint() -> String {
 
 #[test]
 fn accepts_canonical_form() {
-    let fp = en_fingerprint();
+    let fp = fresh_fingerprint();
     pinned_client_config(&fp).unwrap();
 }
 
 #[test]
 fn accepts_openssl_format_with_colons_and_uppercase() {
-    let fp = en_fingerprint();
-    let openssl_stil: Vec<String> = fp
+    let fp = fresh_fingerprint();
+    let openssl_style: Vec<String> = fp
         .as_bytes()
         .chunks(2)
         .map(|c| String::from_utf8_lossy(c).to_uppercase())
         .collect();
-    pinned_client_config(&openssl_stil.join(":")).unwrap();
-    pinned_client_config(&format!("sha256:{}", openssl_stil.join(":"))).unwrap();
+    pinned_client_config(&openssl_style.join(":")).unwrap();
+    pinned_client_config(&format!("sha256:{}", openssl_style.join(":"))).unwrap();
     pinned_client_config(&format!("  {fp}  ")).unwrap();
 }
 
 #[test]
 fn rejects_everything_not_32_bytes() {
-    for daarlig in [
+    for bad in [
         "",
         "abc",
         "not-hex-at-all",
         &"a".repeat(63),
         &"a".repeat(65),
     ] {
-        let e = pinned_client_config(daarlig).unwrap_err();
+        let e = pinned_client_config(bad).unwrap_err();
         let s = e.to_string();
-        assert!(s.contains("fingerprint"), "for {daarlig:?}: {s}");
+        assert!(s.contains("fingerprint"), "for {bad:?}: {s}");
         assert!(!s.is_empty());
     }
 }
@@ -57,8 +57,8 @@ fn rejects_invalid_hex_characters() {
 }
 
 #[test]
-fn alpn_settes_gjennom() {
-    let fp = en_fingerprint();
+fn alpn_is_passed_through() {
+    let fp = fresh_fingerprint();
     let cfg = pinned_client_config_with_alpn(&fp, &[b"h2".to_vec(), b"http/1.1".to_vec()]).unwrap();
     assert_eq!(
         cfg.alpn_protocols,

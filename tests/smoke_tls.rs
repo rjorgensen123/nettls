@@ -7,7 +7,7 @@
 //! lets the pinned server through and actually shuts out another — including
 //! that the handshake signature is validated, that protocol versions are
 //! negotiated, and that
-//! bare finnes én crypto-provider i prosessen.
+//! there is only one crypto provider in the process.
 
 use std::sync::Arc;
 
@@ -125,12 +125,12 @@ async fn handshake_uses_tls13_and_alpn_negotiates() {
         let (tcp, _) = listener.accept().await.unwrap();
         let mut tls = acceptor.accept(tcp).await.unwrap();
         let (_, conn) = tls.get_ref();
-        let versjon = conn.protocol_version();
+        let version = conn.protocol_version();
         let suite = conn.negotiated_cipher_suite().map(|s| s.suite());
         let alpn = conn.alpn_protocol().map(|p| p.to_vec());
         let _ = tls.write_all(GREETING).await;
         let _ = tls.shutdown().await;
-        (versjon, suite, alpn)
+        (version, suite, alpn)
     });
 
     let config =
@@ -144,10 +144,10 @@ async fn handshake_uses_tls13_and_alpn_negotiates() {
     tls.read_to_end(&mut buf).await.unwrap();
     assert_eq!(buf, GREETING);
 
-    let (versjon, suite, alpn) = server.await.unwrap();
-    eprintln!("forhandlet: {versjon:?} / {suite:?} / ALPN {alpn:?}");
+    let (version, suite, alpn) = server.await.unwrap();
+    eprintln!("negotiated: {version:?} / {suite:?} / ALPN {alpn:?}");
     assert_eq!(
-        versjon,
+        version,
         Some(nettls::rustls::ProtocolVersion::TLSv1_3),
         "two modern parties must land on TLS 1.3"
     );
@@ -159,7 +159,7 @@ async fn handshake_uses_tls13_and_alpn_negotiates() {
 }
 
 #[tokio::test]
-async fn cert_lastet_fra_disk_virker_i_et_ekte_handshake() {
+async fn cert_loaded_from_disk_works_in_a_real_handshake() {
     install_crypto_provider();
 
     // The whole round: generate → save → load back → server → pinned client.
@@ -173,14 +173,14 @@ async fn cert_lastet_fra_disk_virker_i_et_ekte_handshake() {
     ));
 
     let first = TlsMaterial::load(&CertSource::auto(&dir, params())).unwrap();
-    let etter_restart = TlsMaterial::load(&CertSource::auto(&dir, params())).unwrap();
+    let after_restart = TlsMaterial::load(&CertSource::auto(&dir, params())).unwrap();
     assert_eq!(
         first.fingerprint_sha256(),
-        etter_restart.fingerprint_sha256(),
+        after_restart.fingerprint_sha256(),
         "the fingerprint must survive a restart, otherwise pinning does not work in practice"
     );
 
-    let port = start_server(etter_restart.server_config().unwrap()).await;
+    let port = start_server(after_restart.server_config().unwrap()).await;
     let reply = connect_to(port, &first.fingerprint_sha256()).await.unwrap();
     assert_eq!(reply, GREETING);
 

@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn newline_in_a_field_is_rejected() {
-        // Without this check «rog\ner» would become two lines, and an
+        // Without this check `rog\ner` would become two lines, and an
         // attacker could move content within the message without touching the
         // signature.
         assert!(approve_v1("gateway", FP_A, "rog\ner", 1).is_err());
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn wrong_fingerprint_is_rejected() {
-        assert!(approve_v1("gateway", "kort", "operator", 1).is_err());
+        assert!(approve_v1("gateway", "short", "operator", 1).is_err());
         assert!(approve_v1("gateway", &format!("sha256:{FP_A}"), "operator", 1).is_err());
         assert!(approve_v1("gateway", &FP_A.to_uppercase(), "operator", 1).is_err());
         assert!(approve_v1("gateway", &"z".repeat(64), "operator", 1).is_err());

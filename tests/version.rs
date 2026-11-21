@@ -18,7 +18,7 @@ fn changelog_has_an_entry_for_the_current_version() {
     let heading = format!("## [{}]", env!("CARGO_PKG_VERSION"));
     assert!(
         changelog.contains(&heading),
-        "CHANGELOG.md has no «{heading}» entry — a cut version without a changelog entry \
+        "CHANGELOG.md has no '{heading}' entry — a cut version without a changelog entry \
          is a version nobody can migrate to"
     );
 }

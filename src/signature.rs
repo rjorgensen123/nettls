@@ -158,12 +158,12 @@ mod tests {
     fn hex_does_not_panic_on_multibyte_utf8() {
         // Regression. An earlier in-house decoder indexed `&s[i..i + 2]` on a
         // `&str`, where `len()` counts BYTES — so the index could land in the
-        // middle of a character and fell the thread with «byte index 2 is not
-        // a char boundary».
+        // middle of a character and bring down the thread with "byte index 2 is
+        // not a char boundary".
         //
         // Reachable from outside: `sig_curr` and `sig` go straight from JSON
         // into here in `Announcement::from_json`, `Receipt::from_json` and
-        // `Approval::from_json`. One peer, one field, one felled process.
+        // `Approval::from_json`. One peer, one field, one crashed process.
         // krypto::hex::decode validates on bytes and cannot regress into this,
         // but the §6 entry point keeps the probe.
         for s in [
@@ -184,24 +184,24 @@ mod tests {
     #[test]
     fn p256_signs_and_verifies() {
         let (der, pkcs8) = cert_and_pkcs8();
-        let sig = sign_p256(&pkcs8, b"hei").unwrap();
-        verify_p256(&der, b"hei", &sig).expect("our own signature must hold");
+        let sig = sign_p256(&pkcs8, b"hey").unwrap();
+        verify_p256(&der, b"hey", &sig).expect("our own signature must hold");
     }
 
     #[test]
     fn p256_rejects_altered_message() {
         let (der, pkcs8) = cert_and_pkcs8();
-        let sig = sign_p256(&pkcs8, b"hei").unwrap();
-        assert!(verify_p256(&der, b"hej", &sig).is_err());
+        let sig = sign_p256(&pkcs8, b"hey").unwrap();
+        assert!(verify_p256(&der, b"hez", &sig).is_err());
     }
 
     #[test]
     fn p256_rejects_other_key() {
         let (_der_a, pkcs8_a) = cert_and_pkcs8();
         let (der_b, _pkcs8_b) = cert_and_pkcs8();
-        let sig = sign_p256(&pkcs8_a, b"hei").unwrap();
+        let sig = sign_p256(&pkcs8_a, b"hey").unwrap();
         assert!(
-            verify_p256(&der_b, b"hei", &sig).is_err(),
+            verify_p256(&der_b, b"hey", &sig).is_err(),
             "a signature from one identity must not hold against another"
         );
     }
@@ -209,10 +209,10 @@ mod tests {
     #[test]
     fn p256_rejects_tampered_signature() {
         let (der, pkcs8) = cert_and_pkcs8();
-        let mut sig = sign_p256(&pkcs8, b"hei").unwrap();
+        let mut sig = sign_p256(&pkcs8, b"hey").unwrap();
         let last = sig.len() - 1;
         sig[last] ^= 0x01;
-        assert!(verify_p256(&der, b"hei", &sig).is_err());
+        assert!(verify_p256(&der, b"hey", &sig).is_err());
     }
 
     // --- the two types must not be confusable ------------------------------- //
@@ -221,9 +221,9 @@ mod tests {
     fn an_ed25519_signature_does_not_hold_as_p256() {
         let (der, _) = cert_and_pkcs8();
         let seed = krypto::SecretBuf::from_vec(vec![7u8; 32]).unwrap();
-        let sig = krypto::sign::ed25519_sign(&seed, b"hei").unwrap();
+        let sig = krypto::sign::ed25519_sign(&seed, b"hey").unwrap();
         assert!(
-            verify_p256(&der, b"hei", &sig).is_err(),
+            verify_p256(&der, b"hey", &sig).is_err(),
             "the signature types must not be confusable"
         );
     }

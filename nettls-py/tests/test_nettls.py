@@ -65,7 +65,7 @@ def test_vectors_match_byte_for_byte(name):
     expected = VECTORS[name]
     actual = build_vectors()[name]
     assert actual.hex() == expected["canonical_hex"], (
-        f"vector «{name}» ({expected['what']}) does not match"
+        f"vector '{name}' ({expected['what']}) does not match"
     )
 
 

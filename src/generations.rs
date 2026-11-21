@@ -245,7 +245,7 @@ impl Generations {
 }
 
 #[cfg(test)]
-mod tester {
+mod tests {
     use super::*;
     use crate::material::TlsMaterial;
     use crate::{CertSource, SelfSignedParams};
@@ -272,7 +272,7 @@ mod tester {
         }
     }
 
-    pub(super) fn kunngjor(
+    pub(super) fn announce(
         a: &str,
         prev: Option<&Gen>,
         curr: &Gen,
@@ -296,7 +296,7 @@ mod tester {
         let mut g = Generations::from_approval(c0.g.clone());
         assert!(g.is_bootstrap());
 
-        let k = kunngjor("gateway", None, &c0, &c1, 1);
+        let k = announce("gateway", None, &c0, &c1, 1);
         assert_eq!(g.receive(&k).unwrap(), Received::Stored);
         assert_eq!(g.next().unwrap().fingerprint(), c1.g.fingerprint());
     }
@@ -310,10 +310,10 @@ mod tester {
         let c2 = new_gen("c2");
 
         let mut g = Generations::from_approval(c0.g.clone());
-        g.receive(&kunngjor("gateway", None, &c0, &c1, 1)).unwrap();
+        g.receive(&announce("gateway", None, &c0, &c1, 1)).unwrap();
         assert!(g.observed(c1.g.fingerprint()));
         // Now: previous=c0, current=c1, next=None
-        g.receive(&kunngjor("gateway", Some(&c0), &c1, &c2, 2))
+        g.receive(&announce("gateway", Some(&c0), &c1, &c2, 2))
             .unwrap();
 
         let hs: Vec<_> = g
@@ -338,7 +338,7 @@ mod tester {
         let c0 = new_gen("c0");
         let c1 = new_gen("c1");
         let mut g = Generations::from_approval(c0.g.clone());
-        g.receive(&kunngjor("gateway", None, &c0, &c1, 1)).unwrap();
+        g.receive(&announce("gateway", None, &c0, &c1, 1)).unwrap();
 
         // Before observation: nothing has moved.
         assert_eq!(g.current().fingerprint(), c0.g.fingerprint());
@@ -356,7 +356,7 @@ mod tester {
         let c1 = new_gen("c1");
         let foreign = new_gen("foreign");
         let mut g = Generations::from_approval(c0.g.clone());
-        g.receive(&kunngjor("gateway", None, &c0, &c1, 1)).unwrap();
+        g.receive(&announce("gateway", None, &c0, &c1, 1)).unwrap();
 
         assert!(!g.observed(foreign.g.fingerprint()));
         assert!(!g.observed(c0.g.fingerprint()));
@@ -371,7 +371,7 @@ mod tester {
         let c0 = new_gen("c0");
         let c1 = new_gen("c1");
         let mut g = Generations::from_approval(c0.g.clone());
-        let k = kunngjor("gateway", None, &c0, &c1, 1);
+        let k = announce("gateway", None, &c0, &c1, 1);
         assert_eq!(g.receive(&k).unwrap(), Received::Stored);
         assert_eq!(g.receive(&k).unwrap(), Received::Known);
     }
@@ -382,11 +382,11 @@ mod tester {
         let c1 = new_gen("c1");
         let c2 = new_gen("c2");
         let mut g = Generations::from_approval(c0.g.clone());
-        g.receive(&kunngjor("gateway", None, &c0, &c1, 1)).unwrap();
+        g.receive(&announce("gateway", None, &c0, &c1, 1)).unwrap();
         g.observed(c1.g.fingerprint());
 
         // A single-signed announcement now that we HAVE a previous → rejected.
-        let k = kunngjor("gateway", None, &c1, &c2, 2);
+        let k = announce("gateway", None, &c1, &c2, 2);
         assert!(g.receive(&k).is_err());
         assert!(g.next().is_none(), "nothing must be stored");
     }
@@ -399,15 +399,15 @@ mod tester {
         let c: Vec<Gen> = (0..4).map(|i| new_gen(&format!("c{i}"))).collect();
         let mut g = Generations::from_approval(c[0].g.clone());
 
-        g.receive(&kunngjor("gateway", None, &c[0], &c[1], 1))
+        g.receive(&announce("gateway", None, &c[0], &c[1], 1))
             .unwrap();
         g.observed(c[1].g.fingerprint());
 
-        g.receive(&kunngjor("gateway", Some(&c[0]), &c[1], &c[2], 2))
+        g.receive(&announce("gateway", Some(&c[0]), &c[1], &c[2], 2))
             .unwrap();
         g.observed(c[2].g.fingerprint());
 
-        g.receive(&kunngjor("gateway", Some(&c[1]), &c[2], &c[3], 3))
+        g.receive(&announce("gateway", Some(&c[1]), &c[2], &c[3], 3))
             .unwrap();
         g.observed(c[3].g.fingerprint());
 
@@ -639,7 +639,7 @@ impl ServerCertVerifier for GenerationVerifier {
 
 #[cfg(test)]
 mod restore_tests {
-    use super::tester::{kunngjor, new_gen};
+    use super::tests::{announce, new_gen};
     use super::*;
 
     /// The core of §6.8: a restart WITH state must not look like memory
@@ -654,24 +654,24 @@ mod restore_tests {
     #[test]
     fn restored_state_accepts_double_signed_announcement() {
         let (c0, c1, c2) = (new_gen("c0"), new_gen("c1"), new_gen("c2"));
-        let k = kunngjor("gateway", Some(&c0), &c1, &c2, 1_700_000_000);
+        let k = announce("gateway", Some(&c0), &c1, &c2, 1_700_000_000);
 
         // Without memory: only the anchor. A8: accepted — this is the late
         // joiner / re-anchored receiver, and `sig_curr` holds against the
         // anchor the operator approved.
-        let mut glemt = Generations::from_approval(c1.g.clone());
+        let mut forgotten = Generations::from_approval(c1.g.clone());
         assert!(
-            glemt.receive(&k).is_ok(),
+            forgotten.receive(&k).is_ok(),
             "a receiver with only an anchor must accept a double-signed \
              announcement whose curr matches the anchor (A8: numbering is \
              local to the receiver)"
         );
 
         // With memory: previous is back, and the same announcement goes in.
-        let mut husket =
+        let mut remembered =
             Generations::restore(Some(c0.g.clone()), c1.g.clone(), None).expect("legal state");
         assert!(
-            husket.receive(&k).is_ok(),
+            remembered.receive(&k).is_ok(),
             "a receiver that HAS remembered its previous must accept exactly \
              the same announcement — otherwise every restart requires an operator"
         );
@@ -688,17 +688,17 @@ mod restore_tests {
         let mut g = Generations::restore(Some(c0.g.clone()), c1.g.clone(), Some(c2.g.clone()))
             .expect("legal state");
 
-        let godtatt: Vec<&str> = g
+        let accepted: Vec<&str> = g
             .accepted_in_handshake()
             .iter()
             .map(|x| x.fingerprint())
             .collect();
         assert!(
-            godtatt.contains(&c1.g.fingerprint()),
+            accepted.contains(&c1.g.fingerprint()),
             "current must be accepted"
         );
         assert!(
-            godtatt.contains(&c2.g.fingerprint()),
+            accepted.contains(&c2.g.fingerprint()),
             "a restored \"next\" must be accepted in handshake — otherwise the \
              connection fails exactly when the peer switches"
         );
@@ -741,7 +741,7 @@ mod restore_tests {
 
 #[cfg(test)]
 mod poisoned_tests {
-    use super::tester::new_gen;
+    use super::tests::new_gen;
     use super::*;
 
     /// A thread that panics while holding the trust lock leaves it poisoned.

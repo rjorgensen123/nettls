@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! Provider-installasjonen — cratens hele eksistensberettigelse.
+//! The provider installation — the crate's whole reason to exist.
 
 use nettls::{install_crypto_provider, provider};
 
@@ -11,11 +11,11 @@ fn install_is_idempotent() {
     // expected state, not an error condition.
     let first = install_crypto_provider();
     let second = install_crypto_provider();
-    let tredje = install_crypto_provider();
+    let third = install_crypto_provider();
 
     assert!(first, "the first call must install");
     assert!(!second, "the second call must see it is already done");
-    assert!(!tredje);
+    assert!(!third);
 
     assert!(
         rustls::crypto::CryptoProvider::get_default().is_some(),
@@ -43,22 +43,22 @@ fn provider_gives_ring_suites_and_same_arc_every_time() {
 
     // Sanity: that we actually got ring and not aws-lc-rs. The ring provider
     // lacks X25519MLKEM768 (the post-quantum hybrid aws-lc-rs brings).
-    let grupper: Vec<String> = a
+    let groups: Vec<String> = a
         .kx_groups
         .iter()
         .map(|g| format!("{:?}", g.name()))
         .collect();
     assert!(
-        grupper.iter().any(|g| g.contains("X25519")),
-        "kx-grupper: {grupper:?}"
+        groups.iter().any(|g| g.contains("X25519")),
+        "kx-groups: {groups:?}"
     );
     assert!(
-        !grupper.iter().any(|g| g.contains("MLKEM")),
-        "MLKEM suggests aws-lc-rs has sneaked in: {grupper:?}"
+        !groups.iter().any(|g| g.contains("MLKEM")),
+        "MLKEM suggests aws-lc-rs has sneaked in: {groups:?}"
     );
 }
 
-/// Gjerdet mot at provider-fella sniker seg tilbake.
+/// The fence against the provider trap sneaking back in.
 ///
 /// Case L2-014 ch. 2.2.7 proposes this as a CI check. It lives here as a
 /// **test** instead, so it follows the crate and runs for everyone who builds
@@ -66,15 +66,15 @@ fn provider_gives_ring_suites_and_same_arc_every_time() {
 ///
 /// If it fires: a dependency was added without `default-features = false`, or
 /// an existing dependency got new defaults. The production symptom would have
-/// been a panic at the **first handshake** — «no process-level CryptoProvider
-/// available» — i.e. possibly only after rollout.
+/// been a panic at the **first handshake** — "no process-level CryptoProvider
+/// available" — i.e. possibly only after rollout.
 #[test]
 fn no_other_crypto_provider_in_cargo_lock() {
     let lock = include_str!("../Cargo.lock");
-    for forbudt in ["aws-lc-sys", "aws-lc-rs"] {
+    for forbidden in ["aws-lc-sys", "aws-lc-rs"] {
         assert!(
-            !lock.contains(&format!("name = \"{forbudt}\"")),
-            "{forbudt} exists in Cargo.lock — then TWO crypto providers are compiled in, and \
+            !lock.contains(&format!("name = \"{forbidden}\"")),
+            "{forbidden} exists in Cargo.lock — then TWO crypto providers are compiled in, and \
              rustls fail-closes at the first handshake. See the comment at the top of \
              Cargo.toml: every new dependency touching rustls MUST have default-features = false."
         );

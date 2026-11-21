@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """Generator for `testvectors/errors.json` — the normative error corpus.
 
-Run:  python3 nettls-py/tests/lag_feilvektorer.py [output path]
+Run:  python3 nettls-py/tests/make_error_vectors.py [output path]
 
 With `nettls_py` installed. Without a path it writes `testvectors/errors.json`.
 
@@ -9,7 +9,7 @@ With `nettls_py` installed. Without a path it writes `testvectors/errors.json`.
 
 `testvectors/canonical.json` shows the valid values. It says nothing about
 invalid ones, and that is where an attacker actually lives. Hence this corpus:
-one file, read by `tests/errors.rs` and by `nettls-py/tests/test_feil.py`, where
+one file, read by `tests/errors.rs` and by `nettls-py/tests/test_errors.py`, where
 every entry **must** be rejected.
 
 It was written when Python had its own implementation, and two divergences in
@@ -26,7 +26,7 @@ that mutation. If the baseline were garbage, the entries would be rejected for
 an entirely different reason than the one they are meant to probe, and the test
 would pass for the wrong reason.
 
-The `felt` value says which field was touched, so a test rejecting for the
+The `field` value says which field was touched, so a test rejecting for the
 wrong reason can be spotted by reading.
 
 The corpus went fully English on 2026-08-15, together with the wire keys. It is
@@ -44,7 +44,7 @@ from pathlib import Path
 import krypto_py
 import nettls_py as nettls
 
-UT = Path(__file__).resolve().parents[2] / "testvectors" / "errors.json"
+OUT = Path(__file__).resolve().parents[2] / "testvectors" / "errors.json"
 
 # Fixed seeds → the corpus is reproducible. The certificates below are
 # self-signed and regenerated every time; that is fine, because nothing in the
@@ -56,7 +56,7 @@ def _baseline() -> tuple[dict, dict, dict, dict]:
     """One valid announcement, receipt and approval — plus the certificates.
 
     The certificates must be in the file: without the `prev` and `curr` PEMs
-    neither side can run verification, and corpus level «verify» would be
+    neither side can run verification, and corpus level `verify` would be
     unprobeable.
     """
     c0_pem, c0_key, c0_fp = _identity("c0")
@@ -66,7 +66,7 @@ def _baseline() -> tuple[dict, dict, dict, dict]:
     k = nettls.announcement.Announcement.new(
         "gateway", (c0_fp, c0_key), (c1_fp, c1_key), c2_pem, 1_700_000_000
     )
-    kv = nettls.announcement.Receipt.new(
+    ack = nettls.announcement.Receipt.new(
         "service", "gateway", k.new_fingerprint(), 1_700_000_001, SEED
     )
     g = nettls.approval.Approval.new("gateway", c0_fp, "operator", 1_700_000_002, "portal", SEED)
@@ -80,7 +80,7 @@ def _baseline() -> tuple[dict, dict, dict, dict]:
             krypto_py.SecretBuf.from_vec(bytearray(SEED))
         ).hex(),
     }
-    return _dict(k), _dict(kv), _dict(g), extra
+    return _dict(k), _dict(ack), _dict(g), extra
 
 
 def _identity(name: str) -> tuple[str, bytes, str]:
@@ -123,7 +123,7 @@ def _m(base: dict, field: str, value, why: str, name: str, level: str = "parse")
 
 # 64 hex characters, but not a fingerprint we have ever seen.
 FOREIGN_FP = "0" * 64
-HEX_WITH_MULTIBYTE = "a€"  # felled Rust before 2026-08-11
+HEX_WITH_MULTIBYTE = "a€"  # crashed Rust before 2026-08-11
 # Written as an ESCAPE on purpose: a raw U+0085 is invisible in an editor, and
 # a constant nobody can see is a constant nobody can review.
 NAME_WITH_NEL = "gateway\u0085"  # got through Python until 2026-08-11
@@ -205,12 +205,12 @@ def announcement_errors(base: dict) -> list[dict]:
             "the other way",
             "half_announcement_missing_prev_fp",
         ),
-        # --- level «verifiser» ----------------------------------------------- #
+        # --- level `verify` -------------------------------------------------- #
         # `new_cert_pem` is NOT part of the signed string — only the
         # fingerprint is. That is why these get through `from_json` in
         # both test suites, and must be stopped where the fingerprint is
         # recomputed from the PEM. That is the right place: a receiver that
-        # stored a broken PEM would be left without a usable «next» at the
+        # stored a broken PEM would be left without a usable `next` at the
         # rotation.
         _m(
             base,
@@ -278,8 +278,8 @@ def approval_errors(base: dict) -> list[dict]:
 
 
 def main() -> None:
-    out = Path(sys.argv[1]) if len(sys.argv) > 1 else UT
-    k, kv, g, extra = _baseline()
+    out = Path(sys.argv[1]) if len(sys.argv) > 1 else OUT
+    k, ack, g, extra = _baseline()
     corpus = {
         "_about": (
             "Normative error corpus (§6.14b). Every entry MUST be rejected — by the "
@@ -292,9 +292,9 @@ def main() -> None:
         # test that only demands rejection would look green while probing
         # nothing. These three are the unmutated messages, and they MUST be
         # accepted by both test suites.
-        "_valid": {"announcement": k, "receipt": kv, "approval": g, **extra},
+        "_valid": {"announcement": k, "receipt": ack, "approval": g, **extra},
         "announcement": announcement_errors(k),
-        "receipt": receipt_errors(kv),
+        "receipt": receipt_errors(ack),
         "approval": approval_errors(g),
     }
     out.write_text(json.dumps(corpus, indent=2, ensure_ascii=False) + "\n")

@@ -90,6 +90,12 @@ Encoding can fail in krypto 0.9, so `pem::encode`, `cert_fingerprint_sha256`,
 `Generation::from_der`, `IdentityJson::new` and the three `to_json` return
 `Result`. The error is the new `TlsError::Encode`, `EncodeError` in Python.
 
+### Changed — tests, example and internal names in English *(2026-11-21)*
+
+The Python tests, the Rust tests, `examples/ringnode.rs` and private names in
+`src/` had Norwegian words, and are English now. No public name, stored value
+or message is changed.
+
 ## [0.11.0] — Python runs the Rust code
 
 ### Changed — Python uses the Rust code, through `nettls-py` *(2026-11-06)*

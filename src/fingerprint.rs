@@ -79,13 +79,13 @@ mod tests {
     fn tolerates_colons_uppercase_and_prefix() {
         let raw = [0xabu8; 32];
         let hex = krypto::hex::encode(&raw).unwrap();
-        let med_kolon: Vec<String> = hex
+        let with_colons: Vec<String> = hex
             .as_bytes()
             .chunks(2)
             .map(|c| String::from_utf8_lossy(c).to_uppercase())
             .collect();
-        let pyntet = format!("SHA256:{}", med_kolon.join(":"));
-        assert_eq!(parse_fingerprint(&pyntet).unwrap(), raw);
+        let decorated = format!("SHA256:{}", with_colons.join(":"));
+        assert_eq!(parse_fingerprint(&decorated).unwrap(), raw);
     }
 
     #[test]

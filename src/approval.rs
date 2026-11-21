@@ -227,7 +227,7 @@ impl Recognition {
 }
 
 #[cfg(test)]
-mod tester {
+mod tests {
     use super::*;
     use crate::material::TlsMaterial;
     use crate::{CertSource, SelfSignedParams};
@@ -275,7 +275,7 @@ mod tester {
         // does not cover who acted does not say who acted.
         let g = Approval::new("gateway", FP, "operator", 100, "portal", &seed()).unwrap();
         let mut j = g.to_json().unwrap();
-        j.approved_by = "en-annen".into();
+        j.approved_by = "someone-else".into();
         let tampered = Approval::from_json(&j).unwrap();
         let r = register();
         assert!(tampered.verify(&r).is_err());
@@ -303,8 +303,8 @@ mod tester {
         )
         .unwrap();
         let t = serde_json::to_string(&g.to_json().unwrap()).unwrap();
-        let inn: ApprovalJson = serde_json::from_str(&t).unwrap();
-        assert_eq!(Approval::from_json(&inn).unwrap(), g);
+        let read_back: ApprovalJson = serde_json::from_str(&t).unwrap();
+        assert_eq!(Approval::from_json(&read_back).unwrap(), g);
     }
 
     #[test]

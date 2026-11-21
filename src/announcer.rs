@@ -61,26 +61,26 @@ pub const MIN_BETWEEN_ROLLS_S: i64 = DAY_S;
 /// every 7 days" is then true — and gives a better worst case, since an
 /// *earlier* rotation gives **more** margin, not less.
 pub fn draw_roll_time(issued: i64) -> Result<i64, TlsError> {
-    let spenn = 2 * SPREAD_DAYS * DAY_S; // ±2 days = 4 days total
-    let offset = tilfeldig_under(spenn as u64)? as i64 - SPREAD_DAYS * DAY_S;
+    let span = 2 * SPREAD_DAYS * DAY_S; // ±2 days = 4 days total
+    let offset = random_below(span as u64)? as i64 - SPREAD_DAYS * DAY_S;
     Ok(issued + NOMINAL_AGE_DAYS * DAY_S + offset)
 }
 
-/// A uniformly random number in `[0, tak)` from the OS CSPRNG.
+/// A uniformly random number in `[0, bound)` from the OS CSPRNG.
 ///
-/// Uses rejection instead of modulo: `x % tak` is biased when `tak` does not
+/// Uses rejection instead of modulo: `x % bound` is biased when `bound` does not
 /// divide `u64::MAX`, and even though the bias is negligible here, it is the
 /// kind of detail that gets copied onward to a place where it is not.
-fn tilfeldig_under(tak: u64) -> Result<u64, TlsError> {
-    if tak == 0 {
+fn random_below(bound: u64) -> Result<u64, TlsError> {
+    if bound == 0 {
         return Ok(0);
     }
-    let grense = u64::MAX - (u64::MAX % tak);
+    let limit = u64::MAX - (u64::MAX % bound);
     for _ in 0..64 {
         let b = krypto::random_bytes(8).map_err(|e| TlsError::Random(e.to_string()))?;
         let x = u64::from_le_bytes(b.try_into().expect("random_bytes(8) is 8 bytes"));
-        if x < grense {
-            return Ok(x % tak);
+        if x < limit {
+            return Ok(x % bound);
         }
     }
     Err(TlsError::Random(
@@ -189,8 +189,8 @@ impl Schedule {
     /// respected. The rate limit stands regardless of what triggered the
     /// rotation: it caps any vector that amounts to forcing rotations (§6.7c, M-22).
     pub fn can_roll(&self, now: i64) -> bool {
-        let alle_klare = matches!(&self.state, ChainState::Announced { waiting_for, .. } if waiting_for.is_empty());
-        alle_klare && self.rate_limit_ok(now)
+        let all_acked = matches!(&self.state, ChainState::Announced { waiting_for, .. } if waiting_for.is_empty());
+        all_acked && self.rate_limit_ok(now)
     }
 
     /// Has enough time passed since the previous actual rotation?
@@ -258,13 +258,13 @@ impl Announcer {
         // The PEM pair and the combined cleartext stay in locked memory until
         // `lock` has produced the blob. The layout is the one `load` splits:
         // the chain, a newline, the key.
-        let samlet = key.expose(|k| {
+        let combined = key.expose(|k| {
             let mut s = cert;
             s.extend_from_slice(b"\n");
             s.extend_from_slice(k);
             crate::secret::hold(s)
         })?;
-        let locked = samlet.expose(|b| crate::lockbox::lock(pw, b))?;
+        let locked = combined.expose(|b| crate::lockbox::lock(pw, b))?;
         crate::pem::create_private_dir(dir)?;
         crate::pem::write_atomic(&dir.join(Self::LOCKED_FILE), &locked, 0o600)
     }
@@ -296,13 +296,16 @@ impl Announcer {
         out.expose(|b| {
             // Split on the raw bytes — no `String` copy of the key on the way.
             const MARKER: &[u8] = b"-----BEGIN PRIVATE KEY-----";
-            let skille = b
+            let key_start = b
                 .windows(MARKER.len())
                 .position(|w| w == MARKER)
                 .ok_or_else(|| {
                     TlsError::Pem("no private key found in the locked material".into())
                 })?;
-            TlsMaterial::load(&CertSource::pem(b[..skille].to_vec(), b[skille..].to_vec()))
+            TlsMaterial::load(&CertSource::pem(
+                b[..key_start].to_vec(),
+                b[key_start..].to_vec(),
+            ))
         })
     }
 
@@ -341,7 +344,7 @@ impl Announcer {
         // The on-disk struct needs a `Vec<u8>` for serde; it is wiped the
         // moment the JSON exists.
         let json = {
-            let on_disk = ForrigePaaDisk {
+            let on_disk = PreviousOnDisk {
                 fingerprint: fp.clone(),
                 pkcs8: pkcs8.expose(|b| b.to_vec()),
                 current: Some(current.to_string()),
@@ -434,25 +437,25 @@ impl Announcer {
     }
 
     /// Reads the previous-key file. `None` when there is none.
-    fn read_previous(&self) -> Result<Option<ForrigePaaDisk>, TlsError> {
+    fn read_previous(&self) -> Result<Option<PreviousOnDisk>, TlsError> {
         let path = self.previous_path();
-        let raa = match std::fs::read(&path) {
+        let raw = match std::fs::read(&path) {
             Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // If the OTHER form is there, the setup has changed under our
                 // feet — a password added or removed. Then the chain is
                 // unreadable, and that must be said out loud.
-                let annen = self.dir.join(if self.password.is_some() {
+                let other_form = self.dir.join(if self.password.is_some() {
                     Self::PREVIOUS_CLEARTEXT_FILE
                 } else {
                     Self::PREVIOUS_LOCKED_FILE
                 });
-                if annen.exists() {
+                if other_form.exists() {
                     return Err(TlsError::Chain(format!(
                         "the previous key is stored as {} but the announcer is configured {}. \
                          The password setup has changed since the chain was saved; it cannot be \
                          read, and the pair must be approved anew by an operator",
-                        annen.display(),
+                        other_form.display(),
                         if self.password.is_some() {
                             "WITH a password"
                         } else {
@@ -465,12 +468,12 @@ impl Announcer {
             Err(e) => return Err(TlsError::io(&path, e)),
         };
 
-        let read_back: ForrigePaaDisk = match &self.password {
+        let read_back: PreviousOnDisk = match &self.password {
             Some(pw) => {
-                let out = crate::lockbox::unlock(pw, &raa)?;
+                let out = crate::lockbox::unlock(pw, &raw)?;
                 out.expose(|b| serde_json::from_slice(b))
             }
-            None => serde_json::from_slice(&raa),
+            None => serde_json::from_slice(&raw),
         }
         .map_err(|e| {
             TlsError::Chain(format!(
@@ -528,7 +531,7 @@ impl Announcer {
 
 /// The previous generation's key, as it lies on disk.
 #[derive(serde::Serialize, serde::Deserialize)]
-struct ForrigePaaDisk {
+struct PreviousOnDisk {
     fingerprint: String,
     pkcs8: Vec<u8>,
     /// The `current` this `previous` belongs to. Absent before 0.10.0.
@@ -539,14 +542,14 @@ struct ForrigePaaDisk {
     rolled_at: Option<i64>,
 }
 
-impl Drop for ForrigePaaDisk {
+impl Drop for PreviousOnDisk {
     fn drop(&mut self) {
         self.pkcs8.zeroize();
     }
 }
 
 /// Logs that the keys are stored in cleartext, once at setup.
-fn tracing_advarsel() {
+fn warn_cleartext() {
     // A silent cleartext storage is worse than a loud one: whoever reads the
     // code a year from now sees no difference between "deliberate choice" and
     // "forgotten".
@@ -604,24 +607,24 @@ mod tests {
         // M-19. This is the whole reason the spread exists: `docker compose
         // up` provisions everything in the same second, and with a fixed
         // interval they would have been in lockstep forever.
-        let mut sett = std::collections::BTreeSet::new();
+        let mut distinct = std::collections::BTreeSet::new();
         for _ in 0..50 {
-            sett.insert(draw_roll_time(1_700_000_000).unwrap());
+            distinct.insert(draw_roll_time(1_700_000_000).unwrap());
         }
         assert!(
-            sett.len() > 40,
+            distinct.len() > 40,
             "the spread is too narrow — only {} distinct out of 50",
-            sett.len()
+            distinct.len()
         );
     }
 
     #[test]
     fn spread_has_second_resolution() {
         // With day resolution there would only be 5 possible values.
-        let verdier: BTreeSet<i64> = (0..50)
+        let values: BTreeSet<i64> = (0..50)
             .map(|_| draw_roll_time(0).unwrap() % DAY_S)
             .collect();
-        assert!(verdier.len() > 20, "looks like day resolution: {verdier:?}");
+        assert!(values.len() > 20, "looks like day resolution: {values:?}");
     }
 
     // --- the gate: everyone must ack ------------------------------------------ //
@@ -707,7 +710,7 @@ mod tests {
             ChainState::Idle { attempt_at } => {
                 assert!((1_000 + 5 * DAY_S..=1_000 + 9 * DAY_S).contains(attempt_at));
             }
-            annet => panic!("expected Idle, got {annet:?}"),
+            other => panic!("expected Idle, got {other:?}"),
         }
         assert!(!r.should_announce(1_001));
     }
@@ -812,8 +815,8 @@ impl Schedule {
         if waiting_for.is_empty() {
             return None;
         }
-        let gaatt = now - first_announced;
-        Some(now + interval_after(gaatt.max(0)))
+        let elapsed = now - first_announced;
+        Some(now + interval_after(elapsed.max(0)))
     }
 
     /// Has the alarm fired?
@@ -869,11 +872,11 @@ mod retry_tests {
     fn retries_continue_after_the_alarm() {
         // M-7e: the alarm notifies a human, it does not end the attempt.
         let r = r();
-        let etter = ALARM_AFTER_S + 5 * 3600;
-        assert!(r.alarm(etter));
+        let after_alarm = ALARM_AFTER_S + 5 * 3600;
+        assert!(r.alarm(after_alarm));
         assert_eq!(
-            r.next_retry(etter),
-            Some(etter + 3600),
+            r.next_retry(after_alarm),
+            Some(after_alarm + 3600),
             "the attempts must continue at hourly cadence"
         );
     }
@@ -1220,7 +1223,7 @@ impl Announcer {
         password: Option<krypto::SecretString>,
     ) -> Result<Self, TlsError> {
         if password.is_none() {
-            tracing_advarsel();
+            warn_cleartext();
         }
         let s = Self {
             name: name.into(),
@@ -1553,11 +1556,11 @@ impl ClockDrift {
     /// not correct for it — the thresholds are far above it.
     pub fn observe(&mut self, their_sent_at: i64, our_now: i64) -> Drift {
         let deviation = their_sent_at - our_now;
-        let sprang = self.last.map(|f| (deviation - f).abs()).unwrap_or(0);
+        let jump = self.last.map(|f| (deviation - f).abs()).unwrap_or(0);
         self.last = Some(deviation);
         self.max = self.max.max(deviation.abs());
 
-        if deviation.abs() > DRIFT_WARNING_S || sprang > DRIFT_JUMP_S {
+        if deviation.abs() > DRIFT_WARNING_S || jump > DRIFT_JUMP_S {
             Drift::Warning
         } else if deviation.abs() >= DRIFT_NORMAL_S {
             Drift::Log

@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn altered_ciphertext_is_rejected() {
-        let mut file = lock(&pw("secret"), b"noe viktig").unwrap();
+        let mut file = lock(&pw("secret"), b"something important").unwrap();
         let last = file.len() - 1;
         file[last] ^= 0x01;
         assert!(unlock(&pw("secret"), &file).is_err());
@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn altered_salt_is_rejected() {
-        let mut file = lock(&pw("secret"), b"noe viktig").unwrap();
+        let mut file = lock(&pw("secret"), b"something important").unwrap();
         file[MAGIC.len()] ^= 0x01;
         assert!(unlock(&pw("secret"), &file).is_err());
     }
@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn too_short_file_is_rejected() {
-        let err = unlock(&pw("x"), b"kort").unwrap_err();
+        let err = unlock(&pw("x"), b"short").unwrap_err();
         assert!(matches!(err, TlsError::Envelope(_)), "{err:?}");
     }
 

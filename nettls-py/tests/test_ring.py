@@ -45,17 +45,16 @@ import pytest
 
 from support import ROOT, ed25519_public
 
-HER = Path(__file__).resolve().parent
-ROT = ROOT
+HERE = Path(__file__).resolve().parent
 
 pytestmark = pytest.mark.skipif(
     shutil.which("cargo") is None, reason="cargo is missing — the ring test is skipped"
 )
 
-ROTASJONER = 4
+ROTATIONS = 4
 
 
-def ledig_port() -> int:
+def free_port() -> int:
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
     p = s.getsockname()[1]
@@ -63,7 +62,7 @@ def ledig_port() -> int:
     return p
 
 
-class NodeProsess:
+class NodeProcess:
     """A node as a subprocess, controlled with JSON lines on stdin."""
 
     def __init__(self, lang: str, name: str, port: int, neighbour_port: int, seed: bytes):
@@ -77,11 +76,11 @@ class NodeProsess:
         # lineage that rotates, not the signing key.
         self.pub = ed25519_public(seed)
         args = (
-            [sys.executable, str(HER / "ringnode.py")]
+            [sys.executable, str(HERE / "ringnode.py")]
             if lang == "python"
             else [
                 "cargo", "run", "-q", "--example", "ringnode",
-                "--manifest-path", str(ROT / "Cargo.toml"), "--",
+                "--manifest-path", str(ROOT / "Cargo.toml"), "--",
             ]
         )
         self.p = subprocess.Popen(
@@ -92,48 +91,48 @@ class NodeProsess:
             text=True,
             bufsize=1,
         )
-        klar = json.loads(self._les())
-        assert klar.get("ready") == name, klar
-        self.start_fp = klar["fp"]
+        ready = json.loads(self._read())
+        assert ready.get("ready") == name, ready
+        self.start_fp = ready["fp"]
 
-    # No command may be left standing and waiting. A node that does not answer
-    # must give a READABLE error, not a test that stands until someone kills it.
+    # No command may be left hanging. A node that does not answer must give a
+    # READABLE error, not a test that hangs until someone kills it.
     #
     # That is not hypothetical: the Rust node did `.unwrap()` on the reply from
-    # a neighbour, so a killed neighbour felled the control thread — and then
+    # a neighbour, so a killed neighbour crashed the control thread — and then
     # no reply was ever written to stdout. The test hung. The node is fixed,
     # but the fence stays: next time the symptom must be an error message, not
     # a silence.
-    SVARFRIST_S = 60
+    REPLY_TIMEOUT_S = 60
 
-    def _les(self) -> str:
-        klar, _, _ = select.select([self.p.stdout], [], [], self.SVARFRIST_S)
-        if not klar:
+    def _read(self) -> str:
+        ready, _, _ = select.select([self.p.stdout], [], [], self.REPLY_TIMEOUT_S)
+        if not ready:
             raise AssertionError(
-                f"{self.name} did not answer within {self.SVARFRIST_S}s — the "
+                f"{self.name} did not answer within {self.REPLY_TIMEOUT_S}s — the "
                 f"node is hanging or the control thread is dead.\n"
-                f"stderr:\n{self._stderr_saa_langt()}"
+                f"stderr:\n{self._stderr_so_far()}"
             )
-        linje = self.p.stdout.readline()
-        if not linje:
-            raise AssertionError(f"{self.name} died:\n{self._stderr_saa_langt()}")
-        return linje
+        line = self.p.stdout.readline()
+        if not line:
+            raise AssertionError(f"{self.name} died:\n{self._stderr_so_far()}")
+        return line
 
-    def _stderr_saa_langt(self) -> str:
+    def _stderr_so_far(self) -> str:
         """Read what is on stderr without blocking if the process is alive."""
         if self.p.poll() is not None:
             return self.p.stderr.read()[-3000:]
-        klar, _, _ = select.select([self.p.stderr], [], [], 0.2)
-        return os.read(self.p.stderr.fileno(), 3000).decode(errors="replace") if klar else "(empty)"
+        ready, _, _ = select.select([self.p.stderr], [], [], 0.2)
+        return os.read(self.p.stderr.fileno(), 3000).decode(errors="replace") if ready else "(empty)"
 
-    def styr(self, **m) -> dict:
+    def control(self, **m) -> dict:
         self.p.stdin.write(json.dumps(m) + "\n")
         self.p.stdin.flush()
-        reply = json.loads(self._les())
+        reply = json.loads(self._read())
         assert "error" not in reply, f"{self.name}: {reply['error']}"
         return reply
 
-    def drep(self) -> None:
+    def kill(self) -> None:
         try:
             self.p.stdin.close()
         except Exception:  # noqa: BLE001
@@ -145,14 +144,14 @@ class NodeProsess:
             self.p.kill()
 
 
-def _bygg_ring(lang: list[str]) -> list[NodeProsess]:
+def _build_ring(lang: list[str]) -> list[NodeProcess]:
     """A ring of arbitrary length: node *i* talks to node *i+1*, the last to the first."""
     count = len(lang)
-    porter = [ledig_port() for _ in range(count)]
+    ports = [free_port() for _ in range(count)]
     nodes = []
     for i, (s, name) in enumerate(zip(lang, "abcdefghij")):
         nodes.append(
-            NodeProsess(s, name, porter[i], porter[(i + 1) % count], bytes([i + 1] * 32))
+            NodeProcess(s, name, ports[i], ports[(i + 1) % count], bytes([i + 1] * 32))
         )
     # Wait until all are listening.
     for nd in nodes:
@@ -167,7 +166,7 @@ def _bygg_ring(lang: list[str]) -> list[NodeProsess]:
     return nodes
 
 
-def _godkjenn_alle(nodes: list[NodeProsess]) -> None:
+def _approve_all(nodes: list[NodeProcess]) -> None:
     """The operator's one-time approval — generation 0, the anchor it all hangs on.
 
     Each node approves its **successor**, since that is the edge it talks on.
@@ -185,7 +184,7 @@ def _godkjenn_alle(nodes: list[NodeProsess]) -> None:
     """
     for i, nd in enumerate(nodes):
         neighbour = nodes[(i + 1) % len(nodes)]
-        nd.styr(
+        nd.control(
             op="approve",
             name=neighbour.name,
             port=neighbour.port,
@@ -193,12 +192,12 @@ def _godkjenn_alle(nodes: list[NodeProsess]) -> None:
         )
         # The predecessor: the one who PINS us, and who therefore must ack OUR
         # rotation. We must also be able to verify its receipt.
-        forgjenger = nodes[(i - 1) % len(nodes)]
-        nd.styr(op="know_key", name=forgjenger.name, ed25519_pub=forgjenger.pub.hex())
-        nd.styr(op="require_ack_from", name=forgjenger.name)
+        predecessor = nodes[(i - 1) % len(nodes)]
+        nd.control(op="know_key", name=predecessor.name, ed25519_pub=predecessor.pub.hex())
+        nd.control(op="require_ack_from", name=predecessor.name)
 
 
-def _rull_en_node(nodes: list[NodeProsess], i: int, now: int) -> None:
+def _roll_one_node(nodes: list[NodeProcess], i: int, now: int) -> None:
     """Roll **one** node. The others stand still (§6.7).
 
     This is the core of the asymmetry, and the whole reason §6 looks the way
@@ -218,10 +217,10 @@ def _rull_en_node(nodes: list[NodeProsess], i: int, now: int) -> None:
     Afterwards `i` stands on a new generation while everyone else stands on
     their old one. The ring must still carry a marker all the way round.
     """
-    _rull_samtidig(nodes, [i], now)
+    _roll_simultaneously(nodes, [i], now)
 
 
-def _rull_samtidig(nodes: list[NodeProsess], indekser: list[int], now: int) -> None:
+def _roll_simultaneously(nodes: list[NodeProcess], indices: list[int], now: int) -> None:
     """Roll several nodes with **overlapping** announcement windows.
 
     With two neighbours in the set, **both ends of one link** change at once:
@@ -232,35 +231,35 @@ def _rull_samtidig(nodes: list[NodeProsess], indekser: list[int], now: int) -> N
     The steps are the same as for one node, but all announce before anyone
     acks: the overlap is precisely what is being probed.
     """
-    valgt = [nodes[i] for i in indekser]
+    selected = [nodes[i] for i in indices]
 
-    for nd in valgt:
-        nd.styr(op="prepare", now=now)
+    for nd in selected:
+        nd.control(op="prepare", now=now)
 
     # The predecessor acks — the one that PINS the node, not the one it pins.
-    for i in indekser:
+    for i in indices:
         nd = nodes[i]
-        nodes[(i - 1) % len(nodes)].styr(
+        nodes[(i - 1) % len(nodes)].control(
             op="fetch_and_ack", name=nd.name, port=nd.port, now=now
         )
 
-    for nd in valgt:
-        r = nd.styr(op="roll", now=now)
+    for nd in selected:
+        r = nd.control(op="roll", now=now)
         assert r["rolled"], f"{nd.name} did not roll — did the receipt not arrive?"
 
 
-def _er_skjev(nodes: list[NodeProsess]) -> bool:
+def _is_skewed(nodes: list[NodeProcess]) -> bool:
     """Are the nodes on **different** generations right now?
 
     This is the measurable form of §6.7. A ring where everyone has always
     rolled the same number of times is a ring swapping in lockstep — and then
     there is nothing asymmetric to test, however many generations pass.
     """
-    tellere = {nd.styr(op="status")["rotations"] for nd in nodes}
-    return len(tellere) > 1
+    counters = {nd.control(op="status")["rotations"] for nd in nodes}
+    return len(counters) > 1
 
 
-def _samtidige_grupper(
+def _simultaneous_groups(
     round_no: int, count: int, rng: random.Random
 ) -> list[tuple[list[int], str]]:
     """Which nodes roll AT THE SAME TIME this round, and why.
@@ -312,10 +311,10 @@ def _samtidige_grupper(
     return []
 
 
-KORPUS = json.loads((ROT / "testvectors" / "errors.json").read_text())
+CORPUS = json.loads((ROOT / "testvectors" / "errors.json").read_text())
 
 
-def _injiser_feil(nodes: list[NodeProsess], round_no: int) -> None:
+def _inject_errors(nodes: list[NodeProcess], round_no: int) -> None:
     """Feed hostile announcements into a ring that is mid-flight (§6.15b).
 
     ## Why mid-flight, and not on an empty node
@@ -339,10 +338,10 @@ def _injiser_feil(nodes: list[NodeProsess], round_no: int) -> None:
     property is "the node cannot be poisoned", and defence in depth is then a
     strength, not something to complain about.
 
-    The level is probed elsewhere: `python/test_feil.py` and `tests/errors.rs`
+    The level is probed elsewhere: `nettls-py/tests/test_errors.py` and `tests/errors.rs`
     require every entry stopped at the **right** level. Turn off the
     fingerprint validation and this test still passes (`receive` catches it),
-    while the corpus tests fell it. The two complement each other, and neither
+    while the corpus tests catch it. The two complement each other, and neither
     replaces the other.
 
     ## The whole corpus, not a random sample
@@ -353,32 +352,32 @@ def _injiser_feil(nodes: list[NodeProsess], round_no: int) -> None:
     failing run impossible to reproduce, and a test you cannot reproduce is a
     test you end up ignoring.
     """
-    offer = nodes[round_no % len(nodes)]
+    victim = nodes[round_no % len(nodes)]
     neighbour = nodes[(round_no % len(nodes) + 1) % len(nodes)]
 
-    for post in KORPUS["announcement"]:
-        reply = offer.styr(
-            op="inject", name=neighbour.name, announcement=post["json"]
+    for entry in CORPUS["announcement"]:
+        reply = victim.control(
+            op="inject", name=neighbour.name, announcement=entry["json"]
         )
         assert reply["rejected"], (
-            f"{offer.name} ACCEPTED a hostile announcement «{post['name']}» — "
-            f"should have been rejected because {post['why']}"
+            f"{victim.name} ACCEPTED a hostile announcement '{entry['name']}' — "
+            f"should have been rejected because {entry['why']}"
         )
         assert reply["unchanged"], (
-            f"{offer.name} rejected «{post['name']}», but the state changed "
+            f"{victim.name} rejected '{entry['name']}', but the state changed "
             f"anyway. A message that gets to write before being rejected is "
             f"not rejected."
         )
 
 
-def _kjor_ring(lang: list[str], injiser_etter: int = 2) -> None:
-    nodes = _bygg_ring(lang)
+def _run_ring(lang: list[str], inject_after: int = 2) -> None:
+    nodes = _build_ring(lang)
     try:
-        _godkjenn_alle(nodes)
+        _approve_all(nodes)
 
         # Sanity: the marker goes round BEFORE anyone has rolled. Without it
         # the rest could have "passed" against a ring that never worked.
-        reply = nodes[0].styr(op="marker", marker="start", skip=len(nodes))
+        reply = nodes[0].control(op="marker", marker="start", skip=len(nodes))
         assert reply["marker"] == "start", reply
 
         # SEEDED randomness. The order must be spread and not a→b→c, but it
@@ -393,11 +392,11 @@ def _kjor_ring(lang: list[str], injiser_etter: int = 2) -> None:
         # would be claims in a comment: a planner that one day returns empty,
         # or a sweep that accidentally becomes lockstep again, would look
         # green.
-        sett_skjevt = False
-        kjorte: list[str] = []
+        seen_skewed = False
+        kinds_run: list[str] = []
 
         now = 0
-        for round_no in range(1, ROTASJONER + 1):
+        for round_no in range(1, ROTATIONS + 1):
             # ASYMMETRIC (§6.7): the nodes roll ONE AT A TIME, not in lockstep.
             #
             # The first version of this test let everyone announce, everyone
@@ -406,45 +405,45 @@ def _kjor_ring(lang: list[str], injiser_etter: int = 2) -> None:
             # SAME generation, and then the asymmetry is not probed at all.
             # That is precisely what §6 exists for: the peer lacks the
             # *certificate*, not a time of day.
-            igjen = list(range(count))
-            rng.shuffle(igjen)
+            remaining = list(range(count))
+            rng.shuffle(remaining)
 
             # Simultaneous rotations. Every node still rolls exactly once per
             # round — a pair just does it together instead of back to back,
             # with overlapping announcement windows.
-            grupper = _samtidige_grupper(round_no, count, rng)
-            for gruppe, _ in grupper:
-                for i in gruppe:
-                    igjen.remove(i)
+            groups = _simultaneous_groups(round_no, count, rng)
+            for group, _ in groups:
+                for i in group:
+                    remaining.remove(i)
 
-            for gruppe, hva in grupper:
+            for group, kind in groups:
                 now += 2 * 86_400
-                _rull_samtidig(nodes, gruppe, now)
-                name = [nodes[i].name for i in gruppe]
-                kjorte.append(hva)
-                if _er_skjev(nodes):
-                    sett_skjevt = True
-                merke = f"round_no-{round_no}-samtidig-{hva}-{'-'.join(name)}"
-                reply = nodes[0].styr(op="marker", marker=merke, skip=count)
-                assert reply["marker"] == merke, (
-                    f"a message was lost when {hva} {name} rolled simultaneously "
+                _roll_simultaneously(nodes, group, now)
+                name = [nodes[i].name for i in group]
+                kinds_run.append(kind)
+                if _is_skewed(nodes):
+                    seen_skewed = True
+                marker = f"round_no-{round_no}-simultaneous-{kind}-{'-'.join(name)}"
+                reply = nodes[0].control(op="marker", marker=marker, skip=count)
+                assert reply["marker"] == marker, (
+                    f"a message was lost when {kind} {name} rolled simultaneously "
                     f"(round {round_no}): {reply}"
                 )
 
-            for i in igjen:
+            for i in remaining:
                 now += 2 * 86_400  # past the rate limit (§6.7c)
-                _rull_en_node(nodes, i, now)
+                _roll_one_node(nodes, i, now)
 
                 # The marker while the ring is SKEWED: `i` stands on a new
                 # generation, the others on their old one. If it comes round
                 # whole here, the pinning has accepted `current` + `next` and
                 # promoted on observation — all of §6.7 in one round.
-                if _er_skjev(nodes):
-                    sett_skjevt = True
+                if _is_skewed(nodes):
+                    seen_skewed = True
 
-                merke = f"round_no-{round_no}-node-{nodes[i].name}"
-                reply = nodes[0].styr(op="marker", marker=merke, skip=count)
-                assert reply["marker"] == merke, (
+                marker = f"round_no-{round_no}-node-{nodes[i].name}"
+                reply = nodes[0].control(op="marker", marker=marker, skip=count)
+                assert reply["marker"] == marker, (
                     f"the marker did not come back whole while the ring was "
                     f"skewed (round {round_no}, {nodes[i].name} just rolled): {reply}"
                 )
@@ -452,9 +451,9 @@ def _kjor_ring(lang: list[str], injiser_etter: int = 2) -> None:
             # Error injection mid-flight. The rounds AFTER this one are the
             # real probe: a ring that survives the attack but cannot keep
             # rotating has not survived it.
-            if round_no == injiser_etter:
-                _injiser_feil(nodes, round_no)
-                reply = nodes[0].styr(op="marker", marker="after-attack", skip=len(nodes))
+            if round_no == inject_after:
+                _inject_errors(nodes, round_no)
+                reply = nodes[0].control(op="marker", marker="after-attack", skip=len(nodes))
                 assert reply["marker"] == "after-attack", (
                     f"the ring did not carry the marker after the error injection: {reply}"
                 )
@@ -462,34 +461,34 @@ def _kjor_ring(lang: list[str], injiser_etter: int = 2) -> None:
         # Was the ring ACTUALLY skewed along the way? Without this, a change
         # making the rotation symmetric again could pass unnoticed — the test
         # would stay green while ceasing to probe what it exists for.
-        assert sett_skjevt, (
+        assert seen_skewed, (
             "the ring never stood on different generations at once — then §6.7 "
             "(asymmetric rotation) was not probed, however many generations "
             "were run"
         )
 
         # And did the simultaneous groups actually run?
-        assert "neighbours" in kjorte, (
+        assert "neighbours" in kinds_run, (
             f"no NEIGHBOURS rolled simultaneously — both ends of a link never "
-            f"swapped at once. Ran: {kjorte}"
+            f"swapped at once. Ran: {kinds_run}"
         )
         if count >= 4:
-            assert "non-neighbours" in kjorte, (
+            assert "non-neighbours" in kinds_run, (
                 f"no NON-NEIGHBOURS rolled simultaneously. Two places in the "
-                f"ring should have swapped independently. Ran: {kjorte}"
+                f"ring should have swapped independently. Ran: {kinds_run}"
             )
 
         # Everyone must have rolled exactly this many times.
         for nd in nodes:
-            st = nd.styr(op="status")
-            assert st["rotations"] == ROTASJONER, f"{nd.name}: {st}"
+            st = nd.control(op="status")
+            assert st["rotations"] == ROTATIONS, f"{nd.name}: {st}"
             assert st["fp"] != nd.start_fp, f"{nd.name} is still on its starting certificate"
 
         # And nobody holds the anchor as current or previous anymore: after
         # four rotations both cert0 and cert1 are out of the picture.
         for i, nd in enumerate(nodes):
             neighbour = nodes[(i + 1) % len(nodes)]
-            st = nd.styr(op="status")["peers"][neighbour.name]
+            st = nd.control(op="status")["peers"][neighbour.name]
             assert st["current"] != neighbour.start_fp, (
                 f"{nd.name} still holds {neighbour.name}'s ANCHOR as current"
             )
@@ -498,13 +497,13 @@ def _kjor_ring(lang: list[str], injiser_etter: int = 2) -> None:
             )
     finally:
         for nd in nodes:
-            nd.drep()
+            nd.kill()
 
 
 @pytest.mark.slow
 def test_ring_2rust_1python():
     """A (Rust) → B (Python) → C (Rust). Covers R→P, P→R and R→R."""
-    _kjor_ring(["rust", "python", "rust"])
+    _run_ring(["rust", "python", "rust"])
 
 
 @pytest.mark.slow
@@ -514,7 +513,7 @@ def test_ring_2python_1rust():
     Not a repeat of the previous one: here `Python → Python` is probed for the
     first time, with nettls-py on both ends of a connection.
     """
-    _kjor_ring(["python", "rust", "python"], injiser_etter=1)
+    _run_ring(["python", "rust", "python"], inject_after=1)
 
 
 # ── Pure rings: Rust alone, and the binding alone ─────────────────────────── #
@@ -527,7 +526,7 @@ def test_ring_2python_1rust():
 @pytest.mark.slow
 def test_ring_3rust():
     """Pure Rust ring. R→R on every edge, no Python anywhere near."""
-    _kjor_ring(["rust", "rust", "rust"])
+    _run_ring(["rust", "rust", "rust"])
 
 
 @pytest.mark.slow
@@ -537,11 +536,11 @@ def test_ring_3python():
     The strictest probe of the binding: every message, every stored state and
     every TLS connection goes through nettls-py.
     """
-    _kjor_ring(["python", "python", "python"], injiser_etter=3)
+    _run_ring(["python", "python", "python"], inject_after=3)
 
 
 @pytest.mark.slow
-def test_ring_6_alle_naboskap():
+def test_ring_6_all_neighbourhoods():
     """Six nodes, `3×Python + 3×Rust`, ordered so ALL neighbourhoods occur.
 
     ```text
@@ -561,7 +560,7 @@ def test_ring_6_alle_naboskap():
     is that the binding carries it identically, in validation and in what is
     stored when.
     """
-    _kjor_ring(["python", "python", "rust", "rust", "python", "rust"], injiser_etter=2)
+    _run_ring(["python", "python", "rust", "rust", "python", "rust"], inject_after=2)
 
 
 # ── Restart and resumption (§6.8) ─────────────────────────────────────────── #
@@ -588,18 +587,18 @@ def test_ring_6_alle_naboskap():
 # rotates.
 
 
-def _restart(nodes: list[NodeProsess], i: int) -> NodeProsess:
+def _restart(nodes: list[NodeProcess], i: int) -> NodeProcess:
     """Kill node `i` and start it anew on the same port, with the same Ed25519 seed."""
     old_node = nodes[i]
-    old_node.drep()
-    ny = NodeProsess(
+    old_node.kill()
+    new_node = NodeProcess(
         old_node.lang, old_node.name, old_node.port, old_node.neighbour_port, old_node.seed
     )
-    nodes[i] = ny
-    return ny
+    nodes[i] = new_node
+    return new_node
 
 
-def _pin_paa_nytt(nodes: list[NodeProsess], i: int) -> None:
+def _pin_anew(nodes: list[NodeProcess], i: int) -> None:
     """The operator's action after a restart — generation 0 all over again.
 
     Both edges must be set up anew, and it is easy to do it halfway:
@@ -609,17 +608,17 @@ def _pin_paa_nytt(nodes: list[NodeProsess], i: int) -> None:
     - **the predecessor** must pin the NEW certificate. Without this it is
       left with a fingerprint that no longer exists.
     """
-    ny = nodes[i]
-    etterfolger = nodes[(i + 1) % len(nodes)]
-    forgjenger = nodes[(i - 1) % len(nodes)]
+    restarted = nodes[i]
+    successor = nodes[(i + 1) % len(nodes)]
+    predecessor = nodes[(i - 1) % len(nodes)]
 
-    ny.styr(op="approve", name=etterfolger.name, port=etterfolger.port,
-            ed25519_pub=etterfolger.pub.hex())
-    ny.styr(op="know_key", name=forgjenger.name, ed25519_pub=forgjenger.pub.hex())
-    ny.styr(op="require_ack_from", name=forgjenger.name)
+    restarted.control(op="approve", name=successor.name, port=successor.port,
+                      ed25519_pub=successor.pub.hex())
+    restarted.control(op="know_key", name=predecessor.name, ed25519_pub=predecessor.pub.hex())
+    restarted.control(op="require_ack_from", name=predecessor.name)
 
-    forgjenger.styr(op="approve", name=ny.name, port=ny.port,
-                    ed25519_pub=ny.pub.hex())
+    predecessor.control(op="approve", name=restarted.name, port=restarted.port,
+                        ed25519_pub=restarted.pub.hex())
 
 
 @pytest.mark.slow
@@ -647,53 +646,53 @@ def test_restart_resumes_communication(lang):
        including **a new full rotation all the way round**. The marker going
        is not enough; the ring must be able to keep rotating afterwards.
     """
-    nodes = _bygg_ring(lang)
+    nodes = _build_ring(lang)
     count = len(nodes)
     try:
-        _godkjenn_alle(nodes)
+        _approve_all(nodes)
         now = 0
 
         # 1. Normal, asymmetric operation first.
         for i in range(count):
             now += 2 * 86_400
-            _rull_en_node(nodes, i, now)
-        reply = nodes[0].styr(op="marker", marker="before", skip=count)
+            _roll_one_node(nodes, i, now)
+        reply = nodes[0].control(op="marker", marker="before", skip=count)
         assert reply["marker"] == "before", reply
 
         # 2. Kill a node that is not the sender of the marker.
-        offer_i = 1
-        offer_navn = nodes[offer_i].name
-        nodes[offer_i].drep()
+        victim_i = 1
+        victim_name = nodes[victim_i].name
+        nodes[victim_i].kill()
 
         # 3. The ring MUST be broken now.
         try:
-            nodes[0].styr(op="marker", marker="during-break", skip=count)
+            nodes[0].control(op="marker", marker="during-break", skip=count)
         except AssertionError:
             pass  # expected: the neighbour does not answer
         else:
             raise AssertionError(
-                f"the marker went round even though {offer_navn} was killed — "
+                f"the marker went round even though {victim_name} was killed — "
                 f"then the test does not measure what it thinks, and the "
                 f"resumption below proves nothing"
             )
 
         # 4. Restart + the operator's new pinning.
-        _restart(nodes, offer_i)
-        ny_fp = nodes[offer_i].start_fp
-        _pin_paa_nytt(nodes, offer_i)
+        _restart(nodes, victim_i)
+        new_fp = nodes[victim_i].start_fp
+        _pin_anew(nodes, victim_i)
 
-        reply = nodes[0].styr(op="marker", marker="after", skip=count)
+        reply = nodes[0].control(op="marker", marker="after", skip=count)
         assert reply["marker"] == "after", (
-            f"communication did not pick up again after {offer_navn} "
+            f"communication did not pick up again after {victim_name} "
             f"was restarted and pinned anew: {reply}"
         )
 
         # The restarted node stands on a NEW certificate, and the predecessor
         # pins exactly that.
-        forgjenger = nodes[(offer_i - 1) % count]
-        st = forgjenger.styr(op="status")["peers"][offer_navn]
-        assert st["current"] == ny_fp, (
-            f"{forgjenger.name} does not pin {offer_navn}'s new certificate: {st}"
+        predecessor = nodes[(victim_i - 1) % count]
+        st = predecessor.control(op="status")["peers"][victim_name]
+        assert st["current"] == new_fp, (
+            f"{predecessor.name} does not pin {victim_name}'s new certificate: {st}"
         )
 
         # Rotation AFTER the restart is probed separately — see
@@ -701,7 +700,7 @@ def test_restart_resumes_communication(lang):
         # design decision, not a fault in this test.
     finally:
         for nd in nodes:
-            nd.drep()
+            nd.kill()
 
 
 @pytest.mark.slow
@@ -721,31 +720,31 @@ def test_rotation_after_restart_resumes():
     rewritten to the positive form you are reading.)
     """
     lang = ["rust", "python", "rust"]
-    nodes = _bygg_ring(lang)
+    nodes = _build_ring(lang)
     count = len(nodes)
     try:
-        _godkjenn_alle(nodes)
+        _approve_all(nodes)
         now = 0
         for i in range(count):
             now += 2 * 86_400
-            _rull_en_node(nodes, i, now)
+            _roll_one_node(nodes, i, now)
 
-        nodes[1].drep()
+        nodes[1].kill()
         _restart(nodes, 1)
-        _pin_paa_nytt(nodes, 1)
+        _pin_anew(nodes, 1)
 
         # One more full round — the ring must keep rotating (A8).
         for i in range(count):
             now += 2 * 86_400
-            _rull_en_node(nodes, i, now)
-        merke = "after-reanchor"
-        reply = nodes[0].styr(op="marker", marker=merke, skip=count)
-        assert reply["marker"] == merke, (
+            _roll_one_node(nodes, i, now)
+        marker = "after-reanchor"
+        reply = nodes[0].control(op="marker", marker=marker, skip=count)
+        assert reply["marker"] == marker, (
             f"the ring could not carry the marker after re-anchoring: {reply}"
         )
     finally:
         for nd in nodes:
-            nd.drep()
+            nd.kill()
 
 
 # ── The reach of a fault (§6.8) ───────────────────────────────────────────── #
@@ -763,7 +762,7 @@ def test_rotation_after_restart_resumes():
 # day someone adds a "little" piece of shared state.
 
 
-def _lokal_probe(nodes: list[NodeProsess], i: int, merke: str) -> None:
+def _local_probe(nodes: list[NodeProcess], i: int, marker: str) -> None:
     """One hop: node `i` → its successor and back.
 
     `skip=0` means the neighbour replies at once instead of passing it on.
@@ -771,8 +770,8 @@ def _lokal_probe(nodes: list[NodeProsess], i: int, merke: str) -> None:
     break on any death at all and thus could not tell "this link is down"
     from "some link or other is down".
     """
-    reply = nodes[i].styr(op="marker", marker=merke, skip=0)
-    assert reply["marker"] == merke, f"the link {nodes[i].name}→successor is down: {reply}"
+    reply = nodes[i].control(op="marker", marker=marker, skip=0)
+    assert reply["marker"] == marker, f"the link {nodes[i].name}→successor is down: {reply}"
 
 
 @pytest.mark.slow
@@ -781,7 +780,7 @@ def test_fault_affects_only_the_neighbour_pair():
 
     ```text
     a(P) → b(P) → c(R) → d(R) → e(P) → f(R) → a(P)
-                   ✗ drept
+                   ✗ killed
     ```
 
     | Node | Affected? | Why |
@@ -796,80 +795,80 @@ def test_fault_affects_only_the_neighbour_pair():
     crossed the pair.
     """
     lang = ["python", "python", "rust", "rust", "python", "rust"]
-    nodes = _bygg_ring(lang)
+    nodes = _build_ring(lang)
     try:
-        _godkjenn_alle(nodes)
+        _approve_all(nodes)
         now = 0
 
         # Normal operation first, otherwise we do not know the ring worked.
         for i in range(len(nodes)):
             now += 2 * 86_400
-            _rull_en_node(nodes, i, now)
-        reply = nodes[0].styr(op="marker", marker="before", skip=len(nodes))
+            _roll_one_node(nodes, i, now)
+        reply = nodes[0].control(op="marker", marker="before", skip=len(nodes))
         assert reply["marker"] == "before", reply
 
-        doed = 2  # c
-        doed_navn = nodes[doed].name
-        nodes[doed].drep()
+        dead = 2  # c
+        dead_name = nodes[dead].name
+        nodes[dead].kill()
 
         # The neighbour that PINS the dead one must notice. Without this part,
         # everything below could have passed against a "dead" node that was
         # actually alive.
         try:
-            _lokal_probe(nodes, doed - 1, "towards-dead")
+            _local_probe(nodes, dead - 1, "towards-dead")
         except AssertionError:
             pass
         else:
             raise AssertionError(
-                f"{nodes[doed - 1].name} reached {doed_navn} even though it was "
+                f"{nodes[dead - 1].name} reached {dead_name} even though it was "
                 f"killed — then the test does not measure what it thinks"
             )
 
         # Those who are NOT neighbours must not notice. `e→f` and `f→a` lie on
         # the opposite side of the ring from the death.
         for i in (4, 5):
-            _lokal_probe(nodes, i, f"untouched-{nodes[i].name}")
+            _local_probe(nodes, i, f"untouched-{nodes[i].name}")
 
         # And the real proof: `e` must be able to ROTATE fully, with `d`
         # acking, while `c` lies dead.
         for round_no in range(2):
             now += 2 * 86_400
-            _rull_en_node(nodes, 4, now)
-            _lokal_probe(nodes, 4, f"after-rotation-{round_no}")
+            _roll_one_node(nodes, 4, now)
+            _local_probe(nodes, 4, f"after-rotation-{round_no}")
 
         # One rotation in the normal round above, plus two while `c` lay dead.
-        st = nodes[4].styr(op="status")
+        st = nodes[4].control(op="status")
         assert st["rotations"] == 3, (
-            f"e did not keep rotating while {doed_navn} was dead: {st}"
+            f"e did not keep rotating while {dead_name} was dead: {st}"
         )
 
         # `d`, by contrast, must NOT be able to rotate: its pinner is the dead
         # node, and without a receipt nobody rolls (§6.8a). That is the
         # liveness path — it waits, it does not fail hard.
         now += 2 * 86_400
-        nodes[3].styr(op="prepare", now=now)
-        r = nodes[3].styr(op="roll", now=now)
+        nodes[3].control(op="prepare", now=now)
+        r = nodes[3].control(op="roll", now=now)
         assert not r["rolled"], (
             f"{nodes[3].name} rolled WITHOUT a receipt from its dead pinner "
-            f"{doed_navn} — then §6.8a is broken, and a node can swap "
+            f"{dead_name} — then §6.8a is broken, and a node can swap "
             f"certificates without the peer having stored it"
         )
     finally:
         for nd in nodes:
-            nd.drep()
+            nd.kill()
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    "lang,offer_i",
+    "lang,victim_i",
     [
-        pytest.param(["python", "python", "python"], 1, id="3python_offer_python"),
-        pytest.param(["rust", "rust", "rust"], 1, id="3rust_offer_rust"),
-        pytest.param(["rust", "python", "rust"], 1, id="blandet_offer_python"),
-        pytest.param(["python", "rust", "python"], 1, id="blandet_offer_rust"),
+        pytest.param(["python", "python", "python"], 1, id="3python_victim_python"),
+        pytest.param(["rust", "rust", "rust"], 1, id="3rust_victim_rust"),
+        pytest.param(["rust", "python", "rust"], 1, id="mixed_victim_python"),
+        pytest.param(["python", "rust", "python"], 1, id="mixed_victim_rust"),
     ],
 )
-def test_restart_with_state_requires_no_operator(lang, offer_i):
+def test_restart_with_state_requires_no_operator(lang, victim_i):
     """The core of §6.8: a restart WITH state intact is not a deviation.
 
     Differs from `test_restart_resumes_communication` in the one thing that
@@ -894,62 +893,62 @@ def test_restart_with_state_requires_no_operator(lang, offer_i):
     with a NEW certificate, that is by definition an identity deviation at the
     neighbour.
     """
-    nodes = _bygg_ring(lang)
+    nodes = _build_ring(lang)
     count = len(nodes)
     try:
-        _godkjenn_alle(nodes)
+        _approve_all(nodes)
         now = 0
         for i in range(count):
             now += 2 * 86_400
-            _rull_en_node(nodes, i, now)
+            _roll_one_node(nodes, i, now)
             # The marker MUST go here. Promotion happens on observation (§6.7),
             # so without a connection after each rotation the peer's
             # `previous` stays empty — and then we export a state with nothing
             # to restore. The test would pass whatever `import` did, and prove
             # nothing.
-            nodes[0].styr(op="marker", marker=f"up-{i}", skip=count)
+            nodes[0].control(op="marker", marker=f"up-{i}", skip=count)
 
         # Control: is `previous` actually filled? If not, the rest of the test
         # does not probe the recovery at all.
         for i, nd in enumerate(nodes):
             neighbour = nodes[(i + 1) % count]
-            st = nd.styr(op="status")["peers"][neighbour.name]
+            st = nd.control(op="status")["peers"][neighbour.name]
             assert st["previous"] is not None, (
-                f"{nd.name} has no «previous» for {neighbour.name} — promotion has "
+                f"{nd.name} has no 'previous' for {neighbour.name} — promotion has "
                 f"not happened, and then there is nothing to restore"
             )
 
-        offer = nodes[offer_i]
-        offer_navn = offer.name
-        fp_foer = offer.styr(op="status")["fp"]
+        victim = nodes[victim_i]
+        victim_name = victim.name
+        fp_before = victim.control(op="status")["fp"]
 
         # 2. The consumer's memory.
-        state = offer.styr(op="export")["state"]
+        state = victim.control(op="export")["state"]
 
         # 3. Dead node → the ring must be broken.
-        offer.drep()
+        victim.kill()
         try:
-            nodes[0].styr(op="marker", marker="break", skip=count)
+            nodes[0].control(op="marker", marker="break", skip=count)
         except AssertionError:
             pass
         else:
-            raise AssertionError(f"the marker went round even though {offer_navn} was killed")
+            raise AssertionError(f"the marker went round even though {victim_name} was killed")
 
         # 4. A new process + imported state. NO operator action.
-        _restart(nodes, offer_i)
-        nodes[offer_i].styr(op="import", state=state)
+        _restart(nodes, victim_i)
+        nodes[victim_i].control(op="import", state=state)
 
         # 5. The same certificate as before — otherwise it is an identity deviation.
-        fp_etter = nodes[offer_i].styr(op="status")["fp"]
-        assert fp_etter == fp_foer, (
-            f"{offer_navn} came up with a DIFFERENT certificate after the "
-            f"restart ({fp_foer[:16]}… → {fp_etter[:16]}…). Then it has not "
+        fp_after = nodes[victim_i].control(op="status")["fp"]
+        assert fp_after == fp_before, (
+            f"{victim_name} came up with a DIFFERENT certificate after the "
+            f"restart ({fp_before[:16]}… → {fp_after[:16]}…). Then it has not "
             f"restored its identity, and the neighbour's pin is invalid"
         )
 
-        reply = nodes[0].styr(op="marker", marker="after", skip=count)
+        reply = nodes[0].control(op="marker", marker="after", skip=count)
         assert reply["marker"] == "after", (
-            f"communication did not pick up again after {offer_navn} "
+            f"communication did not pick up again after {victim_name} "
             f"restarted with its state intact: {reply}"
         )
 
@@ -958,13 +957,13 @@ def test_restart_with_state_requires_no_operator(lang, offer_i):
         for round_no in range(2):
             for i in range(count):
                 now += 2 * 86_400
-                _rull_en_node(nodes, i, now)
-                merke = f"after-restart-{round_no}-{nodes[i].name}"
-                reply = nodes[0].styr(op="marker", marker=merke, skip=count)
-                assert reply["marker"] == merke, (
+                _roll_one_node(nodes, i, now)
+                marker = f"after-restart-{round_no}-{nodes[i].name}"
+                reply = nodes[0].control(op="marker", marker=marker, skip=count)
+                assert reply["marker"] == marker, (
                     f"the ring could not keep rotating after the restart "
                     f"({nodes[i].name}): {reply}"
                 )
     finally:
         for nd in nodes:
-            nd.drep()
+            nd.kill()

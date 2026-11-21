@@ -52,7 +52,7 @@ fn make_material(name: &str) -> (String, String, Arc<krypto::SecretBuf>) {
     let m = TlsMaterial::load(&CertSource::self_signed(
         SelfSignedParams::new(name, ["localhost", "127.0.0.1"]).valid_days(30),
     ))
-    .expect("selvsignert");
+    .expect("self-signed");
     let der = m.cert_chain()[0].as_ref().to_vec();
     let pem = String::from_utf8(nettls::pem::encode("CERTIFICATE", &der).expect("pem")).unwrap();
     let fp = m.fingerprint_sha256().replace("sha256:", "");
@@ -97,7 +97,7 @@ impl Node {
             .expect("server config")
     }
 
-    fn handter(&self, m: &Value) -> Value {
+    fn handle(&self, m: &Value) -> Value {
         match m["op"].as_str().unwrap_or("") {
             "identity" => {
                 let (fp, cert, _) = self.current.lock().unwrap().clone();
@@ -116,15 +116,15 @@ impl Node {
                 out
             }
             "ack" => {
-                let kj: nettls::announcement::ReceiptJson =
+                let ack_json: nettls::announcement::ReceiptJson =
                     serde_json::from_value(m["receipt"].clone()).unwrap();
-                let kv = Receipt::from_json(&kj).unwrap();
+                let ack = Receipt::from_json(&ack_json).unwrap();
                 // `.get`, not indexing: a receipt from an unknown acker is a
                 // NORMAL hostile/misrouted message and must be an error reply,
                 // not a panic (as the Python node does).
-                let Some(pk) = self.peer_keys.lock().unwrap().get(kv.acker()).cloned() else {
+                let Some(pk) = self.peer_keys.lock().unwrap().get(ack.acker()).cloned() else {
                     return json!({"error": format!(
-                        "receipt from unknown acker {:?} — no pinned Ed25519 key", kv.acker()
+                        "receipt from unknown acker {:?} — no pinned Ed25519 key", ack.acker()
                     )});
                 };
                 let expected = self
@@ -133,18 +133,18 @@ impl Node {
                     .unwrap()
                     .as_ref()
                     .map(|(k, _, _)| k.new_fingerprint().to_string())
-                    .unwrap_or_else(|| kv.new_fingerprint().to_string());
-                match kv.verify(&pk, &expected) {
+                    .unwrap_or_else(|| ack.new_fingerprint().to_string());
+                match ack.verify(&pk, &expected) {
                     Ok(()) => {
-                        self.schedule.lock().unwrap().acked(kv.acker());
+                        self.schedule.lock().unwrap().acked(ack.acker());
                         json!({"ok": true})
                     }
                     Err(e) => json!({"error": e.to_string()}),
                 }
             }
             "marker" => {
-                let hopp = m["skip"].as_i64().unwrap_or(0);
-                if hopp <= 0 {
+                let skip = m["skip"].as_i64().unwrap_or(0);
+                if skip <= 0 {
                     return json!({"marker": m["marker"]});
                 }
                 // **Pinned, like all other traffic.** Without the neighbour's
@@ -154,14 +154,14 @@ impl Node {
                 let nb = self.neighbour_name.lock().unwrap().clone();
                 match self.talk(
                     self.neighbour_port,
-                    &json!({"op":"marker","marker":m["marker"],"skip":hopp-1}),
+                    &json!({"op":"marker","marker":m["marker"],"skip":skip-1}),
                     nb.as_deref(),
                 ) {
                     Ok(reply) => json!({"marker": reply["marker"]}),
                     Err(e) => json!({"error": format!("the neighbour did not answer: {e}")}),
                 }
             }
-            annet => json!({"error": format!("unknown op: {annet}")}),
+            op => json!({"error": format!("unknown op: {op}")}),
         }
     }
 
@@ -177,13 +177,13 @@ impl Node {
         };
 
         let name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
-        let mut konn = rustls::ClientConnection::new(cfg, name).map_err(|e| e.to_string())?;
+        let mut conn = rustls::ClientConnection::new(cfg, name).map_err(|e| e.to_string())?;
         let mut tcp = TcpStream::connect(("127.0.0.1", port)).map_err(|e| e.to_string())?;
         // A timeout so a hang becomes a READABLE error instead of a test that
         // stands for ten minutes without saying why.
         let _ = tcp.set_read_timeout(Some(std::time::Duration::from_secs(20)));
         let _ = tcp.set_write_timeout(Some(std::time::Duration::from_secs(20)));
-        let mut s = rustls::Stream::new(&mut konn, &mut tcp);
+        let mut s = rustls::Stream::new(&mut conn, &mut tcp);
 
         s.write_all(format!("{message}\n").as_bytes())
             .map_err(|e| e.to_string())?;
@@ -264,24 +264,24 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
             json!({"ok": true})
         }
         "prepare" => {
-            let naa_ = m["now"].as_i64().unwrap();
+            let now = m["now"].as_i64().unwrap();
             if let Some((k, _, _)) = node.pending.lock().unwrap().as_ref() {
                 return json!({"ok": true, "new_fp": k.new_fingerprint()});
             }
-            let (fp_ny, pem_ny, pk_ny) = make_material(&node.name);
-            let (fp_k, _, pk_k) = node.current.lock().unwrap().clone();
+            let (fp_new, pem_new, key_new) = make_material(&node.name);
+            let (fp, _, key) = node.current.lock().unwrap().clone();
             let previous = node.previous.lock().unwrap().clone();
             let k = Announcement::new(
                 &node.name,
                 previous.as_ref().map(|(f, _, p)| (f.as_str(), p.as_ref())),
-                (fp_k.as_str(), pk_k.as_ref()),
-                &pem_ny,
-                naa_,
+                (fp.as_str(), key.as_ref()),
+                &pem_new,
+                now,
             )
             .unwrap();
-            let _ = fp_ny;
-            *node.pending.lock().unwrap() = Some((k.clone(), pem_ny, pk_ny));
-            node.schedule.lock().unwrap().announced(naa_);
+            let _ = fp_new;
+            *node.pending.lock().unwrap() = Some((k.clone(), pem_new, key_new));
+            node.schedule.lock().unwrap().announced(now);
             json!({"ok": true, "new_fp": k.new_fingerprint()})
         }
         "fetch_and_ack" => {
@@ -295,17 +295,17 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
                 return json!({"ok": true, "no_announcement": true});
             }
             // NOT `.unwrap()`. An announcement that does not verify is a
-            // NORMAL §6.8 state — it must be reported, not fell the thread.
+            // NORMAL §6.8 state — it must be reported, not bring down the thread.
             // With a panic here the control thread died, and the orchestrator
             // stood waiting until the deadline ran out: the symptom became a
             // timeout instead of the error message that actually explained
             // what was wrong.
-            let kj: nettls::announcement::AnnouncementJson =
+            let announcement_json: nettls::announcement::AnnouncementJson =
                 match serde_json::from_value(reply["announcement"].clone()) {
                     Ok(v) => v,
                     Err(e) => return json!({"error": format!("invalid announcement: {e}")}),
                 };
-            let k = match Announcement::from_json(&kj) {
+            let k = match Announcement::from_json(&announcement_json) {
                 Ok(v) => v,
                 Err(e) => return json!({"error": e.to_string()}),
             };
@@ -314,7 +314,7 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
             {
                 return json!({"error": e.to_string()});
             }
-            let kv = Receipt::new(
+            let ack = Receipt::new(
                 &node.name,
                 name,
                 k.new_fingerprint(),
@@ -322,7 +322,7 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
                 &node.seed,
             )
             .unwrap();
-            let receipt = match kv.to_json() {
+            let receipt = match ack.to_json() {
                 Ok(j) => j,
                 Err(e) => return json!({"error": e.to_string()}),
             };
@@ -331,23 +331,23 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
             json!({"ok": true, "acked_on": k.new_fingerprint()})
         }
         "roll" => {
-            let naa_ = m["now"].as_i64().unwrap();
-            if !node.schedule.lock().unwrap().can_roll(naa_) {
+            let now = m["now"].as_i64().unwrap();
+            if !node.schedule.lock().unwrap().can_roll(now) {
                 return json!({"ok": true, "rolled": false});
             }
             let Some((k, pem, pk)) = node.pending.lock().unwrap().take() else {
                 return json!({"ok": true, "rolled": false});
             };
             let old = {
-                let mut kj = node.current.lock().unwrap();
-                let old = kj.0.clone();
+                let mut current = node.current.lock().unwrap();
+                let old = current.0.clone();
                 // Exactly two are kept: generation N-2 is dropped here.
-                *node.previous.lock().unwrap() = Some(kj.clone());
-                *kj = (k.new_fingerprint().to_string(), pem, pk);
+                *node.previous.lock().unwrap() = Some(current.clone());
+                *current = (k.new_fingerprint().to_string(), pem, pk);
                 old
             };
             *node.rotations.lock().unwrap() += 1;
-            node.schedule.lock().unwrap().rolled(naa_).unwrap();
+            node.schedule.lock().unwrap().rolled(now).unwrap();
             json!({"ok": true, "rolled": true, "old": old})
         }
         // The consumer's MEMORY (§6.11b). `nettls` saves its own material
@@ -360,9 +360,9 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
                 let pkcs8 = m.2.expose(hex)?;
                 Ok(json!({"fp": m.0, "cert_pem": m.1, "pkcs8": pkcs8}))
             };
-            let kj = node.current.lock().unwrap().clone();
-            let fo = node.previous.lock().unwrap().clone();
-            let ve = node.pending.lock().unwrap().clone();
+            let current = node.current.lock().unwrap().clone();
+            let previous = node.previous.lock().unwrap().clone();
+            let pending = node.pending.lock().unwrap().clone();
             let r = node.schedule.lock().unwrap();
 
             // Every encoding step can fail; the first failure is the reply.
@@ -389,7 +389,7 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
                     .iter()
                     .map(|(k, v)| Ok((k.clone(), hex(v)?)))
                     .collect::<Result<_, String>>()?;
-                let pending = match ve.as_ref() {
+                let pending = match pending.as_ref() {
                     Some((k, pem, pk)) => {
                         let announcement = k.to_json().map_err(|e| e.to_string())?;
                         let pkcs8 = pk.expose(hex)?;
@@ -403,8 +403,8 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
                 };
 
                 Ok(json!({
-                    "current": mat(&kj)?,
-                    "previous": fo.as_ref().map(mat).transpose()?,
+                    "current": mat(&current)?,
+                    "previous": previous.as_ref().map(mat).transpose()?,
                     "pending": pending,
                     "peers": peers,
                     "keys": keys,
@@ -421,14 +421,14 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
         }
         "import" => {
             let t = &m["state"];
-            let ub = |v: &Value| nettls::signature::from_hex(v.as_str().unwrap()).unwrap();
+            let unhex = |v: &Value| nettls::signature::from_hex(v.as_str().unwrap()).unwrap();
             // Private keys go straight into locked memory (0.8.3).
-            let ubk = |v: &Value| Arc::new(krypto::SecretBuf::from_vec(ub(v)).unwrap());
+            let unhex_key = |v: &Value| Arc::new(krypto::SecretBuf::from_vec(unhex(v)).unwrap());
             let mat = |v: &Value| {
                 (
                     v["fp"].as_str().unwrap().to_string(),
                     v["cert_pem"].as_str().unwrap().to_string(),
-                    ubk(&v["pkcs8"]),
+                    unhex_key(&v["pkcs8"]),
                 )
             };
 
@@ -439,12 +439,12 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
             // between announcement and swap would lose a key the peer has
             // already acked (M-26).
             *node.pending.lock().unwrap() = t["pending"].as_object().map(|v| {
-                let kj: nettls::announcement::AnnouncementJson =
+                let announcement_json: nettls::announcement::AnnouncementJson =
                     serde_json::from_value(v["announcement"].clone()).unwrap();
                 (
-                    Announcement::from_json(&kj).unwrap(),
+                    Announcement::from_json(&announcement_json).unwrap(),
                     v["cert_pem"].as_str().unwrap().to_string(),
-                    ubk(&v["pkcs8"]),
+                    unhex_key(&v["pkcs8"]),
                 )
             });
 
@@ -456,7 +456,7 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
                     d["previous"].as_str().map(|h| {
                         Generation::from_der(nettls::signature::from_hex(h).unwrap()).unwrap()
                     }),
-                    Generation::from_der(ub(&d["current"])).unwrap(),
+                    Generation::from_der(unhex(&d["current"])).unwrap(),
                     d["next"].as_str().map(|h| {
                         Generation::from_der(nettls::signature::from_hex(h).unwrap()).unwrap()
                     }),
@@ -470,7 +470,7 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
                 .as_object()
                 .unwrap()
                 .iter()
-                .map(|(k, v)| (k.clone(), ub(v)))
+                .map(|(k, v)| (k.clone(), unhex(v)))
                 .collect();
 
             let ackers: Vec<String> = t["ackers"]
@@ -510,12 +510,12 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
             let name = m["name"].as_str().unwrap();
             let before = state_of(node, name);
             let err = (|| -> Result<(), String> {
-                let kj: nettls::announcement::AnnouncementJson =
+                let announcement_json: nettls::announcement::AnnouncementJson =
                     serde_json::from_value(m["announcement"].clone())
                         .map_err(|e| format!("serde: {e}"))?;
-                let k = Announcement::from_json(&kj).map_err(|e| e.to_string())?;
+                let k = Announcement::from_json(&announcement_json).map_err(|e| e.to_string())?;
                 let mp = node.peers.lock().unwrap();
-                let t = mp.get(name).ok_or("ukjent peer")?;
+                let t = mp.get(name).ok_or("unknown peer")?;
                 t.receive(&k).map(|_| ()).map_err(|e| e.to_string())
             })()
             .err();
@@ -581,7 +581,7 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
             println!("{}", json!({"ok": true}));
             std::process::exit(0);
         }
-        annet => json!({"error": format!("ukjent control_op: {annet}")}),
+        op => json!({"error": format!("unknown control op: {op}")}),
     }
 }
 
@@ -599,8 +599,8 @@ fn main() {
     {
         let node = node.clone();
         std::thread::spawn(move || {
-            let inn = std::io::stdin();
-            for line in inn.lock().lines() {
+            let stdin = std::io::stdin();
+            for line in stdin.lock().lines() {
                 let Ok(line) = line else { break };
                 if line.trim().is_empty() {
                     continue;
@@ -624,10 +624,10 @@ fn main() {
         let node = node.clone();
         std::thread::spawn(move || {
             let cfg = node.server_config();
-            let Ok(mut konn) = rustls::ServerConnection::new(cfg) else {
+            let Ok(mut conn) = rustls::ServerConnection::new(cfg) else {
                 return;
             };
-            let mut s = rustls::Stream::new(&mut konn, &mut tcp);
+            let mut s = rustls::Stream::new(&mut conn, &mut tcp);
             let mut line = String::new();
             if BufReader::new(&mut s).read_line(&mut line).is_err() || line.is_empty() {
                 return;
@@ -635,7 +635,7 @@ fn main() {
             let Ok(m) = serde_json::from_str::<Value>(&line) else {
                 return;
             };
-            let reply = node.handter(&m);
+            let reply = node.handle(&m);
             let _ = s.write_all(format!("{reply}\n").as_bytes());
             let _ = s.flush();
         });

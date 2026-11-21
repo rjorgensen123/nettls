@@ -71,7 +71,7 @@ const INFO: &[u8] = b"nettls/envelope/v1";
 /// readable while the module is still locked. Alone it opens nothing: without
 /// the envelope from portal the module gets no further.
 pub struct RecipientKey {
-    privat: SecretBuf,
+    private: SecretBuf,
 }
 
 impl std::fmt::Debug for RecipientKey {
@@ -91,20 +91,20 @@ impl RecipientKey {
                 b.len()
             )));
         }
-        Ok(Self { privat: b })
+        Ok(Self { private: b })
     }
 
     /// Draws a new pair. Returns `(key, public part)`.
     pub fn generate() -> Result<(Self, Vec<u8>), TlsError> {
-        let (privat, public) = exchange::x25519_keypair()
+        let (private, public) = exchange::x25519_keypair()
             .map_err(|e| TlsError::Envelope(format!("key generation failed: {e}")))?;
-        Ok((Self { privat }, public.to_vec()))
+        Ok((Self { private }, public.to_vec()))
     }
 
     /// The public part — distributed as a file, same pattern as the Ed25519
     /// keys.
     pub fn public(&self) -> Result<Vec<u8>, TlsError> {
-        exchange::x25519_public(&self.privat)
+        exchange::x25519_public(&self.private)
             .map(|p| p.to_vec())
             .map_err(|e| TlsError::Envelope(format!("invalid X25519 private key: {e}")))
     }
@@ -173,7 +173,7 @@ pub fn open(key: &RecipientKey, envelope: &[u8]) -> Result<SecretBuf, TlsError> 
     let blob = &envelope[MAGIC.len() + X25519_LEN..];
 
     let my_pub = key.public()?;
-    let shared = exchange::x25519_shared(&key.privat, ephemeral_pub).map_err(|_| {
+    let shared = exchange::x25519_shared(&key.private, ephemeral_pub).map_err(|_| {
         TlsError::ProofInvalid(
             "the ephemeral key in the envelope is invalid — the envelope is malformed or \
              manipulated"
@@ -247,20 +247,20 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let (n, off) = RecipientKey::generate().unwrap();
-        let k = seal(&off, b"par-hemmeligheten").unwrap();
+        let (n, public) = RecipientKey::generate().unwrap();
+        let k = seal(&public, b"pair-secret").unwrap();
         let out = open(&n, &k).unwrap();
-        out.expose(|b| assert_eq!(b, b"par-hemmeligheten"));
+        out.expose(|b| assert_eq!(b, b"pair-secret"));
     }
 
     #[test]
     fn the_courier_cannot_read_what_he_carries() {
         // The whole point: whoever SEALS has no key and cannot open.
-        let (recipient, off) = RecipientKey::generate().unwrap();
-        let (kurer, _) = RecipientKey::generate().unwrap();
-        let k = seal(&off, b"secret").unwrap();
+        let (recipient, public) = RecipientKey::generate().unwrap();
+        let (courier, _) = RecipientKey::generate().unwrap();
+        let k = seal(&public, b"secret").unwrap();
         assert!(
-            open(&kurer, &k).is_err(),
+            open(&courier, &k).is_err(),
             "the courier could open the envelope he carries"
         );
         open(&recipient, &k).expect("the recipient must be able to");
@@ -268,26 +268,26 @@ mod tests {
 
     #[test]
     fn wrong_recipient_cannot_open() {
-        let (_a, off_a) = RecipientKey::generate().unwrap();
-        let (b, _off_b) = RecipientKey::generate().unwrap();
-        let k = seal(&off_a, b"secret").unwrap();
+        let (_a, public_a) = RecipientKey::generate().unwrap();
+        let (b, _public_b) = RecipientKey::generate().unwrap();
+        let k = seal(&public_a, b"secret").unwrap();
         assert!(open(&b, &k).is_err());
     }
 
     #[test]
     fn swapped_sender_key_is_rejected() {
         // The binding in `derive`: swap the ephemeral key and it breaks.
-        let (n, off) = RecipientKey::generate().unwrap();
-        let (_annen, annen_off) = RecipientKey::generate().unwrap();
-        let mut k = seal(&off, b"secret").unwrap();
-        k[MAGIC.len()..MAGIC.len() + X25519_LEN].copy_from_slice(&annen_off);
+        let (n, public) = RecipientKey::generate().unwrap();
+        let (_other, other_public) = RecipientKey::generate().unwrap();
+        let mut k = seal(&public, b"secret").unwrap();
+        k[MAGIC.len()..MAGIC.len() + X25519_LEN].copy_from_slice(&other_public);
         assert!(open(&n, &k).is_err());
     }
 
     #[test]
     fn altered_ciphertext_is_rejected() {
-        let (n, off) = RecipientKey::generate().unwrap();
-        let mut k = seal(&off, b"secret").unwrap();
+        let (n, public) = RecipientKey::generate().unwrap();
+        let mut k = seal(&public, b"secret").unwrap();
         let last = k.len() - 1;
         k[last] ^= 0x01;
         assert!(open(&n, &k).is_err());
@@ -296,8 +296,8 @@ mod tests {
     #[test]
     fn same_plaintext_gives_different_envelopes() {
         // An ephemeral key per sealing.
-        let (_n, off) = RecipientKey::generate().unwrap();
-        assert_ne!(seal(&off, b"x").unwrap(), seal(&off, b"x").unwrap());
+        let (_n, public) = RecipientKey::generate().unwrap();
+        assert_ne!(seal(&public, b"x").unwrap(), seal(&public, b"x").unwrap());
     }
 
     #[test]
@@ -335,7 +335,7 @@ mod tests {
     fn the_key_is_redacted_in_debug() {
         // What matters is that no key bytes come out — not what the redaction
         // looks like. (The first draft checked that the string contained no
-        // «[», which `[REDACTED]` obviously does.)
+        // `[`, which `[REDACTED]` obviously does.)
         let n = RecipientKey::from_bytes(secret([0xABu8; 32])).unwrap();
         let d = format!("{n:?}");
         assert!(d.contains("REDACTED"), "{d}");
