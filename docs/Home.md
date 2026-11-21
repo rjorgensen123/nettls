@@ -150,6 +150,15 @@ even when it otherwise looks right, and one where a single character was altered
 rejected too.
 
 
+## Reviews
+
+Reviewed independently by DeepSeek, Qwen, Gemini, Fable, MiMo and Mistral. The reviews are
+listed in [Reviews.md](Reviews.md).
+
+A person with long experience in cryptography has also read parts of the code and the design and
+given comments. That was not a full review, and it is not an endorsement.
+
+
 ## Author
 
 **Roger Jorgensen** — rogerj@gmail.com
@@ -159,8 +168,6 @@ contracts the crate presents outwards; and the decisions about what it does and 
 does not do. 
 
 The code is written by Claude AI (Opus and Fable).
-
-Reviewed independently by DeepSeek, Qwen, Gemini and Fable.
 
 
 ## License

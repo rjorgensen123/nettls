@@ -110,6 +110,18 @@ after opening, is `Envelope`, not `ProofInvalid`. A password over krypto's limit
 is `Params` before anything is locked or read, also in `Announcer::new`. The
 text of `Random` no longer names the operating system.
 
+### Added — `DEVELOPMENT.md`, a code of conduct and the third-party licenses *(2026-11-21)*
+
+`DEVELOPMENT.md` says how the code is laid out and which rules a change follows,
+with the test that guards each. `THIRD_PARTY_LICENSES.md` lists the crates and
+Python packages nettls builds on, held to `Cargo.lock` by a test. A test now
+holds the version in `nettls-py/Cargo.toml` to the crate's.
+
+### Changed — the reviews are listed in `docs/Reviews.md` *(2026-11-21)*
+
+The README and `docs/Home.md` name the models that have reviewed nettls; the
+dates, versions and kinds are in `docs/Reviews.md`.
+
 ## [0.11.0] — Python runs the Rust code
 
 ### Changed — Python uses the Rust code, through `nettls-py` *(2026-11-06)*

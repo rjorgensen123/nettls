@@ -29,8 +29,10 @@ continuity, signed receipts, generation pairs and an operator anchor.
 - **Docs:** [`docs/`](docs/) — **authoritative for the crate** (externally validated: a third
   party built against this repo alone). The complete, machine-verified contract is
   [`docs/API.md`](docs/API.md) — every public name, enforced by a doc-guard test; guide:
-  [`docs/Usage.md`](docs/Usage.md); overview: [`docs/Home.md`](docs/Home.md).
-- **Changes:** [`CHANGELOG.md`](CHANGELOG.md) · **Version:** declared once, in [`Cargo.toml`](Cargo.toml)
+  [`docs/Usage.md`](docs/Usage.md); overview: [`docs/Home.md`](docs/Home.md); how the code is
+  laid out and the rules a change follows: [`DEVELOPMENT.md`](DEVELOPMENT.md).
+- **Changes:** [`CHANGELOG.md`](CHANGELOG.md) · **Version:** declared in [`Cargo.toml`](Cargo.toml)
+  and [`nettls-py/Cargo.toml`](nettls-py/Cargo.toml)
 
 
 ## Why does the crate exist?
@@ -182,6 +184,14 @@ PYO3_PYTHON=.venv/bin/python cargo test -p nettls-py   # the Python API is the R
 .venv/bin/pytest nettls-py/tests -q                    # vectors, error corpus, stream, the ring
 ```
 
+## Reviews
+
+Reviewed independently by DeepSeek, Qwen, Gemini, Fable, MiMo and Mistral. The reviews are
+listed in [docs/Reviews.md](docs/Reviews.md).
+
+A person with long experience in cryptography has also read parts of the code and the design and
+given comments. That was not a full review, and it is not an endorsement.
+
 ## Author
 
 **Roger Jorgensen** — rogerj@gmail.com
@@ -191,8 +201,6 @@ contracts the crate presents outwards; and the decisions about what it does and 
 does not do. 
 
 The code is written by Claude AI (Opus and Fable).
-
-Reviewed independently by DeepSeek, Qwen, Gemini and Fable.
 
 ## License
 
