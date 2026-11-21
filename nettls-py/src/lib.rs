@@ -54,14 +54,24 @@ pub(crate) fn bytes(v: Vec<u8>) -> Bytes {
 /// A secret from Python, held the way nettls holds its own: in locked memory.
 /// A failure is the error nettls gives for the same thing (`src/secret.rs`).
 pub(crate) fn hold(b: &[u8], what: &str) -> PyResult<krypto::SecretBuf> {
-    krypto::SecretBuf::from_vec(b.to_vec())
-        .map_err(|e| err(nettls::TlsError::LockedMemory(format!("{what} ({e})"))))
+    krypto::SecretBuf::from_vec(b.to_vec()).map_err(|e| err(not_held(what, e)))
 }
 
 /// A password from Python, held in locked memory.
 pub(crate) fn hold_str(s: &str, what: &str) -> PyResult<krypto::SecretString> {
-    krypto::SecretString::from_string(s.to_owned())
-        .map_err(|e| err(nettls::TlsError::LockedMemory(format!("{what} ({e})"))))
+    krypto::SecretString::from_string(s.to_owned()).map_err(|e| err(not_held(what, e)))
+}
+
+/// The error nettls gives when krypto will not hold a secret (`src/error.rs`):
+/// content krypto refuses, such as one over its size limit, is `Params`; any
+/// other failure is `LockedMemory` (0.12.0).
+fn not_held(what: &str, e: krypto::Error) -> nettls::TlsError {
+    match e {
+        krypto::Error::Format(_) => {
+            nettls::TlsError::Params(format!("{what} was not accepted: {e}"))
+        }
+        _ => nettls::TlsError::LockedMemory(format!("{what} ({e})")),
+    }
 }
 
 /// A copy of a secret for Python. The copy is ordinary Python memory.

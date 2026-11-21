@@ -174,7 +174,8 @@ Short-lived buffers that cannot be (PEM handed in via `CertSource::pem`, DER int
 key as rustls' `PrivateKeyDer` (wrapped in `Zeroizing`, ordinary heap), and rustls/ring hold
 their own parsed copy for as long as a `ServerConfig` lives; rcgen holds the fresh key pair
 during generation. Neither can be locked from here. `SecretBuf::from_vec` failing (`mlock`,
-`RLIMIT_MEMLOCK`) is a hard error — never a silent fallback to ordinary memory.
+`RLIMIT_MEMLOCK`, or *(0.12.0)* content over krypto's size limit, `krypto::MAX_DATA_BYTES`) is a
+hard error — never a silent fallback to ordinary memory.
 
 ---
 
@@ -811,7 +812,11 @@ the content. Envelope and lock failures are `TlsError::Envelope` (too short, wro
 generation, derivation or sealing), except: a recipient key of the wrong length, or a low-order
 public key, is `Params`; a wrong key or password, and an invalid ephemeral key in `open`, are
 `ProofInvalid`; a lock whose salt cannot be drawn is `Random`; plaintext that cannot be held in
-locked memory is `LockedMemory`.
+locked memory is `LockedMemory`, and *(0.12.0)* so is the content `open` or `unlock` has opened, or
+the shared secret of the key exchange, when it cannot be held. *(0.12.0)* A plaintext over `krypto::MAX_DATA_BYTES`, or a
+password over `krypto::password::MAX_PASSWORD_BYTES`, is `Params`, and a locked file or envelope
+whose blob is over krypto's limit for a blob (`krypto::MAX_DATA_BYTES` + 86 bytes) is `Envelope`,
+refused before the password or key is used.
 
 ## `lockbox` — lock with a password
 
@@ -837,14 +842,14 @@ pub enum TlsError {
     Certificate(String),
     Generate(String),
     Rustls(String),
-    Params(String),          // invalid consumer input (empty SAN list, valid_days out of range, …)
+    Params(String),          // invalid consumer input (empty SAN list, valid_days out of range, …); over krypto's size limit (0.12.0)
     Fingerprint(String),
     Proof(String),           // could not be PARSED — fail-closed
     ProofInvalid(String),    // parses fine but does NOT hold (signature, wrong identity, replay)
     Chain(String),           // the continuity chain is broken — the system's best-explained error
     Sign(String),
     Negotiation(String),     // no authenticated common AEAD — hard failure (0.8.2)
-    Envelope(String),        // the envelope or the password lock failed (0.11.0)
+    Envelope(String),        // the envelope or the password lock failed (0.11.0); too long (0.12.0)
     LockedMemory(String),    // a secret could not be held in locked memory (0.11.0)
     Random(String),          // the operating system gave no random numbers (0.11.0)
     LockPoisoned(String),    // a thread panicked holding a lock — a bug (0.11.0)
@@ -860,15 +865,15 @@ pub enum TlsError {
 | `Certificate` | the certificate could not be parsed |
 | `Generate` | generation failed |
 | `Rustls` | rustls rejected the config |
-| `Params` | invalid parameters in |
+| `Params` | invalid parameters in; also an input krypto refuses as over its size limit: a password, a plaintext, or a private key to be held in locked memory *(0.12.0)* |
 | `Fingerprint` | the fingerprint has the wrong shape |
 | `Proof` | the proof/message could not be parsed |
 | `ProofInvalid` | parsed fine but does not hold |
 | `Chain` | the chain does not connect |
 | `Sign` | signing failed |
 | `Negotiation` | no *authenticated* common AEAD — the connection must fail, never silently weaken *(0.8.2)* |
-| `Envelope` | the sealed envelope or the password lock failed: too short, wrong format, or a key, derivation or sealing step *(0.11.0)* |
-| `LockedMemory` | a secret could not be held in locked memory (`mlock`, `RLIMIT_MEMLOCK`) *(0.11.0)* |
+| `Envelope` | the sealed envelope or the password lock failed: too short, wrong format, or a key, derivation or sealing step *(0.11.0)*; too long for krypto's largest blob *(0.12.0)* |
+| `LockedMemory` | a secret could not be held in locked memory (`mlock`, `RLIMIT_MEMLOCK`) *(0.11.0)*; a secret over krypto's size limit is `Params` *(0.12.0)* |
 | `Random` | the operating system could not supply random numbers *(0.11.0)* |
 | `LockPoisoned` | a thread panicked while holding one of the crate's locks — a bug, not an input error *(0.11.0)* |
 | `Encode` | a value could not be encoded as hex, base64 or PEM: it is over krypto's size limit, or the memory for the text could not be reserved *(0.12.0)* |

@@ -25,9 +25,10 @@
 //! carried under `forbid(unsafe_code)`, is gone: `zeroize` does the same job
 //! with a guarantee, and without `unsafe` in this crate.
 //!
-//! `SecretBuf::from_vec` fails only if the memory cannot be locked
-//! (`RLIMIT_MEMLOCK`). That is a hard error here, never a silent fallback to
-//! ordinary memory — the same rule krypto itself follows.
+//! `SecretBuf::from_vec` fails if the memory cannot be locked
+//! (`RLIMIT_MEMLOCK`), or *(0.12.0)* if the content is over krypto's size
+//! limit, `krypto::MAX_DATA_BYTES`. Both are hard errors here, never a silent
+//! fallback to ordinary memory — the same rule krypto itself follows.
 //!
 //! [`OwnMaterial`]: crate::announcer::OwnMaterial
 //! [`Pending`]: crate::announcer::Pending
@@ -38,8 +39,10 @@ use krypto::SecretBuf;
 use crate::error::TlsError;
 
 /// Moves `v` into locked memory. The source is zeroized by `from_vec`.
+/// Content over krypto's size limit is [`TlsError::Params`], memory that
+/// cannot be locked [`TlsError::LockedMemory`] *(0.12.0)*.
 pub(crate) fn hold(v: Vec<u8>) -> Result<SecretBuf, TlsError> {
-    SecretBuf::from_vec(v).map_err(|e| TlsError::locked_memory("a private key", e))
+    SecretBuf::from_vec(v).map_err(|e| TlsError::not_held("a private key", e))
 }
 
 /// A second locked copy. `SecretBuf` is deliberately not `Clone`; this is the

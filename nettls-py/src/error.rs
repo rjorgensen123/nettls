@@ -51,7 +51,7 @@ pyo3::create_exception!(
     nettls_py,
     ParamsError,
     TlsError,
-    "`TlsError::Params`: invalid parameters from the caller."
+    "`TlsError::Params`: invalid parameters from the caller, or a password or a secret over krypto's size limit (0.12.0)."
 );
 pyo3::create_exception!(
     nettls_py,
@@ -94,7 +94,7 @@ pyo3::create_exception!(
     nettls_py,
     EnvelopeError,
     TlsError,
-    "`TlsError::Envelope`: the sealed envelope or the password lock failed (0.11.0)."
+    "`TlsError::Envelope`: the sealed envelope or the password lock failed (0.11.0), or its input is too long (0.12.0)."
 );
 pyo3::create_exception!(
     nettls_py,

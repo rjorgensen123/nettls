@@ -112,6 +112,12 @@
 /// capabilities lives in `CHANGELOG.md`). Mirrors `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The largest FAFN blob `krypto::open` takes: `krypto::MAX_DATA_BYTES` plus
+/// 86 bytes, the 54-byte header and the longest tag. krypto has no public
+/// constant for it; the 86 is from krypto's `docs/API.md`, section
+/// "Encryption" *(0.12.0)*.
+pub(crate) const KRYPTO_MAX_BLOB_BYTES: usize = krypto::MAX_DATA_BYTES + 86;
+
 pub mod aegis; // 0.8.3: AEGIS-256 in the channel — a deliberate, documented deviation (L2-076)
 pub mod announcement;
 pub mod announcer;

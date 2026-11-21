@@ -40,11 +40,18 @@ use crate::error::TlsError;
 /// (canonical and fail-closed: uppercase, odd length or non-hex are errors,
 /// never a guess). The empty-check is the one §6 rule added on top: an empty
 /// signature field is a protocol error, not "zero bytes of signature".
+///
+/// Only an error krypto gives for the text itself says the hex is invalid;
+/// any other, such as memory that could not be reserved, says the hex could
+/// not be decoded *(0.12.0)*.
 pub fn from_hex(s: &str) -> Result<Vec<u8>, TlsError> {
     if s.is_empty() {
         return Err(TlsError::Proof("empty hex string".into()));
     }
-    krypto::hex::decode(s).map_err(|e| TlsError::Proof(format!("invalid hex (§6.5): {e}")))
+    krypto::hex::decode(s).map_err(|e| match e {
+        krypto::Error::Format(_) => TlsError::Proof(format!("invalid hex (§6.5): {e}")),
+        _ => TlsError::Proof(format!("the hex could not be decoded: {e}")),
+    })
 }
 
 // --------------------------------------------------------------------------- //
@@ -108,9 +115,12 @@ pub fn verify_p256(cert_der: &[u8], message: &[u8], signature: &[u8]) -> Result<
 /// **0.8.3:** the key arrives as a `krypto::SecretBuf` — it has been in locked
 /// memory since it was built (`TlsMaterial::anchor_pkcs8`), and is never
 /// copied out of it here.
+///
+/// **0.12.0:** a failure is [`TlsError::Sign`] with krypto's reason, which
+/// names the key or the message, whichever krypto refused.
 pub fn sign_p256(pkcs8: &krypto::SecretBuf, message: &[u8]) -> Result<Vec<u8>, TlsError> {
     krypto::sign::ecdsa_p256_sign(pkcs8, message)
-        .map_err(|_| TlsError::Sign("the private key is not ECDSA P-256 in PKCS#8".into()))
+        .map_err(|e| TlsError::Sign(format!("ECDSA P-256 signing failed: {e}")))
 }
 
 #[cfg(test)]
@@ -203,6 +213,18 @@ mod tests {
         assert!(
             verify_p256(&der_b, b"hey", &sig).is_err(),
             "a signature from one identity must not hold against another"
+        );
+    }
+
+    #[test]
+    fn p256_signing_with_a_key_that_is_not_p256_says_so() {
+        // 0.12.0: the reason is krypto's own, so it names what was refused.
+        let not_p256 = krypto::SecretBuf::from_vec(vec![7u8; 32]).unwrap();
+        let err = sign_p256(&not_p256, b"hey").unwrap_err();
+        assert!(matches!(err, TlsError::Sign(_)), "{err:?}");
+        assert!(
+            format!("{err}").contains("format error: the private key is not ECDSA P-256 in PKCS#8"),
+            "{err}"
         );
     }
 

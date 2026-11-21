@@ -481,6 +481,12 @@ def test_wrong_format_says_it_is_the_format():
         L.unlock("x", b"this is quite definitely not a locked file at all")
 
 
+def test_password_over_krypto_limit_is_params():
+    # 0.12.0: krypto refuses it before Argon2 runs.
+    with pytest.raises(nettls.ParamsError, match="max 1024"):
+        L.lock("p" * 1025, b"x")
+
+
 def test_envelope_roundtrip_and_public_part():
     key, public = E.RecipientKey.generate()
     assert key.public() == public

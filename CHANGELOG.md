@@ -96,6 +96,13 @@ The Python tests, the Rust tests, `examples/ringnode.rs` and private names in
 `src/` had Norwegian words, and are English now. No public name, stored value
 or message is changed.
 
+### Fixed — errors name what krypto refused *(2026-11-21)*
+
+An input over krypto's limits, or locked memory that could not be had, gave an
+error naming another cause, such as a wrong password. It is now `Params` for a
+password or secret that is too large, `Envelope` for a locked file or envelope
+that is too long, and `LockedMemory` when the content cannot be held.
+
 ## [0.11.0] — Python runs the Rust code
 
 ### Changed — Python uses the Rust code, through `nettls-py` *(2026-11-06)*

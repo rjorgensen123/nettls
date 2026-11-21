@@ -64,6 +64,9 @@ const KEY_ID: [u8; 16] = *b"nettls-envelope1";
 /// HKDF info. Purpose separation: the key from here must never be able to
 /// collide with a key derived for anything else.
 const INFO: &[u8] = b"nettls/envelope/v1";
+/// The longest envelope [`open`] takes: header, ephemeral key and the largest
+/// blob krypto opens *(0.12.0)*.
+const MAX_ENVELOPE_LEN: usize = MAGIC.len() + X25519_LEN + crate::KRYPTO_MAX_BLOB_BYTES;
 
 /// An X25519 key pair for a recipient.
 ///
@@ -122,6 +125,10 @@ impl RecipientKey {
 /// The sender needs **no** key of its own: the ephemeral one is drawn here and
 /// discarded afterwards. That is why portal can make an envelope it cannot
 /// open.
+///
+/// A plaintext over `krypto::MAX_DATA_BYTES` is [`TlsError::Params`], and a
+/// shared secret that cannot be held in locked memory is
+/// [`TlsError::LockedMemory`] *(0.12.0)*.
 pub fn seal(recipient_public: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, TlsError> {
     seal_with(recipient_public, plaintext, Alg::Aegis256)
 }
@@ -141,12 +148,13 @@ pub fn seal_with(recipient_public: &[u8], plaintext: &[u8], alg: Alg) -> Result<
 
     // Rejects a non-contributory result (low-order recipient point) with an
     // error — an envelope whose key an attacker could predict is never made.
-    let shared = exchange::x25519_shared(&ephemeral, recipient_public).map_err(|_| {
-        TlsError::Params(
+    let shared = exchange::x25519_shared(&ephemeral, recipient_public).map_err(|e| match e {
+        krypto::Error::Hardening(_) => TlsError::not_held("the shared secret", e),
+        _ => TlsError::Params(
             "the recipient's X25519 public key is invalid (it would force a predictable \
              shared secret) — no envelope is made for it"
                 .into(),
-        )
+        ),
     })?;
 
     let blob = seal_inner(&shared, &ephemeral_pub, recipient_public, plaintext, alg)?;
@@ -159,6 +167,11 @@ pub fn seal_with(recipient_public: &[u8], plaintext: &[u8], alg: Alg) -> Result<
 }
 
 /// Opens an envelope. **Only** the recipient can.
+///
+/// An envelope longer than header, ephemeral key and krypto's largest blob is
+/// [`TlsError::Envelope`], refused before the key is used, and opened content
+/// or a shared secret that cannot be held in locked memory is
+/// [`TlsError::LockedMemory`] *(0.12.0)*.
 pub fn open(key: &RecipientKey, envelope: &[u8]) -> Result<SecretBuf, TlsError> {
     if envelope.len() < MAGIC.len() + X25519_LEN {
         return Err(TlsError::Envelope("the envelope is too short".into()));
@@ -169,25 +182,34 @@ pub fn open(key: &RecipientKey, envelope: &[u8]) -> Result<SecretBuf, TlsError> 
                 .into(),
         ));
     }
+    if envelope.len() > MAX_ENVELOPE_LEN {
+        return Err(TlsError::Envelope(format!(
+            "the envelope is too long: {} bytes, at most {MAX_ENVELOPE_LEN} \
+             (header, ephemeral key and krypto's largest blob)",
+            envelope.len()
+        )));
+    }
     let ephemeral_pub = &envelope[MAGIC.len()..MAGIC.len() + X25519_LEN];
     let blob = &envelope[MAGIC.len() + X25519_LEN..];
 
     let my_pub = key.public()?;
-    let shared = exchange::x25519_shared(&key.private, ephemeral_pub).map_err(|_| {
-        TlsError::ProofInvalid(
+    let shared = exchange::x25519_shared(&key.private, ephemeral_pub).map_err(|e| match e {
+        krypto::Error::Hardening(_) => TlsError::not_held("the shared secret", e),
+        _ => TlsError::ProofInvalid(
             "the ephemeral key in the envelope is invalid — the envelope is malformed or \
              manipulated"
                 .into(),
-        )
+        ),
     })?;
 
     let dk = derive(&shared, ephemeral_pub, &my_pub)?;
-    krypto::open(&dk, blob).map_err(|_| {
-        TlsError::ProofInvalid(
+    krypto::open(&dk, blob).map_err(|e| match e {
+        krypto::Error::Hardening(_) => TlsError::not_held("the opened content", e),
+        _ => TlsError::ProofInvalid(
             "could not open the envelope — it is not sealed to this key, \
              or it was altered"
                 .into(),
-        )
+        ),
     })
 }
 
@@ -200,7 +222,7 @@ fn seal_inner(
 ) -> Result<Vec<u8>, TlsError> {
     let dk = derive(shared, ephemeral_pub, recipient_pub)?;
     let pt = SecretBuf::from_vec(plaintext.to_vec())
-        .map_err(|e| TlsError::locked_memory("the plaintext", e))?;
+        .map_err(|e| TlsError::not_held("the plaintext", e))?;
     krypto::seal(&dk, &KEY_ID, &pt, alg)
         .map_err(|e| TlsError::Envelope(format!("sealing failed: {e}")))
 }
@@ -230,7 +252,7 @@ fn derive(
     });
 
     let mk = krypto::MasterKey::from_bytes(
-        SecretBuf::from_vec(ikm).map_err(|e| TlsError::locked_memory("the key material", e))?,
+        SecretBuf::from_vec(ikm).map_err(|e| TlsError::not_held("the key material", e))?,
     )
     .map_err(|e| TlsError::Envelope(format!("could not build the key root: {e}")))?;
     mk.derive(INFO, ephemeral_pub)
@@ -323,6 +345,21 @@ mod tests {
         let err = open(&n, b"short").unwrap_err();
         assert!(matches!(err, TlsError::Envelope(_)), "{err:?}");
         assert!(format!("{err}").contains("too short"), "{err}");
+    }
+
+    #[test]
+    fn a_blob_over_krypto_limit_is_refused_by_size() {
+        // 0.12.0: not a wrong key, so not `ProofInvalid`.
+        let (n, public) = RecipientKey::generate().unwrap();
+        let mut envelope = MAGIC.to_vec();
+        envelope.extend_from_slice(&public);
+        envelope.resize(envelope.len() + crate::KRYPTO_MAX_BLOB_BYTES + 1, 0);
+        let err = open(&n, &envelope).unwrap_err();
+        assert!(matches!(err, TlsError::Envelope(_)), "{err:?}");
+        assert!(
+            format!("{err}").contains(&envelope.len().to_string()),
+            "{err}"
+        );
     }
 
     #[test]

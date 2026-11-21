@@ -36,7 +36,8 @@ pub enum TlsError {
     /// rustls rejected the configuration.
     Rustls(String),
     /// Invalid parameters from the consumer (empty SAN list, `valid_days` outside
-    /// 1..=397, …).
+    /// 1..=397, …), or a password or a secret over krypto's size limit
+    /// *(0.12.0)*.
     Params(String),
     /// The fingerprint string could not be parsed as 32 bytes of hexadecimal.
     Fingerprint(String),
@@ -72,7 +73,8 @@ pub enum TlsError {
     /// The sealed envelope ([`crate::envelope`]) or the password lock
     /// ([`crate::lockbox`]) failed: an input that is too short or of the wrong
     /// format, or a key, derivation or sealing step that did not succeed
-    /// *(0.11.0)*. A wrong key or password is [`TlsError::ProofInvalid`].
+    /// *(0.11.0)*, or an input too long for krypto's largest blob *(0.12.0)*.
+    /// A wrong key or password is [`TlsError::ProofInvalid`].
     Envelope(String),
     /// A secret could not be held in locked memory — typically `mlock` against
     /// a low `RLIMIT_MEMLOCK` *(0.11.0)*.
@@ -146,10 +148,15 @@ impl TlsError {
         }
     }
 
-    /// A secret (`what`) that could not be held in locked memory, with
-    /// krypto's reason *(0.11.0)*.
-    pub(crate) fn locked_memory(what: &str, e: impl fmt::Display) -> Self {
-        TlsError::LockedMemory(format!("{what} ({e})"))
+    /// A secret (`what`) that krypto would not take into locked memory, with
+    /// krypto's reason *(0.11.0)*. Content krypto refuses, such as one over
+    /// its size limit, is [`TlsError::Params`]; any other failure is
+    /// [`TlsError::LockedMemory`] *(0.12.0)*.
+    pub(crate) fn not_held(what: &str, e: krypto::Error) -> Self {
+        match e {
+            krypto::Error::Format(_) => TlsError::Params(format!("{what} was not accepted: {e}")),
+            _ => TlsError::LockedMemory(format!("{what} ({e})")),
+        }
     }
 
     /// The named lock is poisoned *(0.11.0)*.
@@ -171,10 +178,13 @@ mod tests {
     /// Each new variant says what actually failed (0.11.0).
     #[test]
     fn the_new_variants_say_what_failed() {
-        let e = TlsError::locked_memory("a private key", "mlock refused");
+        let e = TlsError::not_held(
+            "a private key",
+            krypto::Error::Hardening("mlock refused".into()),
+        );
         assert_eq!(
             e.to_string(),
-            "could not hold a private key (mlock refused) in locked memory (mlock — check RLIMIT_MEMLOCK)"
+            "could not hold a private key (hardening error: mlock refused) in locked memory (mlock — check RLIMIT_MEMLOCK)"
         );
         let e = TlsError::Random("getrandom failed".into());
         assert!(
@@ -191,6 +201,26 @@ mod tests {
             e.to_string(),
             "sealing or opening failed: the envelope is too short"
         );
+    }
+
+    /// Content krypto refuses to hold is `Params`, with krypto's text; only
+    /// another failure is `LockedMemory` (0.12.0).
+    #[test]
+    fn not_held_tells_refused_content_from_locked_memory() {
+        let e = TlsError::not_held(
+            "the plaintext",
+            krypto::Error::Format("secret is 67108865 bytes — max 67108864".into()),
+        );
+        assert!(matches!(e, TlsError::Params(_)), "{e:?}");
+        assert_eq!(
+            e.to_string(),
+            "invalid parameters: the plaintext was not accepted: format error: secret is 67108865 bytes — max 67108864"
+        );
+        let e = TlsError::not_held(
+            "the plaintext",
+            krypto::Error::Hardening("mlock failed".into()),
+        );
+        assert!(matches!(e, TlsError::LockedMemory(_)), "{e:?}");
     }
 
     /// `Encode` says what could not be encoded, and how (0.12.0).

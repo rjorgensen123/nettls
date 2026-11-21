@@ -43,6 +43,9 @@ const SALT_LEN: usize = 32;
 /// The `key_id` in the FAFN header. Fixed — we have one key per file, derived
 /// from the password, and no key rotation at this layer.
 const KEY_ID: [u8; 16] = *b"nettls-local-st1";
+/// The longest file [`unlock`] takes: header, salt and the largest blob krypto
+/// opens *(0.12.0)*.
+const MAX_FILE_LEN: usize = MAGIC.len() + SALT_LEN + crate::KRYPTO_MAX_BLOB_BYTES;
 
 /// Locks content with a password — with the default AEAD,
 /// **AEGIS-256** (SPEC-nettls §6.0b: at rest there is no cross-reading —
@@ -50,6 +53,9 @@ const KEY_ID: [u8; 16] = *b"nettls-local-st1";
 ///
 /// The salt is drawn fresh every time, so two lockings of the same content
 /// with the same password yield different ciphertext.
+///
+/// A password over `krypto::password::MAX_PASSWORD_BYTES`, or a plaintext over
+/// `krypto::MAX_DATA_BYTES`, is [`TlsError::Params`] *(0.12.0)*.
 pub fn lock(password: &SecretString, plaintext: &[u8]) -> Result<Vec<u8>, TlsError> {
     lock_with(password, plaintext, Alg::Aegis256)
 }
@@ -62,6 +68,9 @@ pub fn lock(password: &SecretString, plaintext: &[u8]) -> Result<Vec<u8>, TlsErr
 /// so [`unlock`] opens either; a reader without the algorithm fails hard,
 /// never silently (the A1 rule: no fallback below the floor, never to
 /// nothing).
+///
+/// A password or plaintext over krypto's limit is [`TlsError::Params`], as
+/// for [`lock`] *(0.12.0)*.
 pub fn lock_with(password: &SecretString, plaintext: &[u8], alg: Alg) -> Result<Vec<u8>, TlsError> {
     // `random_bytes` and not `SecretBuf::random`: the salt is stored in
     // cleartext right in front of the blob — it is public by design.
@@ -77,6 +86,12 @@ pub fn lock_with(password: &SecretString, plaintext: &[u8], alg: Alg) -> Result<
 }
 
 /// Unlocks. **A wrong password gives an authentication failure**, not an empty result.
+///
+/// A file longer than header, salt and krypto's largest blob is
+/// [`TlsError::Envelope`], refused before the password is used, a password
+/// over `krypto::password::MAX_PASSWORD_BYTES` is [`TlsError::Params`], and
+/// unlocked content that cannot be held in locked memory is
+/// [`TlsError::LockedMemory`] *(0.12.0)*.
 pub fn unlock(password: &SecretString, file: &[u8]) -> Result<SecretBuf, TlsError> {
     if file.len() < MAGIC.len() + SALT_LEN {
         return Err(TlsError::Envelope(
@@ -90,6 +105,13 @@ pub fn unlock(password: &SecretString, file: &[u8]) -> Result<SecretBuf, TlsErro
                 .into(),
         ));
     }
+    if file.len() > MAX_FILE_LEN {
+        return Err(TlsError::Envelope(format!(
+            "the locked file is too long: {} bytes, at most {MAX_FILE_LEN} \
+             (header, salt and krypto's largest blob)",
+            file.len()
+        )));
+    }
     let salt = &file[MAGIC.len()..MAGIC.len() + SALT_LEN];
     let blob = &file[MAGIC.len() + SALT_LEN..];
 
@@ -98,12 +120,13 @@ pub fn unlock(password: &SecretString, file: &[u8]) -> Result<SecretBuf, TlsErro
         .and_then(|mk| mk.derive(b"nettls/local-state/v1", salt))
         .map_err(|e| TlsError::Envelope(format!("key derivation failed: {e}")))?;
 
-    krypto::open(&dk, blob).map_err(|_| {
-        TlsError::ProofInvalid(
+    krypto::open(&dk, blob).map_err(|e| match e {
+        krypto::Error::Hardening(_) => TlsError::not_held("the unlocked content", e),
+        _ => TlsError::ProofInvalid(
             "could not unlock the local state — wrong password, or the file was altered. \
              (We store no verification hash, so this is the AEAD speaking up.)"
                 .into(),
-        )
+        ),
     })
 }
 
@@ -118,14 +141,22 @@ fn seal(
         .and_then(|mk| mk.derive(b"nettls/local-state/v1", salt))
         .map_err(|e| TlsError::Envelope(format!("key derivation failed: {e}")))?;
     let pt = SecretBuf::from_vec(plaintext.to_vec())
-        .map_err(|e| TlsError::locked_memory("the plaintext", e))?;
+        .map_err(|e| TlsError::not_held("the plaintext", e))?;
     krypto::seal(&dk, &KEY_ID, &pt, alg)
         .map_err(|e| TlsError::Envelope(format!("sealing failed: {e}")))
 }
 
+/// The key for `salt` from the password. A password krypto refuses (`Format`,
+/// over its length limit) is [`TlsError::Params`] *(0.12.0)*.
 fn derive(password: &SecretString, salt: &[u8]) -> Result<SecretBuf, TlsError> {
-    krypto::password::derive_key(password, salt, krypto::password::Preset::Interactive)
-        .map_err(|e| TlsError::Envelope(format!("argon2 derivation failed: {e}")))
+    krypto::password::derive_key(password, salt, krypto::password::Preset::Interactive).map_err(
+        |e| match e {
+            krypto::Error::Format(_) => {
+                TlsError::Params(format!("the password was not accepted: {e}"))
+            }
+            _ => TlsError::Envelope(format!("argon2 derivation failed: {e}")),
+        },
+    )
 }
 
 #[cfg(test)]
@@ -212,5 +243,122 @@ mod tests {
         let file = lock(&pw("secret"), b"").unwrap();
         let out = unlock(&pw("secret"), &file).unwrap();
         out.expose(|b| assert!(b.is_empty()));
+    }
+
+    /// Header and salt in front of `blob`: a file `unlock` reads past its
+    /// framing checks.
+    fn framed(blob: &[u8]) -> Vec<u8> {
+        let mut file = MAGIC.to_vec();
+        file.extend_from_slice(&[0u8; SALT_LEN]);
+        file.extend_from_slice(blob);
+        file
+    }
+
+    #[test]
+    fn a_password_over_krypto_limit_is_params() {
+        // 0.12.0: krypto refuses it before Argon2 runs; the message says so.
+        let max = krypto::password::MAX_PASSWORD_BYTES;
+        let long = pw(&"p".repeat(max + 1));
+        for err in [
+            lock(&long, b"x").unwrap_err(),
+            unlock(&long, &framed(b"FAFN")).unwrap_err(),
+        ] {
+            assert!(matches!(err, TlsError::Params(_)), "{err:?}");
+            assert!(format!("{err}").contains(&format!("max {max}")), "{err}");
+        }
+    }
+
+    #[test]
+    fn a_plaintext_over_krypto_limit_is_params_not_locked_memory() {
+        // 0.12.0: krypto refuses it before any memory is locked.
+        let err = lock(&pw("secret"), &vec![0u8; krypto::MAX_DATA_BYTES + 1]).unwrap_err();
+        assert!(matches!(err, TlsError::Params(_)), "{err:?}");
+        assert!(!format!("{err}").contains("RLIMIT_MEMLOCK"), "{err}");
+    }
+
+    #[test]
+    fn a_blob_over_krypto_limit_is_refused_by_size() {
+        // 0.12.0: not a wrong password, so not `ProofInvalid`.
+        let file = framed(&vec![0u8; crate::KRYPTO_MAX_BLOB_BYTES + 1]);
+        let err = unlock(&pw("secret"), &file).unwrap_err();
+        assert!(matches!(err, TlsError::Envelope(_)), "{err:?}");
+        assert!(format!("{err}").contains(&file.len().to_string()), "{err}");
+    }
+
+    /// The locked file the child run of `unlock_under_a_low_memlock_limit`
+    /// opens.
+    const LOCKED_FILE_ENV: &str = "NETTLS_TEST_LOCKED_FILE";
+
+    /// The system page size, from `getconf`.
+    fn page_size() -> usize {
+        let out = std::process::Command::new("getconf")
+            .arg("PAGESIZE")
+            .output()
+            .expect("getconf runs");
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse()
+            .expect("getconf PAGESIZE prints a number")
+    }
+
+    /// Whether a memlock limit binds this process. It does not with
+    /// CAP_IPC_LOCK (bit 14 of `CapEff`), which root outside a container has.
+    fn memlock_limit_binds() -> bool {
+        let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
+            return true;
+        };
+        let cap_eff = status
+            .lines()
+            .find_map(|line| line.strip_prefix("CapEff:"))
+            .and_then(|value| u64::from_str_radix(value.trim(), 16).ok());
+        cap_eff.is_none_or(|caps| caps & (1 << 14) == 0)
+    }
+
+    #[test]
+    fn unlocked_content_that_cannot_be_held_is_locked_memory() {
+        // 0.12.0: krypto locks what it opened; when it cannot, the answer names
+        // memory, not the password. The test runs its own binary again with a
+        // memlock limit of 8 pages: the password and the keys (3 pages) fit,
+        // the content (16 pages) does not. A process with CAP_IPC_LOCK, such as
+        // root outside a container, is not bound by the limit, so the test
+        // cannot provoke the failure there and is skipped.
+        if !memlock_limit_binds() {
+            eprintln!("skipped: CAP_IPC_LOCK is set, so no memlock limit binds this process");
+            return;
+        }
+        let page = page_size();
+        let file = lock(&pw("secret"), &vec![7u8; 16 * page]).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "nettls-locked-memory-{}.locked",
+            std::process::id()
+        ));
+        std::fs::write(&path, &file).unwrap();
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(r#"ulimit -S -l "$1" && exec "$0" "$2" --exact --ignored"#)
+            .arg(std::env::current_exe().unwrap())
+            .arg((8 * page / 1024).to_string())
+            .arg("lockbox::tests::unlock_under_a_low_memlock_limit")
+            .env(LOCKED_FILE_ENV, &path)
+            .output()
+            .unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success() && stdout.contains("1 passed"),
+            "{stdout}{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "run by unlocked_content_that_cannot_be_held_is_locked_memory, under a low memlock limit"]
+    fn unlock_under_a_low_memlock_limit() {
+        let path = std::env::var_os(LOCKED_FILE_ENV)
+            .expect("started by unlocked_content_that_cannot_be_held_is_locked_memory");
+        let file = std::fs::read(path).unwrap();
+        let err = unlock(&pw("secret"), &file).unwrap_err();
+        assert!(matches!(err, TlsError::LockedMemory(_)), "{err:?}");
+        assert!(format!("{err}").contains("the unlocked content"), "{err}");
     }
 }
