@@ -13,7 +13,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use x509_parser::prelude::FromDer;
 use zeroize::Zeroizing;
 
-use crate::error::TlsError;
+use crate::error::{TlsError, to_hex};
 use crate::pem;
 use crate::provider::provider;
 use crate::secret;
@@ -395,7 +395,7 @@ impl TlsMaterial {
             .map_err(|e| TlsError::KeyMismatch(e.to_string()))?;
 
         let leaf = &chain[0];
-        let fingerprint = krypto::hex::encode(&sha256(leaf.as_ref()));
+        let fingerprint = to_hex("the certificate fingerprint", &sha256(leaf.as_ref()))?;
         let (not_before, not_after, sans, subject) = inspect(leaf)?;
 
         Ok(Self {
@@ -590,11 +590,11 @@ impl TlsMaterial {
             }
         };
         // The PEM form of the key goes straight into locked memory.
-        let key_pem = secret::hold(pem::encode(label, der))?;
+        let key_pem = secret::hold(pem::encode(label, der)?)?;
 
         let mut cert_pem = Vec::new();
         for c in &self.chain {
-            cert_pem.extend_from_slice(&pem::encode("CERTIFICATE", c.as_ref()));
+            cert_pem.extend_from_slice(&pem::encode("CERTIFICATE", c.as_ref())?);
         }
         Ok((cert_pem, key_pem))
     }
@@ -898,6 +898,9 @@ fn validate_common_name(cn: &str) -> Result<(), TlsError> {
 /// Used when we connect **unverified just to read** the peer's identity and
 /// show it to the operator (observing an identity is not trusting it —
 /// the certificate is sent in cleartext in every handshake anyway).
-pub fn cert_fingerprint_sha256(cert_der: &[u8]) -> String {
-    krypto::hex::encode(&sha256(cert_der))
+///
+/// Fails with [`TlsError::Encode`] when the fingerprint cannot be encoded as
+/// hex *(0.12.0)*.
+pub fn cert_fingerprint_sha256(cert_der: &[u8]) -> Result<String, TlsError> {
+    to_hex("the certificate fingerprint", &sha256(cert_der))
 }

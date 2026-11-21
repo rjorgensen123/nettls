@@ -70,7 +70,7 @@ mod tests {
     #[test]
     fn parses_the_canonical_form() {
         let raw = [0xdeu8; 32];
-        let hex = krypto::hex::encode(&raw);
+        let hex = krypto::hex::encode(&raw).unwrap();
         assert_eq!(hex.len(), 64);
         assert_eq!(parse_fingerprint(&hex).unwrap(), raw);
     }
@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn tolerates_colons_uppercase_and_prefix() {
         let raw = [0xabu8; 32];
-        let hex = krypto::hex::encode(&raw);
+        let hex = krypto::hex::encode(&raw).unwrap();
         let med_kolon: Vec<String> = hex
             .as_bytes()
             .chunks(2)

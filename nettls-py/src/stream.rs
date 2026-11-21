@@ -134,9 +134,10 @@ impl Conn {
         both!(self, s => s.conn.alpn_protocol().map(<[u8]>::to_vec))
     }
 
-    fn peer_fingerprint(&self) -> Option<String> {
+    fn peer_fingerprint(&self) -> Result<Option<String>, nettls::TlsError> {
         self.peer_certificate()
             .map(|leaf| nettls::cert_fingerprint_sha256(&leaf))
+            .transpose()
     }
 
     fn peer_certificate(&self) -> Option<Vec<u8>> {
@@ -358,7 +359,7 @@ impl Stream {
     fn peer_fingerprint(&self) -> PyResult<Option<String>> {
         let guard = lock(&self.inner);
         let conn = guard.as_ref().ok_or_else(closed)?;
-        Ok(conn.peer_fingerprint())
+        conn.peer_fingerprint().map_err(err)
     }
 
     /// The peer's certificate as DER, or `None` when the peer showed none

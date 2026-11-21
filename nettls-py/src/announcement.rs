@@ -174,8 +174,11 @@ impl Announcement {
             .map_err(err)
     }
 
-    fn to_json(&self) -> AnnouncementJson {
-        AnnouncementJson::from_rust(self.inner.to_json())
+    fn to_json(&self) -> PyResult<AnnouncementJson> {
+        self.inner
+            .to_json()
+            .map(AnnouncementJson::from_rust)
+            .map_err(err)
     }
 
     #[staticmethod]
@@ -333,8 +336,11 @@ impl Receipt {
             .map_err(err)
     }
 
-    fn to_json(&self) -> ReceiptJson {
-        ReceiptJson::from_rust(self.inner.to_json())
+    fn to_json(&self) -> PyResult<ReceiptJson> {
+        self.inner
+            .to_json()
+            .map(ReceiptJson::from_rust)
+            .map_err(err)
     }
 
     #[staticmethod]
@@ -431,15 +437,17 @@ impl IdentityJson {
         mode: Mode,
         sent_at: i64,
         announcement: Option<PyRef<'_, Announcement>>,
-    ) -> Self {
-        Self::from_rust(a::IdentityJson::new(
+    ) -> PyResult<Self> {
+        a::IdentityJson::new(
             fingerprint,
             cert_pem,
             not_after,
             mode.into(),
             sent_at,
             announcement.as_ref().map(|k| &k.inner),
-        ))
+        )
+        .map(Self::from_rust)
+        .map_err(err)
     }
 
     /// The JSON serde writes in Rust.

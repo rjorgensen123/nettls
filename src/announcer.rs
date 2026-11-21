@@ -36,7 +36,7 @@ use std::collections::BTreeSet;
 use zeroize::Zeroize;
 
 use crate::announcement::Announcement;
-use crate::error::TlsError;
+use crate::error::{TlsError, to_hex};
 
 /// Seconds in a day.
 pub const DAY_S: i64 = 86_400;
@@ -392,7 +392,7 @@ impl Announcer {
         // the single truth about what we are running now.
         let material = self.load(&self.dir)?;
         let der = material.cert_chain()[0].as_ref().to_vec();
-        let current_fp = krypto::hex::encode(&krypto::sha256(&der));
+        let current_fp = to_hex("the certificate fingerprint", &krypto::sha256(&der))?;
         let current_pkcs8 = crate::pkcs8::pkcs8_p256(material.key_der(), &der)?;
 
         if read_back.fingerprint == current_fp {
@@ -485,7 +485,10 @@ impl Announcer {
     /// Reads back what a switch wrote and checks it (0.10.0).
     fn verify_switch(&self, current: &str, previous: &str) -> Result<(), TlsError> {
         let m = self.load(&self.dir)?;
-        let on_disk = krypto::hex::encode(&krypto::sha256(m.cert_chain()[0].as_ref()));
+        let on_disk = to_hex(
+            "the certificate fingerprint",
+            &krypto::sha256(m.cert_chain()[0].as_ref()),
+        )?;
         let chain_ok = self
             .read_previous()?
             .is_some_and(|p| p.fingerprint == previous && p.current.as_deref() == Some(current));
@@ -1295,7 +1298,7 @@ impl Announcer {
         self.save(&fresh, &new_dir)?;
 
         let der = fresh.cert_chain()[0].as_ref().to_vec();
-        let pem = String::from_utf8(crate::pem::encode("CERTIFICATE", &der))
+        let pem = String::from_utf8(crate::pem::encode("CERTIFICATE", &der)?)
             .map_err(|e| TlsError::Pem(e.to_string()))?;
         let new_pkcs8 = crate::pkcs8::pkcs8_p256(fresh.key_der(), &der)?;
 
@@ -1429,7 +1432,10 @@ impl Announcer {
         // Write and check everything first; nothing in memory moves until the
         // disk holds the new pair (0.10.0).
         let fresh = self.load(&self.dir.join("new"))?;
-        let new_fp = krypto::hex::encode(&krypto::sha256(fresh.cert_chain()[0].as_ref()));
+        let new_fp = to_hex(
+            "the certificate fingerprint",
+            &krypto::sha256(fresh.cert_chain()[0].as_ref()),
+        )?;
         let mut next = self
             .schedule
             .read()
@@ -1791,7 +1797,7 @@ impl Announcer {
             .read()
             .map_err(|_| TlsError::poisoned("the rotation lock"))?;
         let on_disk = PendingOnDisk {
-            announcement: v.announcement.to_json(),
+            announcement: v.announcement.to_json()?,
             new_cert_pem: v.new_cert_pem.clone(),
             waiting_for: r.waiting_for().into_iter().map(str::to_string).collect(),
             first_announced: r.first_announced().unwrap_or(0),

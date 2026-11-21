@@ -163,9 +163,9 @@ async fn announced_successor_accepted_without_client_knowing_when() {
     let port = ledig_port();
 
     // The operator has approved c0.
-    let trust = Trust::from_approval(Generation::from_der(
-        c0.material.cert_chain()[0].as_ref().to_vec(),
-    ));
+    let trust = Trust::from_approval(
+        Generation::from_der(c0.material.cert_chain()[0].as_ref().to_vec()).unwrap(),
+    );
 
     // Server on c0. Sanity: the pin works NOW — without this the rest could
     // have "passed" against a dead server.
@@ -214,9 +214,9 @@ async fn previous_generation_does_not_get_in_after_promotion() {
     let c1 = generation();
     let port = ledig_port();
 
-    let trust = Trust::from_approval(Generation::from_der(
-        c0.material.cert_chain()[0].as_ref().to_vec(),
-    ));
+    let trust = Trust::from_approval(
+        Generation::from_der(c0.material.cert_chain()[0].as_ref().to_vec()).unwrap(),
+    );
     let k = Announcement::new("gateway", None, (&c0.fp_bar(), &c0.pkcs8), &c1.pem, 1).unwrap();
     trust.receive(&k).unwrap();
 
@@ -244,9 +244,9 @@ async fn unknown_certificate_is_rejected() {
     let foreign = generation();
     let port = ledig_port();
 
-    let trust = Trust::from_approval(Generation::from_der(
-        c0.material.cert_chain()[0].as_ref().to_vec(),
-    ));
+    let trust = Trust::from_approval(
+        Generation::from_der(c0.material.cert_chain()[0].as_ref().to_vec()).unwrap(),
+    );
 
     let s = server(port, foreign.cfg()).await;
     let r = connect_to(&trust, port).await;
@@ -329,9 +329,9 @@ async fn announcer_rolls_only_when_receipt_is_in() {
         }
     });
 
-    let trust = Trust::from_approval(Generation::from_der(
-        c0.material.cert_chain()[0].as_ref().to_vec(),
-    ));
+    let trust = Trust::from_approval(
+        Generation::from_der(c0.material.cert_chain()[0].as_ref().to_vec()).unwrap(),
+    );
     connect_to(&trust, port).await.expect("c0 must pass");
 
     // Announce.
@@ -465,9 +465,9 @@ async fn loftet_overlever_en_restart() {
     assert!(old.contains(&c0.fp_bar()));
 
     // And the client that stored the announcement before the restart gets through afterwards.
-    let trust = Trust::from_approval(Generation::from_der(
-        c0.material.cert_chain()[0].as_ref().to_vec(),
-    ));
+    let trust = Trust::from_approval(
+        Generation::from_der(c0.material.cert_chain()[0].as_ref().to_vec()).unwrap(),
+    );
     trust.receive(&k).unwrap();
     connect_to(&trust, port)
         .await
@@ -750,9 +750,9 @@ async fn next_without_its_key_does_not_promote() {
     let stranger = generation();
     let port = ledig_port();
 
-    let trust = Trust::from_approval(Generation::from_der(
-        c0.material.cert_chain()[0].as_ref().to_vec(),
-    ));
+    let trust = Trust::from_approval(
+        Generation::from_der(c0.material.cert_chain()[0].as_ref().to_vec()).unwrap(),
+    );
     let k = Announcement::new("gateway", None, (&c0.fp_bar(), &c0.pkcs8), &c1.pem, 1).unwrap();
     trust
         .receive(&k)

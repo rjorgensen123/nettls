@@ -148,7 +148,9 @@ fn rotation_alarm_beats_warn_and_pending_reads_from_generations() {
     assert!(r.headline.contains("gateway"), "{}", r.headline);
 
     // A peer with an announced next reads as RotationPending.
-    let g = Generations::from_approval(Generation::from_der(m.cert_chain()[0].as_ref().to_vec()));
+    let g = Generations::from_approval(
+        Generation::from_der(m.cert_chain()[0].as_ref().to_vec()).unwrap(),
+    );
     let p = PeerReport::from_generations("gateway", &g);
     assert_eq!(p.state, PeerState::Ok); // bootstrap: nothing pending
     assert_eq!(p.current_fingerprint, m.fingerprint_sha256());

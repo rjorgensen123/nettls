@@ -28,10 +28,10 @@ pub(crate) struct Generation {
 #[pymethods]
 impl Generation {
     #[staticmethod]
-    fn from_der(der: Vec<u8>) -> Self {
-        Self {
-            inner: nettls::generations::Generation::from_der(der),
-        }
+    fn from_der(der: Vec<u8>) -> PyResult<Self> {
+        nettls::generations::Generation::from_der(der)
+            .map(|inner| Self { inner })
+            .map_err(err)
     }
 
     #[staticmethod]

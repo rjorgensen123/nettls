@@ -54,7 +54,7 @@ fn make_material(name: &str) -> (String, String, Arc<krypto::SecretBuf>) {
     ))
     .expect("selvsignert");
     let der = m.cert_chain()[0].as_ref().to_vec();
-    let pem = String::from_utf8(nettls::pem::encode("CERTIFICATE", &der)).unwrap();
+    let pem = String::from_utf8(nettls::pem::encode("CERTIFICATE", &der).expect("pem")).unwrap();
     let fp = m.fingerprint_sha256().replace("sha256:", "");
     let pkcs8 = Arc::new(m.anchor_pkcs8().expect("pkcs8"));
     (fp, pem, pkcs8)
@@ -86,8 +86,11 @@ impl Node {
     /// present.
     fn server_config(&self) -> Arc<rustls::ServerConfig> {
         let (_, cert, key) = self.current.lock().unwrap().clone();
-        let key_pem =
-            String::from_utf8(key.expose(|k| nettls::pem::encode("PRIVATE KEY", k))).unwrap();
+        let key_pem = String::from_utf8(
+            key.expose(|k| nettls::pem::encode("PRIVATE KEY", k))
+                .expect("pem"),
+        )
+        .unwrap();
         TlsMaterial::load(&CertSource::pem(cert.into_bytes(), key_pem.into_bytes()))
             .expect("material")
             .server_config()
@@ -105,7 +108,10 @@ impl Node {
                     "sent_at": now(),
                 });
                 if let Some((k, _, _)) = self.pending.lock().unwrap().as_ref() {
-                    out["announcement"] = serde_json::to_value(k.to_json()).unwrap();
+                    match k.to_json() {
+                        Ok(j) => out["announcement"] = serde_json::to_value(j).unwrap(),
+                        Err(e) => return json!({"error": e.to_string()}),
+                    }
                 }
                 out
             }
@@ -316,12 +322,12 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
                 &node.seed,
             )
             .unwrap();
-            node.talk(
-                port,
-                &json!({"op":"ack","receipt": kv.to_json()}),
-                Some(name),
-            )
-            .unwrap();
+            let receipt = match kv.to_json() {
+                Ok(j) => j,
+                Err(e) => return json!({"error": e.to_string()}),
+            };
+            node.talk(port, &json!({"op":"ack","receipt": receipt}), Some(name))
+                .unwrap();
             json!({"ok": true, "acked_on": k.new_fingerprint()})
         }
         "roll" => {
@@ -349,48 +355,69 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
         // EVERYTHING goes out, and everything can be put back. Then the test
         // probes the same property in both languages.
         "export" => {
-            let hex = krypto::hex::encode;
-            let mat = |m: &(String, String, Arc<krypto::SecretBuf>)| json!({"fp": m.0, "cert_pem": m.1, "pkcs8": m.2.expose(hex)});
+            let hex = |b: &[u8]| krypto::hex::encode(b).map_err(|e| e.to_string());
+            let mat = |m: &(String, String, Arc<krypto::SecretBuf>)| -> Result<Value, String> {
+                let pkcs8 = m.2.expose(hex)?;
+                Ok(json!({"fp": m.0, "cert_pem": m.1, "pkcs8": pkcs8}))
+            };
             let kj = node.current.lock().unwrap().clone();
             let fo = node.previous.lock().unwrap().clone();
             let ve = node.pending.lock().unwrap().clone();
             let r = node.schedule.lock().unwrap();
 
-            let mut peers = serde_json::Map::new();
-            for (name, t) in node.peers.lock().unwrap().iter() {
-                let g = t.state().unwrap();
-                peers.insert(
-                    name.clone(),
-                    json!({
-                        "previous": g.previous().map(|x| hex(x.der())),
-                        "current": hex(g.current().der()),
-                        "next": g.next().map(|x| hex(x.der())),
-                    }),
-                );
-            }
-            let keys: HashMap<String, String> = node
-                .peer_keys
-                .lock()
-                .unwrap()
-                .iter()
-                .map(|(k, v)| (k.clone(), hex(v)))
-                .collect();
+            // Every encoding step can fail; the first failure is the reply.
+            let state = (|| -> Result<Value, String> {
+                let mut peers = serde_json::Map::new();
+                for (name, t) in node.peers.lock().unwrap().iter() {
+                    let g = t.state().unwrap();
+                    let previous = g.previous().map(|x| hex(x.der())).transpose()?;
+                    let current = hex(g.current().der())?;
+                    let next = g.next().map(|x| hex(x.der())).transpose()?;
+                    peers.insert(
+                        name.clone(),
+                        json!({
+                            "previous": previous,
+                            "current": current,
+                            "next": next,
+                        }),
+                    );
+                }
+                let keys: HashMap<String, String> = node
+                    .peer_keys
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(k, v)| Ok((k.clone(), hex(v)?)))
+                    .collect::<Result<_, String>>()?;
+                let pending = match ve.as_ref() {
+                    Some((k, pem, pk)) => {
+                        let announcement = k.to_json().map_err(|e| e.to_string())?;
+                        let pkcs8 = pk.expose(hex)?;
+                        Some(json!({
+                            "announcement": announcement,
+                            "cert_pem": pem,
+                            "pkcs8": pkcs8,
+                        }))
+                    }
+                    None => None,
+                };
 
-            json!({"ok": true, "state": {
-                "current": mat(&kj),
-                "previous": fo.as_ref().map(mat),
-                "pending": ve.as_ref().map(|(k, pem, pk)| json!({
-                    "announcement": k.to_json(),
-                    "cert_pem": pem,
-                    "pkcs8": pk.expose(hex),
-                })),
-                "peers": peers,
-                "keys": keys,
-                "rotations": *node.rotations.lock().unwrap(),
-                "ackers": node.ackers.lock().unwrap().clone(),
-                "waiting_for": r.waiting_for(),
-                "first_announced": r.first_announced(),
-            }})
+                Ok(json!({
+                    "current": mat(&kj)?,
+                    "previous": fo.as_ref().map(mat).transpose()?,
+                    "pending": pending,
+                    "peers": peers,
+                    "keys": keys,
+                    "rotations": *node.rotations.lock().unwrap(),
+                    "ackers": node.ackers.lock().unwrap().clone(),
+                    "waiting_for": r.waiting_for(),
+                    "first_announced": r.first_announced(),
+                }))
+            })();
+            match state {
+                Ok(state) => json!({"ok": true, "state": state}),
+                Err(e) => json!({"error": e}),
+            }
         }
         "import" => {
             let t = &m["state"];
@@ -426,13 +453,13 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
             let mut mp = HashMap::new();
             for (name, d) in t["peers"].as_object().unwrap() {
                 let g = nettls::generations::Generations::restore(
-                    d["previous"]
-                        .as_str()
-                        .map(|h| Generation::from_der(nettls::signature::from_hex(h).unwrap())),
-                    Generation::from_der(ub(&d["current"])),
-                    d["next"]
-                        .as_str()
-                        .map(|h| Generation::from_der(nettls::signature::from_hex(h).unwrap())),
+                    d["previous"].as_str().map(|h| {
+                        Generation::from_der(nettls::signature::from_hex(h).unwrap()).unwrap()
+                    }),
+                    Generation::from_der(ub(&d["current"])).unwrap(),
+                    d["next"].as_str().map(|h| {
+                        Generation::from_der(nettls::signature::from_hex(h).unwrap()).unwrap()
+                    }),
                 )
                 .unwrap();
                 mp.insert(name.clone(), Trust::from_state(g));

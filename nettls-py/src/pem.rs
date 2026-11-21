@@ -4,11 +4,11 @@
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
-use crate::{Bytes, bytes};
+use crate::{Bytes, bytes, err};
 
 #[pyfunction]
-fn encode(label: &str, der: &[u8]) -> Bytes {
-    bytes(nettls::pem::encode(label, der))
+fn encode(label: &str, der: &[u8]) -> PyResult<Bytes> {
+    nettls::pem::encode(label, der).map(bytes).map_err(err)
 }
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

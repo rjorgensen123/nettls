@@ -12,7 +12,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use crate::error::TlsError;
 
@@ -23,10 +23,29 @@ use crate::error::TlsError;
 /// base64 body is the canonical `krypto::base64`. The intermediate is
 /// zeroized: the DER may be a private key. (The returned buffer is the
 /// caller's to protect — for a key, `save_pem` holds it in a `SecretBuf`.)
-pub fn encode(label: &str, der: &[u8]) -> Vec<u8> {
-    let mut b64 = krypto::base64::encode(der).into_bytes();
+///
+/// Fails with [`TlsError::Encode`] when the DER is over krypto's size limit,
+/// or the memory for the base64 or the PEM text could not be reserved
+/// *(0.12.0)*.
+pub fn encode(label: &str, der: &[u8]) -> Result<Vec<u8>, TlsError> {
+    // Wiped when it goes out of scope, on the error path too.
+    let b64 = Zeroizing::new(
+        krypto::base64::encode(der)
+            .map_err(|e| TlsError::Encode(format!("the DER as base64: {e}")))?
+            .into_bytes(),
+    );
 
-    let mut out = Vec::with_capacity(b64.len() + b64.len() / 64 + 2 * label.len() + 32);
+    // Exactly what is written below: the two label lines are 32 bytes apart
+    // from the labels, and every body line ends in a newline. Saturating, so a
+    // size that does not fit fails the reservation instead of wrapping.
+    let len = b64
+        .len()
+        .saturating_add(b64.len().div_ceil(64))
+        .saturating_add(label.len().saturating_mul(2))
+        .saturating_add(32);
+    let mut out = Vec::new();
+    out.try_reserve_exact(len)
+        .map_err(|_| TlsError::Encode(format!("the DER as PEM: cannot reserve {len} bytes")))?;
     out.extend_from_slice(b"-----BEGIN ");
     out.extend_from_slice(label.as_bytes());
     out.extend_from_slice(b"-----\n");
@@ -38,8 +57,7 @@ pub fn encode(label: &str, der: &[u8]) -> Vec<u8> {
     out.extend_from_slice(label.as_bytes());
     out.extend_from_slice(b"-----\n");
 
-    b64.zeroize();
-    out
+    Ok(out)
 }
 
 /// Writes `bytes` to `path` atomically, with `mode`.
@@ -131,12 +149,25 @@ mod tests {
         use rustls_pki_types::pem::PemObject;
         // 200 bytes of "DER" → several lines → covers the line wrapping.
         let der: Vec<u8> = (0..200u32).map(|i| (i * 7 % 251) as u8).collect();
-        let pem = encode("CERTIFICATE", &der);
+        let pem = encode("CERTIFICATE", &der).unwrap();
         let certs: Vec<_> = rustls_pki_types::CertificateDer::pem_slice_iter(&pem)
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(certs.len(), 1);
         assert_eq!(certs[0].as_ref(), &der[..]);
+    }
+
+    /// DER one byte over krypto's limit is `TlsError::Encode`, and the message
+    /// carries krypto's own reason (0.12.0).
+    #[test]
+    fn der_over_the_limit_is_an_encode_error() {
+        let der = vec![0u8; krypto::MAX_DATA_BYTES + 1];
+        let krypto_reason = krypto::base64::encode(&der).unwrap_err().to_string();
+        let err = encode("CERTIFICATE", &der).unwrap_err();
+        let TlsError::Encode(msg) = &err else {
+            panic!("expected TlsError::Encode, got {err:?}");
+        };
+        assert_eq!(*msg, format!("the DER as base64: {krypto_reason}"));
     }
 
     fn scratch(name: &str) -> std::path::PathBuf {

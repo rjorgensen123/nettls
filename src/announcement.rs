@@ -34,13 +34,13 @@
 use serde::{Deserialize, Serialize};
 
 use crate::canonical;
-use crate::error::TlsError;
+use crate::error::{TlsError, to_hex};
 use crate::signature::{from_hex, verify_p256};
 use krypto::sha256;
 
 /// The fingerprint of a PEM certificate: SHA-256 over DER, hex without prefix.
 pub fn fingerprint_from_pem(pem: &str) -> Result<String, TlsError> {
-    Ok(krypto::hex::encode(&sha256(&der_from_pem(pem)?)))
+    to_hex("the certificate fingerprint", &sha256(&der_from_pem(pem)?))
 }
 
 /// PEM → DER. Fail-closed on anything that is not exactly one CERTIFICATE block.
@@ -173,7 +173,7 @@ impl Announcement {
         }
 
         // 2. The announcement must apply to the identity we actually have.
-        let actual_curr = krypto::hex::encode(&sha256(curr_cert_der));
+        let actual_curr = to_hex("the certificate fingerprint", &sha256(curr_cert_der))?;
         if actual_curr != self.curr_fp {
             return Err(TlsError::Chain(format!(
                 "the announcement is issued by {}, but we know {actual_curr} as current — \
@@ -190,7 +190,7 @@ impl Announcement {
         // 4. The previous signature: required as soon as the receiver HAS a previous.
         match (prev_cert_der, &self.prev_fp, &self.sig_prev) {
             (Some(der), Some(fp), Some(sig)) => {
-                let actual_prev = krypto::hex::encode(&sha256(der));
+                let actual_prev = to_hex("the certificate fingerprint", &sha256(der))?;
                 if &actual_prev != fp {
                     return Err(TlsError::Chain(format!(
                         "the announcement states {fp} as previous, we have {actual_prev}"
@@ -230,9 +230,10 @@ impl Announcement {
         }
     }
 
-    /// To serialized form.
-    pub fn to_json(&self) -> AnnouncementJson {
-        AnnouncementJson {
+    /// To serialized form. Fails with [`TlsError::Encode`] when a signature
+    /// cannot be encoded as hex *(0.12.0)*.
+    pub fn to_json(&self) -> Result<AnnouncementJson, TlsError> {
+        Ok(AnnouncementJson {
             v: canonical::ROTATE_V2.to_string(),
             announcer: self.announcer.clone(),
             prev_fingerprint: self.prev_fp.clone(),
@@ -240,9 +241,13 @@ impl Announcement {
             new_fingerprint: self.new_fp.clone(),
             new_cert_pem: self.new_cert_pem.clone(),
             sent_at: self.sent_at,
-            sig_prev: self.sig_prev.as_deref().map(krypto::hex::encode),
-            sig_curr: krypto::hex::encode(&self.sig_curr),
-        }
+            sig_prev: self
+                .sig_prev
+                .as_deref()
+                .map(|sig| to_hex("the signature with the previous key", sig))
+                .transpose()?,
+            sig_curr: to_hex("the signature with the current key", &self.sig_curr)?,
+        })
     }
 
     /// From serialized form. **Fail-closed** on anything that does not add up.
@@ -334,8 +339,8 @@ mod tester {
         .expect("self-signed");
         let der = m.cert_chain()[0].as_ref().to_vec();
         let pkcs8 = crate::pkcs8::pkcs8_p256(m.key_der(), &der).expect("pkcs8");
-        let pem = String::from_utf8(crate::pem::encode("CERTIFICATE", &der)).unwrap();
-        let fp = krypto::hex::encode(&sha256(&der));
+        let pem = String::from_utf8(crate::pem::encode("CERTIFICATE", &der).unwrap()).unwrap();
+        let fp = krypto::hex::encode(&sha256(&der)).unwrap();
         Gen {
             pem,
             der,
@@ -447,7 +452,7 @@ mod tester {
 
         // Swap out the PEM but keep everything else — the signatures cover the
         // fingerprint, not the certificate, so they are still valid.
-        let mut j = k.to_json();
+        let mut j = k.to_json().unwrap();
         j.new_cert_pem = evil.pem.clone();
         let tampered = Announcement::from_json(&j).unwrap();
 
@@ -496,7 +501,7 @@ mod tester {
         )
         .unwrap();
 
-        let text = serde_json::to_string(&k.to_json()).unwrap();
+        let text = serde_json::to_string(&k.to_json().unwrap()).unwrap();
         let inn: AnnouncementJson = serde_json::from_str(&text).unwrap();
         assert_eq!(Announcement::from_json(&inn).unwrap(), k);
     }
@@ -506,7 +511,7 @@ mod tester {
         let c0 = generation("c0");
         let c1 = generation("c1");
         let k = Announcement::new("gateway", None, (&c0.fp, &c0.pkcs8), &c1.pem, 100).unwrap();
-        let text = serde_json::to_string(&k.to_json()).unwrap();
+        let text = serde_json::to_string(&k.to_json().unwrap()).unwrap();
         assert!(!text.contains("prev_fingerprint"), "{text}");
         assert!(!text.contains("sig_prev"), "{text}");
     }
@@ -525,7 +530,7 @@ mod tester {
             100,
         )
         .unwrap();
-        let mut j = k.to_json();
+        let mut j = k.to_json().unwrap();
         j.sig_prev = None;
         assert!(Announcement::from_json(&j).is_err());
     }
@@ -535,7 +540,7 @@ mod tester {
         let c0 = generation("c0");
         let c1 = generation("c1");
         let k = Announcement::new("gateway", None, (&c0.fp, &c0.pkcs8), &c1.pem, 100).unwrap();
-        let mut j = k.to_json();
+        let mut j = k.to_json().unwrap();
         j.v = "nettls-rotate/v3".into();
         assert!(Announcement::from_json(&j).is_err());
     }
@@ -635,16 +640,17 @@ impl Receipt {
             .map_err(|_| TlsError::ProofInvalid("the Ed25519 signature does not hold".into()))
     }
 
-    /// To serialized form.
-    pub fn to_json(&self) -> ReceiptJson {
-        ReceiptJson {
+    /// To serialized form. Fails with [`TlsError::Encode`] when the signature
+    /// cannot be encoded as hex *(0.12.0)*.
+    pub fn to_json(&self) -> Result<ReceiptJson, TlsError> {
+        Ok(ReceiptJson {
             v: canonical::ROTATE_ACK_V2.to_string(),
             acker: self.acker.clone(),
             announcer: self.announcer.clone(),
             new_fingerprint: self.new_fp.clone(),
             sent_at: self.sent_at,
-            sig: krypto::hex::encode(&self.sig),
-        }
+            sig: to_hex("the signature", &self.sig)?,
+        })
     }
 
     /// From serialized form. Fail-closed.
@@ -729,12 +735,12 @@ mod receipt_tests {
     fn tampered_field_breaks_signature() {
         let pk = public(&seed());
         let k = Receipt::new("service", "gateway", FP, 100, &seed()).unwrap();
-        let mut j = k.to_json();
+        let mut j = k.to_json().unwrap();
         j.sent_at = 101;
         let tampered = Receipt::from_json(&j).unwrap();
         assert!(tampered.verify(&pk, FP).is_err());
 
-        let mut j2 = k.to_json();
+        let mut j2 = k.to_json().unwrap();
         j2.acker = "portal".into();
         let tuklet2 = Receipt::from_json(&j2).unwrap();
         assert!(tuklet2.verify(&pk, FP).is_err());
@@ -743,7 +749,7 @@ mod receipt_tests {
     #[test]
     fn json_round_trip_preserves_everything() {
         let k = Receipt::new("service", "gateway", FP, 1_700_000_000, &seed()).unwrap();
-        let text = serde_json::to_string(&k.to_json()).unwrap();
+        let text = serde_json::to_string(&k.to_json().unwrap()).unwrap();
         let inn: ReceiptJson = serde_json::from_str(&text).unwrap();
         assert_eq!(Receipt::from_json(&inn).unwrap(), k);
     }
@@ -751,7 +757,7 @@ mod receipt_tests {
     #[test]
     fn unknown_version_rejected() {
         let k = Receipt::new("service", "gateway", FP, 100, &seed()).unwrap();
-        let mut j = k.to_json();
+        let mut j = k.to_json().unwrap();
         j.v = "nettls-rotate-ack/v1".into();
         assert!(Receipt::from_json(&j).is_err());
     }
@@ -786,7 +792,7 @@ pub const ARCHIVE_FILE: &str = "announcements.jsonl";
 /// code here never writes anywhere but at the end.
 pub fn archive(dir: &std::path::Path, k: &Announcement) -> Result<(), TlsError> {
     use std::io::Write;
-    let line = serde_json::to_string(&k.to_json())
+    let line = serde_json::to_string(&k.to_json()?)
         .map_err(|e| TlsError::Proof(format!("could not serialize the announcement: {e}")))?;
     let path = dir.join(ARCHIVE_FILE);
     let mut f = std::fs::OpenOptions::new()
@@ -834,16 +840,15 @@ mod arkiv_tester {
         let m = TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::new(n, [n]))).unwrap();
         let der = m.cert_chain()[0].as_ref().to_vec();
         let pkcs8 = crate::pkcs8::pkcs8_p256(m.key_der(), &der).unwrap();
-        let fp = krypto::hex::encode(&sha256(&der));
+        let fp = krypto::hex::encode(&sha256(&der)).unwrap();
         let m2 = TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::new(
             "fresh",
             ["fresh"],
         )))
         .unwrap();
-        let pem = String::from_utf8(crate::pem::encode(
-            "CERTIFICATE",
-            m2.cert_chain()[0].as_ref(),
-        ))
+        let pem = String::from_utf8(
+            crate::pem::encode("CERTIFICATE", m2.cert_chain()[0].as_ref()).unwrap(),
+        )
         .unwrap();
         Announcement::new("gateway", None, (&fp, &pkcs8), &pem, 1).unwrap()
     }
@@ -955,6 +960,9 @@ impl IdentityJson {
     /// something it will never get to see — and then every single handshake
     /// fails. (That was not hypothetical: the first draft of the rotation did
     /// exactly that.)
+    ///
+    /// Fails with [`TlsError::Encode`] when the announcement's signatures
+    /// cannot be encoded as hex *(0.12.0)*.
     pub fn new(
         fingerprint: impl Into<String>,
         cert_pem: impl Into<String>,
@@ -962,15 +970,15 @@ impl IdentityJson {
         mode: crate::announcer::Mode,
         sent_at: i64,
         announcement: Option<&Announcement>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, TlsError> {
+        Ok(Self {
             fingerprint: fingerprint.into(),
             cert_pem: cert_pem.into(),
             not_after,
             mode,
             sent_at,
-            announcement: announcement.map(|k| k.to_json()),
-        }
+            announcement: announcement.map(Announcement::to_json).transpose()?,
+        })
     }
 }
 
@@ -990,7 +998,8 @@ mod identitet_tester {
             Mode::Rolling,
             100,
             None,
-        );
+        )
+        .unwrap();
         let t = serde_json::to_string(&i).unwrap();
         assert!(!t.contains("announcement"), "{t}");
         assert!(!t.contains("not_after"), "{t}");
@@ -1007,7 +1016,8 @@ mod identitet_tester {
             Mode::Pinning,
             1_700_000_000,
             None,
-        );
+        )
+        .unwrap();
         let t = serde_json::to_string(&i).unwrap();
         assert!(t.contains("\"mode\":\"pinning\""), "{t}");
         assert!(t.contains("\"sent_at\":1700000000"), "{t}");
@@ -1022,7 +1032,8 @@ mod identitet_tester {
             Mode::Rolling,
             5,
             None,
-        );
+        )
+        .unwrap();
         let t = serde_json::to_string(&i).unwrap();
         let out: IdentityJson = serde_json::from_str(&t).unwrap();
         assert_eq!(out.fingerprint, i.fingerprint);

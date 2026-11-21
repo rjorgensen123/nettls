@@ -34,7 +34,7 @@
 //! the handshake signature holds *(0.10.0)*.
 
 use crate::announcement::Announcement;
-use crate::error::TlsError;
+use crate::error::{TlsError, to_hex};
 use krypto::sha256;
 
 /// One certificate with its fingerprint.
@@ -53,11 +53,12 @@ impl std::fmt::Debug for Generation {
 }
 
 impl Generation {
-    /// From a DER-encoded certificate.
-    pub fn from_der(der: impl Into<Vec<u8>>) -> Self {
+    /// From a DER-encoded certificate. Fails with [`TlsError::Encode`] when
+    /// the fingerprint cannot be encoded as hex *(0.12.0)*.
+    pub fn from_der(der: impl Into<Vec<u8>>) -> Result<Self, TlsError> {
         let der = der.into();
-        let fp = krypto::hex::encode(&sha256(&der));
-        Self { der, fp }
+        let fp = to_hex("the certificate fingerprint", &sha256(&der))?;
+        Ok(Self { der, fp })
     }
 
     /// From PEM.
@@ -263,10 +264,10 @@ mod tester {
         .expect("self-signed");
         let der = m.cert_chain()[0].as_ref().to_vec();
         let pkcs8 = crate::pkcs8::pkcs8_p256(m.key_der(), &der).expect("pkcs8");
-        let pem = String::from_utf8(crate::pem::encode("CERTIFICATE", &der)).unwrap();
+        let pem = String::from_utf8(crate::pem::encode("CERTIFICATE", &der).unwrap()).unwrap();
         Gen {
             pem,
-            g: Generation::from_der(der),
+            g: Generation::from_der(der).unwrap(),
             pkcs8,
         }
     }
@@ -542,7 +543,8 @@ struct GenerationVerifier {
 impl GenerationVerifier {
     /// Promotes `next` once the handshake signature holds (§6.7, 0.10.0).
     fn observed_after_proof(&self, cert: &CertificateDer<'_>) -> Result<(), Error> {
-        let fp = krypto::hex::encode(&sha256(cert.as_ref()));
+        let fp = to_hex("the certificate fingerprint", &sha256(cert.as_ref()))
+            .map_err(|e| Error::General(e.to_string()))?;
         // A poisoned lock fails closed.
         let mut g = self.state.write().map_err(|_| {
             Error::InvalidCertificate(CertificateError::ApplicationVerificationFailure)
@@ -561,7 +563,8 @@ impl ServerCertVerifier for GenerationVerifier {
         _ocsp_response: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, Error> {
-        let fp = krypto::hex::encode(&sha256(end_entity.as_ref()));
+        let fp = to_hex("the certificate fingerprint", &sha256(end_entity.as_ref()))
+            .map_err(|e| Error::General(e.to_string()))?;
 
         // Read only: rustls calls this before the signature, so nothing is
         // promoted here.

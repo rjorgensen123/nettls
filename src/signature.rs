@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn hex_roundtrip() {
         let b = vec![0x00, 0x0f, 0xa0, 0xff];
-        assert_eq!(krypto::hex::encode(&b), "000fa0ff");
+        assert_eq!(krypto::hex::encode(&b).unwrap(), "000fa0ff");
         assert_eq!(from_hex("000fa0ff").unwrap(), b);
     }
 

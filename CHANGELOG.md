@@ -79,6 +79,17 @@ rustls's development line keeps that constant but makes `Iv` a buffer with a
 length, up to `Iv::MAX_LEN`, so a longer IV would have passed unnoticed. The
 test now also checks that `Iv` is exactly a 12-byte array.
 
+### ⚠ Changed — krypto 0.9 *(2026-11-21)*
+
+nettls requires `krypto = "0.9"`. A caller that names `krypto::SecretBuf`,
+`krypto::SecretString` or `krypto::Alg` must depend on krypto 0.9 too.
+
+### ⚠ Changed — functions that encode return a `Result` *(2026-11-21)*
+
+Encoding can fail in krypto 0.9, so `pem::encode`, `cert_fingerprint_sha256`,
+`Generation::from_der`, `IdentityJson::new` and the three `to_json` return
+`Result`. The error is the new `TlsError::Encode`, `EncodeError` in Python.
+
 ## [0.11.0] — Python runs the Rust code
 
 ### Changed — Python uses the Rust code, through `nettls-py` *(2026-11-06)*

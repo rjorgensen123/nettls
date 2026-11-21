@@ -246,8 +246,8 @@ fn is_valid_san(name: &str) -> bool {
 }
 
 #[pyfunction]
-fn cert_fingerprint_sha256(cert_der: &[u8]) -> String {
-    nettls::cert_fingerprint_sha256(cert_der)
+fn cert_fingerprint_sha256(cert_der: &[u8]) -> PyResult<String> {
+    nettls::cert_fingerprint_sha256(cert_der).map_err(err)
 }
 
 /// What `src/lib.rs` re-exports from `material`.

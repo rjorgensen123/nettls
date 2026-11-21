@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::announcement::Announcement;
 use crate::canonical;
-use crate::error::TlsError;
+use crate::error::{TlsError, to_hex};
 use crate::signature::from_hex;
 
 /// Serialized operator approval (§6.4).
@@ -134,17 +134,18 @@ impl Approval {
         &self.key_id
     }
 
-    /// To serialized form.
-    pub fn to_json(&self) -> ApprovalJson {
-        ApprovalJson {
+    /// To serialized form. Fails with [`TlsError::Encode`] when the signature
+    /// cannot be encoded as hex *(0.12.0)*.
+    pub fn to_json(&self) -> Result<ApprovalJson, TlsError> {
+        Ok(ApprovalJson {
             v: canonical::APPROVE_V1.to_string(),
             peer: self.peer.clone(),
             fingerprint: self.fingerprint.clone(),
             approved_by: self.approved_by.clone(),
             timestamp: self.timestamp,
             key_id: self.key_id.clone(),
-            sig: krypto::hex::encode(&self.sig),
-        }
+            sig: to_hex("the signature", &self.sig)?,
+        })
     }
 
     /// From serialized form. Fail-closed.
@@ -273,7 +274,7 @@ mod tester {
         // `approved_by` lies INSIDE the signed string (§6.4): a signature that
         // does not cover who acted does not say who acted.
         let g = Approval::new("gateway", FP, "operator", 100, "portal", &seed()).unwrap();
-        let mut j = g.to_json();
+        let mut j = g.to_json().unwrap();
         j.approved_by = "en-annen".into();
         let tampered = Approval::from_json(&j).unwrap();
         let r = register();
@@ -283,7 +284,7 @@ mod tester {
     #[test]
     fn changed_fingerprint_breaks_signature() {
         let g = Approval::new("gateway", FP, "operator", 100, "portal", &seed()).unwrap();
-        let mut j = g.to_json();
+        let mut j = g.to_json().unwrap();
         j.fingerprint = "bb".repeat(32);
         let tampered = Approval::from_json(&j).unwrap();
         let r = register();
@@ -301,7 +302,7 @@ mod tester {
             &seed(),
         )
         .unwrap();
-        let t = serde_json::to_string(&g.to_json()).unwrap();
+        let t = serde_json::to_string(&g.to_json().unwrap()).unwrap();
         let inn: ApprovalJson = serde_json::from_str(&t).unwrap();
         assert_eq!(Approval::from_json(&inn).unwrap(), g);
     }
@@ -309,7 +310,7 @@ mod tester {
     #[test]
     fn unknown_version_rejected() {
         let g = Approval::new("gateway", FP, "operator", 100, "portal", &seed()).unwrap();
-        let mut j = g.to_json();
+        let mut j = g.to_json().unwrap();
         j.v = "nettls-approve/v2".into();
         assert!(Approval::from_json(&j).is_err());
     }
@@ -325,14 +326,13 @@ mod tester {
             TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::new("a", ["a"]))).unwrap();
         let der0 = m0.cert_chain()[0].as_ref().to_vec();
         let pkcs8 = crate::pkcs8::pkcs8_p256(m0.key_der(), &der0).unwrap();
-        let fp0 = krypto::hex::encode(&krypto::sha256(&der0));
+        let fp0 = krypto::hex::encode(&krypto::sha256(&der0)).unwrap();
 
         let m1 =
             TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::new("b", ["b"]))).unwrap();
-        let pem1 = String::from_utf8(crate::pem::encode(
-            "CERTIFICATE",
-            m1.cert_chain()[0].as_ref(),
-        ))
+        let pem1 = String::from_utf8(
+            crate::pem::encode("CERTIFICATE", m1.cert_chain()[0].as_ref()).unwrap(),
+        )
         .unwrap();
 
         let r = register();
@@ -366,13 +366,12 @@ mod tester {
             TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::new("a", ["a"]))).unwrap();
         let der0 = m0.cert_chain()[0].as_ref().to_vec();
         let pkcs8 = crate::pkcs8::pkcs8_p256(m0.key_der(), &der0).unwrap();
-        let fp0 = krypto::hex::encode(&krypto::sha256(&der0));
+        let fp0 = krypto::hex::encode(&krypto::sha256(&der0)).unwrap();
         let m1 =
             TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::new("b", ["b"]))).unwrap();
-        let pem1 = String::from_utf8(crate::pem::encode(
-            "CERTIFICATE",
-            m1.cert_chain()[0].as_ref(),
-        ))
+        let pem1 = String::from_utf8(
+            crate::pem::encode("CERTIFICATE", m1.cert_chain()[0].as_ref()).unwrap(),
+        )
         .unwrap();
 
         let a = Recognition::Schedule(Box::new(

@@ -15,7 +15,7 @@ fn fingerprint_of_seen_certificate_is_same_value() {
     .unwrap();
     let der = m.cert_chain()[0].as_ref().to_vec();
     assert_eq!(
-        nettls::cert_fingerprint_sha256(&der),
+        nettls::cert_fingerprint_sha256(&der).unwrap(),
         m.fingerprint_sha256()
     );
 }

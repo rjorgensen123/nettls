@@ -367,9 +367,14 @@ struct PinnedServerCertVerifier {
 
 impl std::fmt::Debug for PinnedServerCertVerifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PinnedServerCertVerifier")
-            .field("expected", &krypto::hex::encode(&self.expected))
-            .finish()
+        let mut s = f.debug_struct("PinnedServerCertVerifier");
+        // `Debug` must not fail: a fingerprint that cannot be encoded is shown
+        // as fixed text instead (0.12.0).
+        match crate::error::to_hex("the pinned fingerprint", &self.expected) {
+            Ok(hex) => s.field("expected", &hex),
+            Err(_) => s.field("expected", &format_args!("<hex encoding failed>")),
+        };
+        s.finish()
     }
 }
 
@@ -436,5 +441,27 @@ impl ServerCertVerifier for PinnedServerCertVerifier {
         self.provider
             .signature_verification_algorithms
             .supported_schemes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pinned verifier's `Debug` shows the expected fingerprint as hex.
+    #[test]
+    fn debug_shows_the_pinned_fingerprint_as_hex() {
+        let verifier = PinnedServerCertVerifier {
+            expected: [0xab; 32],
+            provider: crate::provider::provider(),
+            expiry: Expiry::Enforce,
+        };
+        assert_eq!(
+            format!("{verifier:?}"),
+            format!(
+                "PinnedServerCertVerifier {{ expected: \"{}\" }}",
+                "ab".repeat(32)
+            )
+        );
     }
 }

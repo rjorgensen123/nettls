@@ -23,7 +23,7 @@ use krypto::Alg;
 use serde::{Deserialize, Serialize};
 
 use crate::canonical::{self, algsupport_v1};
-use crate::error::TlsError;
+use crate::error::{TlsError, to_hex};
 use crate::signature::{sign_p256, verify_p256};
 
 /// The fixed preference order — also the canonical token order on the wire.
@@ -96,7 +96,7 @@ impl SupportStatement {
         }
         let csv = tokens.join(",");
         let bytes = algsupport_v1(component, &csv, timestamp)?;
-        let signature = krypto::hex::encode(&sign_p256(anchor_pkcs8, &bytes)?);
+        let signature = to_hex("the signature", &sign_p256(anchor_pkcs8, &bytes)?)?;
         Ok(SupportStatement {
             component: component.to_string(),
             supported: tokens,

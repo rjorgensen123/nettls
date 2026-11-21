@@ -126,7 +126,8 @@ async fn an_unknown_certificate_is_untrusted_whatever_its_dates() {
 async fn trust_refuses_an_expired_certificate_unless_told_to_ignore_it() {
     install_crypto_provider();
     let m = expired();
-    let trust = Trust::from_approval(Generation::from_der(m.cert_chain()[0].as_ref().to_vec()));
+    let trust =
+        Trust::from_approval(Generation::from_der(m.cert_chain()[0].as_ref().to_vec()).unwrap());
 
     let port = serve(&m).await;
     let err = connect(port, trust.client_config().unwrap())

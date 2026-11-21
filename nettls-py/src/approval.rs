@@ -189,8 +189,11 @@ impl Approval {
         self.inner.key_id().to_string()
     }
 
-    fn to_json(&self) -> ApprovalJson {
-        ApprovalJson::from_rust(self.inner.to_json())
+    fn to_json(&self) -> PyResult<ApprovalJson> {
+        self.inner
+            .to_json()
+            .map(ApprovalJson::from_rust)
+            .map_err(err)
     }
 
     #[staticmethod]

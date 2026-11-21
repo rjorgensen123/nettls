@@ -73,10 +73,11 @@ fn build() -> BTreeMap<String, Vector> {
             name.to_string(),
             Vector {
                 what: what.to_string(),
-                canonical_hex: krypto::hex::encode(&bytes),
-                ed25519_sig_hex: Some(krypto::hex::encode(
-                    &krypto::sign::ed25519_sign(&seed(), &bytes).unwrap(),
-                )),
+                canonical_hex: krypto::hex::encode(&bytes).unwrap(),
+                ed25519_sig_hex: Some(
+                    krypto::hex::encode(&krypto::sign::ed25519_sign(&seed(), &bytes).unwrap())
+                        .unwrap(),
+                ),
             },
         );
     };
@@ -205,7 +206,7 @@ fn the_seeds_public_key_is_stable() {
     // invalid.
     let pk = krypto::sign::ed25519_public(&seed()).unwrap();
     assert_eq!(
-        krypto::hex::encode(&pk),
+        krypto::hex::encode(&pk).unwrap(),
         "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
         "the test seed's public key has changed"
     );

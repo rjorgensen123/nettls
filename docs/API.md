@@ -13,6 +13,10 @@ version → capabilities lives in `CHANGELOG.md`. Every public name must appear 
 Everything returns `Result<_, TlsError>` where something can fail. The crate does not panic on
 input.
 
+Some signatures name types from the `krypto` crate: `krypto::SecretBuf`, `krypto::SecretString`
+and `krypto::Alg`. They are the types of krypto 0.9 *(0.12.0)*, so a caller that names them
+depends on `krypto = "0.9"` itself.
+
 Two normative rules bind whoever *changes* the surface:
 
 - **Verify input and output.** All input is validated (type, length, range, character set —
@@ -68,7 +72,7 @@ The test helpers `pkcs8_for_test`, `pem_encode_for_test` and `fingerprint_for_te
 **`pem` — building PEM** *(public since 0.8.1, wish #2)*:
 
 ```rust
-pub fn encode(label: &str, der: &[u8]) -> Vec<u8>;   // RFC 7468, 64-char lines
+pub fn encode(label: &str, der: &[u8]) -> Result<Vec<u8>, TlsError>;   // RFC 7468, 64-char lines
 ```
 
 PEM is TLS domain, so building it lives here. The base64 body is `krypto::base64` (canonical);
@@ -76,6 +80,9 @@ the intermediate is zeroized — the DER may be a private key. The returned buff
 to protect; `save_pem` holds a key's PEM in a `SecretBuf` until it is on disk (0.8.3). Reading PEM goes through
 `rustls-pki-types`' built-in `pem` module (0.8.1 — `rustls-pemfile` is out; it was flagged
 unmaintained).
+
+`encode` fails with `TlsError::Encode` when the DER is over krypto's size limit, or the memory for
+the base64 or the PEM text could not be reserved *(0.12.0)*.
 
 ---
 
@@ -174,7 +181,7 @@ during generation. Neither can be locked from here. `SecretBuf::from_vec` failin
 ### `cert_fingerprint_sha256`
 
 ```rust
-pub fn cert_fingerprint_sha256(cert_der: &[u8]) -> String;
+pub fn cert_fingerprint_sha256(cert_der: &[u8]) -> Result<String, TlsError>;
 ```
 
 The SHA-256 fingerprint of a certificate in DER — the same value as
@@ -182,6 +189,8 @@ The SHA-256 fingerprint of a certificate in DER — the same value as
 "observing is not trusting": connect unverified only to *read* the peer's identity and show it
 to the operator (the certificate is sent in cleartext in every handshake anyway). *(Lived in the
 retired `rotation` module before 0.8.2.)*
+
+It fails with `TlsError::Encode` when the fingerprint cannot be encoded as hex *(0.12.0)*.
 
 ## `provider` · `pin` · `resolver`
 
@@ -313,7 +322,7 @@ replaces one that works.
 ```rust
 pub struct Generation { .. }
 impl Generation {
-    pub fn from_der(der: impl Into<Vec<u8>>) -> Self;
+    pub fn from_der(der: impl Into<Vec<u8>>) -> Result<Self, TlsError>;
     pub fn from_pem(pem: &str) -> Result<Self, TlsError>;
     pub fn der(&self) -> &[u8];
     pub fn fingerprint(&self) -> &str;
@@ -321,6 +330,9 @@ impl Generation {
 
 pub enum Received { Stored, Known }   // Known = idempotent re-receipt, not an error
 ```
+
+`Generation::from_der` fails with `TlsError::Encode` when the fingerprint cannot be encoded as hex
+*(0.12.0)*.
 
 ### `Generations` — the state for ONE peer
 
@@ -390,7 +402,7 @@ impl Announcement {
 
     pub fn canonical(&self) -> Result<Vec<u8>, TlsError>;
     pub fn verify(&self, prev_cert_der: Option<&[u8]>, curr_cert_der: &[u8]) -> Result<(), TlsError>;
-    pub fn to_json(&self) -> AnnouncementJson;
+    pub fn to_json(&self) -> Result<AnnouncementJson, TlsError>;
     pub fn from_json(j: &AnnouncementJson) -> Result<Self, TlsError>;   // fail-closed
 
     pub fn announcer(&self) -> &str;
@@ -413,6 +425,8 @@ impl Announcement {
 `prev_fingerprint` · `curr_fingerprint` · `new_fingerprint` · `new_cert_pem` · `sent_at` ·
 `sig_prev` · `sig_curr`
 
+`to_json` fails with `TlsError::Encode` when a signature cannot be encoded as hex *(0.12.0)*.
+
 ### `Receipt` — the gate
 
 ```rust
@@ -421,7 +435,7 @@ impl Receipt {
         -> Result<Self, TlsError>;
     pub fn canonical(&self) -> Result<Vec<u8>, TlsError>;
     pub fn verify(&self, pinned_pubkey: &[u8], expected_new_fp: &str) -> Result<(), TlsError>;
-    pub fn to_json(&self) -> ReceiptJson;
+    pub fn to_json(&self) -> Result<ReceiptJson, TlsError>;
     pub fn from_json(j: &ReceiptJson) -> Result<Self, TlsError>;
     pub fn acker(&self) -> &str;
     pub fn new_fingerprint(&self) -> &str;
@@ -430,6 +444,8 @@ impl Receipt {
 ```
 
 `ReceiptJson`: `v` · `acker` · `announcer` · `new_fingerprint` · `sent_at` · `sig`
+
+`to_json` fails with `TlsError::Encode` when the signature cannot be encoded as hex *(0.12.0)*.
 
 `verify` requires **both** the pinned key and the expected fingerprint: a genuine receipt for a
 *different* rotation is a replay and must not make you roll.
@@ -444,12 +460,13 @@ Fields: `fingerprint` (stored as given: `new` neither adds nor checks a `sha256:
 impl IdentityJson {
     pub fn new(fingerprint: impl Into<String>, cert_pem: impl Into<String>,
                not_after: Option<String>, mode: Mode, sent_at: i64,
-               announcement: Option<&Announcement>) -> Self;
+               announcement: Option<&Announcement>) -> Result<Self, TlsError>;
 }
 ```
 
 Read `fingerprint`/`cert_pem` **from what is actually served** (the resolver), never from a
-cached startup value.
+cached startup value. `new` fails with `TlsError::Encode` when the announcement's signatures cannot
+be encoded as hex *(0.12.0)*.
 
 ---
 
@@ -465,7 +482,7 @@ impl Approval {
     pub fn peer(&self) -> &str;
     pub fn approved_by(&self) -> &str;
     pub fn key_id(&self) -> &str;
-    pub fn to_json(&self) -> ApprovalJson;
+    pub fn to_json(&self) -> Result<ApprovalJson, TlsError>;
     pub fn from_json(j: &ApprovalJson) -> Result<Self, TlsError>;
 }
 
@@ -485,6 +502,9 @@ impl Recognition {
 
 `ApprovalJson`: `v` · `peer` · `fingerprint` · `approved_by` · `timestamp` · `key_id` · `sig`
 *(field names ARE the wire names — see the transition table in CHANGELOG)*
+
+`Approval::to_json` fails with `TlsError::Encode` when the signature cannot be encoded as hex
+*(0.12.0)*.
 
 ---
 
@@ -828,6 +848,7 @@ pub enum TlsError {
     LockedMemory(String),    // a secret could not be held in locked memory (0.11.0)
     Random(String),          // the operating system gave no random numbers (0.11.0)
     LockPoisoned(String),    // a thread panicked holding a lock — a bug (0.11.0)
+    Encode(String),          // a value could not be encoded as hex, base64 or PEM (0.12.0)
 }
 ```
 
@@ -850,6 +871,7 @@ pub enum TlsError {
 | `LockedMemory` | a secret could not be held in locked memory (`mlock`, `RLIMIT_MEMLOCK`) *(0.11.0)* |
 | `Random` | the operating system could not supply random numbers *(0.11.0)* |
 | `LockPoisoned` | a thread panicked while holding one of the crate's locks — a bug, not an input error *(0.11.0)* |
+| `Encode` | a value could not be encoded as hex, base64 or PEM: it is over krypto's size limit, or the memory for the text could not be reserved *(0.12.0)* |
 
 The `Proof` / `ProofInvalid` split is worth noting: the first is a shape error, the second is a
 signature that does not hold. Only the second is a security finding. `#[non_exhaustive]` — new
@@ -1007,7 +1029,8 @@ waits for that read. Serve each connection from one thread.
 Socket and TLS failures are `OSError`, as Python's `ssl` gives them, and a timeout is
 `TimeoutError`. A refused server certificate is one of three `OSError` subclasses, as `classify`
 names it *(0.11.0)*: `UntrustedPeerError`, `CertificateExpiredError` (with `now` and `not_after`)
-and `CertificateNotYetValidError` (with `now` and `not_before`), Unix seconds. For asyncio and
+and `CertificateNotYetValidError` (with `now` and `not_before`), Unix seconds. `peer_fingerprint`
+raises `EncodeError` when the fingerprint cannot be encoded as hex *(0.12.0)*. For asyncio and
 other event loops there is `TlsConnection`, and `nettls_py.sslcontext` on top of it (below).
 
 #### `TlsConnection` — the same connection without a socket *(0.12.0)*

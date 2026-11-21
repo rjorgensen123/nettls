@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 
+import krypto_py
 import nettls_py as nettls
 import pytest
 from support import ROOT, TESTVECTORS, ed25519_public, ed25519_sign, material
@@ -511,6 +512,17 @@ def test_envelope_wrong_format_and_length():
         E.open(key, b"short")
     with pytest.raises(nettls.TlsError, match="32 bytes"):
         E.seal(b"too short", b"x")
+
+
+# --------------------------------------------------------------------------- #
+# Encoding (0.12.0)
+# --------------------------------------------------------------------------- #
+
+
+def test_der_over_the_limit_raises_encode_error():
+    assert issubclass(nettls.EncodeError, nettls.TlsError)
+    with pytest.raises(nettls.EncodeError, match="the DER as base64"):
+        nettls.pem.encode("CERTIFICATE", bytes(krypto_py.MAX_DATA_BYTES + 1))
 
 
 # --------------------------------------------------------------------------- #

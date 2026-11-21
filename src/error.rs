@@ -82,6 +82,9 @@ pub enum TlsError {
     /// A thread panicked while holding one of the crate's locks, so the state
     /// it guards may be half-updated *(0.11.0)*. A bug, not an input error.
     LockPoisoned(String),
+    /// A value could not be encoded as hex, base64 or PEM: it is over krypto's
+    /// size limit, or the memory for the text could not be reserved *(0.12.0)*.
+    Encode(String),
 }
 
 impl fmt::Display for TlsError {
@@ -128,6 +131,7 @@ impl fmt::Display for TlsError {
                 f,
                 "{s} is poisoned: a thread panicked while holding it, so the state it guards may be half-updated"
             ),
+            TlsError::Encode(s) => write!(f, "could not encode {s}"),
         }
     }
 }
@@ -152,6 +156,12 @@ impl TlsError {
     pub(crate) fn poisoned(lock: &str) -> Self {
         TlsError::LockPoisoned(lock.to_string())
     }
+}
+
+/// `bytes` as krypto's canonical lowercase hex. `what` names the value, with
+/// its article, for the [`TlsError::Encode`] a failure gives *(0.12.0)*.
+pub(crate) fn to_hex(what: &str, bytes: &[u8]) -> Result<String, TlsError> {
+    krypto::hex::encode(bytes).map_err(|e| TlsError::Encode(format!("{what} as hex: {e}")))
 }
 
 #[cfg(test)]
@@ -180,6 +190,16 @@ mod tests {
         assert_eq!(
             e.to_string(),
             "sealing or opening failed: the envelope is too short"
+        );
+    }
+
+    /// `Encode` says what could not be encoded, and how (0.12.0).
+    #[test]
+    fn encode_says_what_could_not_be_encoded() {
+        let e = TlsError::Encode("the signature as hex: format error: too long".into());
+        assert_eq!(
+            e.to_string(),
+            "could not encode the signature as hex: format error: too long"
         );
     }
 }

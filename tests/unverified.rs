@@ -93,7 +93,7 @@ async fn look(port: u16) -> Result<String, String> {
     let cert = tls.get_ref().1.peer_certificates().unwrap()[0].clone();
     let mut buf = Vec::new();
     tls.read_to_end(&mut buf).await.map_err(|e| e.to_string())?;
-    Ok(cert_fingerprint_sha256(&cert))
+    cert_fingerprint_sha256(&cert).map_err(|e| e.to_string())
 }
 
 #[tokio::test]

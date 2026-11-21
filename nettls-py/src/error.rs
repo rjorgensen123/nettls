@@ -114,6 +114,12 @@ pyo3::create_exception!(
     TlsError,
     "`TlsError::LockPoisoned`: a thread panicked while holding one of the crate's locks (0.11.0)."
 );
+pyo3::create_exception!(
+    nettls_py,
+    EncodeError,
+    TlsError,
+    "`TlsError::Encode`: a value could not be encoded as hex, base64 or PEM (0.12.0)."
+);
 
 /// `nettls::TlsError` as the Python exception for its variant. The text is
 /// Rust's `Display`.
@@ -138,6 +144,7 @@ pub(crate) fn err(e: nettls::TlsError) -> PyErr {
         E::LockedMemory(_) => LockedMemoryError::new_err(msg),
         E::Random(_) => RandomError::new_err(msg),
         E::LockPoisoned(_) => LockPoisonedError::new_err(msg),
+        E::Encode(_) => EncodeError::new_err(msg),
         // `TlsError` is `#[non_exhaustive]`: a variant this binding does not
         // know still raises, as the base class.
         _ => TlsError::new_err(msg),
@@ -164,5 +171,6 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("LockedMemoryError", py.get_type::<LockedMemoryError>())?;
     m.add("RandomError", py.get_type::<RandomError>())?;
     m.add("LockPoisonedError", py.get_type::<LockPoisonedError>())?;
+    m.add("EncodeError", py.get_type::<EncodeError>())?;
     Ok(())
 }
