@@ -1,6 +1,6 @@
 [package]
 name = "nettls-py"
-version = "0.12.0"
+version = "0.12.0-rc1"
 edition = "2024"
 rust-version = "1.99.1"
 description = "Python binding for nettls: pinned TLS, certificate rotation and the §6 messages, with the Rust code running inside."

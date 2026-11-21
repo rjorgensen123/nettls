@@ -8,7 +8,15 @@ and the project follows [Semantic Versioning](https://semver.org/).
 > marked with the version it applies from, so a reader sees what holds for their version
 > without guessing.
 
-## [0.12.0] — not yet released
+## [0.12.0-rc1] — 2026-11-21
+
+*A pre-release, made to test two new things in real use before 0.12.0. Python
+libraries that take an `ssl.SSLContext`, such as uvicorn and httpx, can use
+nettls's TLS, so HTTP in Python can run on it. And nettls builds on krypto 0.9:
+functions that encode return a `Result`, and errors name what krypto refused.
+The repository also has a `DEVELOPMENT.md`, a code of conduct, the third-party
+licenses and a list of the reviews. The entries marked ⚠ say what can break a
+user.*
 
 ### Added — an `ssl.SSLContext` for Python libraries *(2026-11-16)*
 
