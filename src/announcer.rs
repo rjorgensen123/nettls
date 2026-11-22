@@ -380,6 +380,10 @@ impl Announcer {
     /// is left with `previous = None`, and the next double-signed announcement
     /// can be neither signed nor verified.
     ///
+    /// The restored certificate is also put into the resolver *(0.12.0)*: the
+    /// caller could only build the resolver from the anchor, and the server
+    /// must present what the chain says is current.
+    ///
     /// Returns `true` if a chain was restored, `false` if we have never
     /// rolled.
     ///
@@ -429,6 +433,10 @@ impl Announcer {
                 self.dir.display()
             )));
         }
+        // The server must present what the chain says is current. At a
+        // rotation the switch does this; after a restart the resolver holds
+        // what the caller built it from, which is the anchor.
+        self.resolver.swap(&material)?;
         self.schedule
             .write()
             .map_err(|_| TlsError::poisoned("the rotation lock"))?
@@ -1168,7 +1176,9 @@ impl Announcer {
     ///
     /// Three outcomes, in order:
     ///
-    /// 1. A chain exists on disk → it is loaded, validated and used.
+    /// 1. A chain exists on disk → it is loaded, validated and used, and its
+    ///    current certificate is put into the resolver *(0.12.0)*, so the
+    ///    resolver can be built from the anchor at every start.
     /// 2. A chain exists but cannot be opened or parsed → **error** (N-2): a
     ///    chain that exists but cannot be read is a fault, not an absence.
     /// 3. Nothing on disk → first boot; `anchor` becomes generation 0.

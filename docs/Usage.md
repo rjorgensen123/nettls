@@ -137,7 +137,8 @@ The last one does nothing until everyone has acknowledged.
 
 > `Announcer::new` restores the chain and any pending switch itself, fail-closed: state on disk
 > is used; state that exists but cannot be read fails construction loudly; nothing on disk means
-> your anchor is generation 0. There is no startup call left to forget.
+> your anchor is generation 0. There is no startup call left to forget. The restored certificate
+> is put into the resolver too, so build the resolver from your anchor at every start *(0.12.0)*.
 
 **Why two generations?** Because two services do not switch in the same second. Both are held
 valid for a period, otherwise the connection would break mid-transition. Never more than two —

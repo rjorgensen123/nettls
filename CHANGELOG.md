@@ -61,6 +61,12 @@ The previous, current and new certificate of a rotation must be different
 ones. A received announcement where two were the same was accepted and left
 the receiver out of step. It is now refused, on receipt and when made.
 
+### Fixed — after a restart the server presents the restored certificate *(2026-11-22)*
+
+`Announcer::new` restored the stored chain but left the resolver on the
+certificate the caller built it from. It now puts the restored certificate
+into the resolver, as a rotation does.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

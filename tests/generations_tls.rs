@@ -882,6 +882,35 @@ fn a_failed_write_changes_nothing_and_the_next_call_switches() {
 }
 
 #[test]
+fn after_a_restart_the_resolver_serves_the_restored_certificate() {
+    nettls::install_crypto_provider();
+    let c0 = generation();
+    let dir = dir_with("restart-serves", &c0);
+    // As a service does at every start: the resolver is built from the anchor.
+    let start = || {
+        let resolver = Arc::new(nettls::RotatingResolver::new(&c0.material).unwrap());
+        let announcer = announcer_in(&dir, &c0, &resolver);
+        (resolver, announcer)
+    };
+
+    let (_, first) = start();
+    first.prepare(100).unwrap();
+    first.acked("service").unwrap();
+    assert!(first.roll_if_ready(200).unwrap().is_some());
+    let rolled = first.own_trio().unwrap().current_fingerprint;
+    assert_ne!(rolled, c0.fp_bar());
+    drop(first);
+
+    let (resolver, second) = start();
+    assert_eq!(second.own_trio().unwrap().current_fingerprint, rolled);
+    assert_eq!(
+        resolver.fingerprint_sha256(),
+        rolled,
+        "the server must present what the chain says is current"
+    );
+}
+
+#[test]
 fn the_daily_cap_holds_across_a_restart() {
     nettls::install_crypto_provider();
     let c0 = generation();

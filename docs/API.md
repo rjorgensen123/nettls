@@ -598,6 +598,7 @@ impl Announcer {
                resolver: Arc<RotatingResolver>, anchor: OwnMaterial, schedule: Schedule,
                password: Option<krypto::SecretString>) -> Result<Self, TlsError>;
         // load-or-init, fail-closed: disk state overrides the anchor; unreadable state = error
+        // the restored certificate is put into the resolver (0.12.0)
 
     pub fn own_trio(&self) -> Result<OwnTrio, TlsError>;
     pub fn prepare(&self, now: i64) -> Result<Announcement, TlsError>;   // create + persist + announce; idempotent
