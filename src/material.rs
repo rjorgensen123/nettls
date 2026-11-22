@@ -202,9 +202,13 @@ impl CertSource {
     /// memory — e.g. a certificate the operator just uploaded.
     ///
     /// Validate **before** anything is written to disk: `TlsMaterial::load`
-    /// does the whole validation in memory, and [`TlsMaterial::save_pem`] is
-    /// called only once it has passed. A rejected certificate must never be
-    /// able to replace a working one.
+    /// checks in memory that the chain is not empty, that the provider accepts
+    /// the key type and that the key belongs to the leaf certificate, and
+    /// [`TlsMaterial::save_pem`] is called only once those checks have passed.
+    /// A rejected certificate must never be able to replace a working one.
+    /// `load` does not compare the validity dates with the clock, so an expired
+    /// certificate loads: [`TlsMaterial::is_valid_now`] and
+    /// [`TlsMaterial::days_until_expiry`] are the calls for the dates.
     pub fn pem(cert_pem: impl Into<Vec<u8>>, key_pem: impl Into<Vec<u8>>) -> Self {
         Self {
             kind: Kind::Pem {
@@ -483,8 +487,8 @@ impl TlsMaterial {
             .map_err(|e| TlsError::KeyMismatch(e.to_string()))
     }
 
-    /// The identity anchor as PKCS#8 — for [`Announcer::new`]'s anchor
-    /// (`crate::announcer::Announcer`). **Public since 0.8.1 (wish #4).**
+    /// The identity anchor as PKCS#8 — for the anchor of
+    /// [`Announcer::new`](crate::announcer::Announcer::new). **Public since 0.8.1 (wish #4).**
     ///
     /// This is the ONE documented place the key CROSSES from the TLS domain
     /// into the §6 domain: the announcer signs announcements with the same

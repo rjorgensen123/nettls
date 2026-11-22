@@ -93,7 +93,9 @@ docs refer to the specification the crate was built from; it is not in this repo
 **The canonical bytes are held by normative vectors** in `testvectors/canonical.json`. Guard:
 `vectors_match_byte_for_byte` in `tests/testvectors.rs`; from Python,
 `test_vectors_match_byte_for_byte` and `test_no_vector_is_missing` in
-`nettls-py/tests/test_nettls.py`.
+`nettls-py/tests/test_nettls.py`. `testvectors/canonical.json` is regenerated with
+`WRITE_VECTORS=1 cargo test --test testvectors`, which writes what the code builds and does not
+compare.
 
 ## The public surface
 

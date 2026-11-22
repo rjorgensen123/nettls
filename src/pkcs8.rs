@@ -97,7 +97,13 @@ fn sec1_private_scalar(der: &[u8]) -> Result<[u8; 32], TlsError> {
     Ok(out)
 }
 
-/// Builds a PKCS#8 v2 (`id-ecPublicKey` / `prime256v1`) around scalar + point.
+/// Builds a PKCS#8 v1 key (version 0, `id-ecPublicKey` / `prime256v1`) around
+/// scalar + point; the point goes in the inner `ECPrivateKey`, not at the
+/// PKCS#8 level.
+///
+/// The inner lengths are written in the one-byte short form, which holds
+/// because the scalar is a fixed 32 bytes and the point is checked to be 65
+/// bytes by `p256_public_key`, so every inner length is below 128.
 ///
 /// Every intermediate that carries the scalar is `Zeroizing`: wiped when it
 /// goes out of scope, whichever path returns.

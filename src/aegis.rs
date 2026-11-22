@@ -61,7 +61,7 @@
 //! `Iv` is exactly that size, the plain 12-byte array of rustls 0.23. rustls's
 //! development line keeps `NONCE_LEN` at 12 but makes `Iv` a buffer with a
 //! length (up to `Iv::MAX_LEN`), so a rustls whose IV is no longer the fixed
-//! 12-byte array fails the test: the exit is something the build
+//! 12-byte array fails the test: the exit is something `cargo test`
 //! tells you. The tracking case is **L2-076**.
 //!
 //! [`TransportCipher::Aegis256`]: crate::transport::TransportCipher::Aegis256
@@ -296,7 +296,7 @@ mod tests {
         assert_ne!(nonce32(&iv, 1), nonce32(&iv, 2));
     }
 
-    /// **The exit condition, checked by the build.** In rustls 0.23 the TLS 1.3
+    /// **The exit condition, checked by this test.** In rustls 0.23 the TLS 1.3
     /// IV is a fixed 12-byte array: `NONCE_LEN` is 12 and `Iv` is that array
     /// and nothing more. The development line keeps `NONCE_LEN` but gives `Iv`
     /// a length and a larger buffer, so the size of `Iv` is checked too. When

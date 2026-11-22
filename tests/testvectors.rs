@@ -7,6 +7,12 @@
 //! `nettls-py/tests/test_nettls.py` read the same file, from Rust and from
 //! Python.
 //!
+//! `WRITE_VECTORS=1 cargo test --test testvectors` regenerates the file: the
+//! test then writes what the code builds and returns without comparing. What
+//! the committed file guarantees is therefore that the bytes stand still; a
+//! regenerated file is a deliberate change of the format and must be read as
+//! one.
+//!
 //! ## What they catch
 //!
 //! Code can agree with itself and still be wrong. The vectors show that it

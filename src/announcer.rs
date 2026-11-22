@@ -43,8 +43,11 @@ use crate::fingerprint::same_fingerprint;
 pub const DAY_S: i64 = 86_400;
 
 /// Nominal age at rotation: 7 days (§6.7c).
+/// A certificate is rotated every week.
 pub const NOMINAL_AGE_DAYS: i64 = 7;
 /// Spread around the nominal age: ± 2 days.
+/// The spread gives each nettls in use its own time to rotate, so that they do
+/// not all rotate at once.
 pub const SPREAD_DAYS: i64 = 2;
 /// Never more than one rotation per peer per 24 hours, regardless of trigger.
 pub const MIN_BETWEEN_ROLLS_S: i64 = DAY_S;
@@ -712,7 +715,10 @@ mod tests {
 // Retries, alarm and countdown (§6.8a)
 // --------------------------------------------------------------------------- //
 
-/// The alarm fires 12 hours after the first failed attempt.
+/// The alarm fires when a receipt is still missing 12 hours after the pending
+/// announcement was first published. Twelve hours later is likely to be within
+/// a working day, so the alarm is likely to come when someone is at work or
+/// soon will be.
 pub const ALARM_AFTER_S: i64 = 12 * 3600;
 
 /// The retry cadence (§6.8a): tight at first, sparser afterwards.
@@ -733,7 +739,7 @@ pub fn interval_after(elapsed_s: i64) -> i64 {
 pub struct Status {
     /// Peers we are waiting for. Empty = all is well.
     pub waiting_for: Vec<String>,
-    /// Has the alarm fired? (12 hours since the first attempt.)
+    /// Has the alarm fired? (12 hours since the announcement was first published.)
     pub alarm: bool,
     /// Seconds until internal communication actually **stops** — that is,
     /// until the running certificate expires.
@@ -1475,10 +1481,13 @@ impl Announcer {
 // --------------------------------------------------------------------------- //
 
 /// Below this the deviation is normal and is not logged.
+/// The value is a choice.
 pub const DRIFT_NORMAL_S: i64 = 5;
 /// Above this the operator is warned.
+/// The value is a choice.
 pub const DRIFT_WARNING_S: i64 = 30;
 /// A jump larger than this warns even when the absolute value is within bounds.
+/// The value is a choice.
 pub const DRIFT_JUMP_S: i64 = 10;
 
 /// How a clock deviation is to be handled.

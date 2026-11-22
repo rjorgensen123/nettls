@@ -230,6 +230,11 @@ report = status.Report.collect(now, material, None, [])
 print(report.dumps())            # the same JSON as in Rust
 ```
 
+`report` is the detailed view, with identity, rotation state and per-peer trust: serve it on the
+admin surface only, since peer names and waiting lists are operations data. `report.summary()` is
+the general view, with only the version, the traffic light and the headline, for every logged-in
+user.
+
 ---
 
 ## Further

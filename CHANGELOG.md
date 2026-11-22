@@ -49,6 +49,12 @@ The Rust ring node now checks what it is given, and the Python one stays as
 simple as it was. The top of each file says so, and that both are test tools.
 No change to the crate itself.
 
+### Changed — comments and docs say what the code does *(2026-11-22)*
+
+Ten texts that said more, or something else, than the code are corrected,
+and the rotation constants now say why they have their values. No code
+changed.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

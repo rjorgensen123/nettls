@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! The TLS channel's cipher is the consumer's choice (SPEC-nettls §6.0b) —
-//! proven with real handshakes over loopback, not by inspecting lists.
+//! proven with real handshakes over loopback. One test,
+//! `the_server_config_carries_only_the_policy_suites`, reads cipher lists
+//! instead: the default server config's, and the list of `nettls::provider()`.
 //!
 //! - the default is AES-256-GCM only, on both sides;
 //! - a peer outside the policy is refused — hard, no fallback;
