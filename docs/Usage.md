@@ -206,6 +206,7 @@ The library provides the building blocks. This is yours:
 |---|---|
 | **Bind the port** | you get a config, not a server |
 | **Decide when** | no timers in the library — you call when you want |
+| **Judge freshness** | the time fields in the messages are for logs — what is too old is yours to decide |
 | **Log** | fingerprint, origin, days left, and every rotation |
 | **Show the operator something** | approving the first identity is a human action |
 | **Publish the announcement** | the library builds it; you decide where it is fetched from |

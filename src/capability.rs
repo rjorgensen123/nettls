@@ -63,7 +63,8 @@ pub struct SupportStatement {
     pub component: String,
     /// The supported algorithms, as wire tokens in canonical order.
     pub supported: Vec<String>,
-    /// Unix seconds when the statement was made.
+    /// Unix seconds when the statement was made: the signer's own clock. Signed;
+    /// no `verify` compares it with a clock.
     pub timestamp: i64,
     /// Hex ECDSA P-256 signature over the canonical bytes.
     pub signature: String,

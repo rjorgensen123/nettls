@@ -788,6 +788,14 @@ pub fn require_name(v: &str, field: &str, max: usize) -> Result<(), TlsError>; /
 > Use these if you verify outside the crate. Building the string yourself is a fine way to get a
 > signature that looks right and is not.
 
+**Time.** nettls does not judge the age of a message. `timestamp` and `sent_at` are the sender's own
+clock, signed with the message, and are there for logs and for the caller. No `verify` compares them
+with a clock, so a signed approval or support statement does not grow too old by itself. A caller
+that wants a rule about freshness reads the field and applies its own.
+
+An announcement and a receipt are bound to state instead: the announcement must fit the certificates
+the receiver holds, and the receipt must name the fingerprint that was announced.
+
 ## `envelope` — seal to one recipient
 
 ```rust

@@ -16,6 +16,11 @@ and the project follows [Semantic Versioning](https://semver.org/).
 `security-audit` skill. The Gemini security audit used it too, and the
 sentence now names both.
 
+### Changed — nettls does not judge the age of a message *(2026-11-22)*
+
+The docs now say it: the time fields are the sender's clock, for logs, and
+freshness is the caller's rule. No behaviour changed.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

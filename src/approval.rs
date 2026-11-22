@@ -44,7 +44,8 @@ pub struct ApprovalJson {
     pub fingerprint: String,
     /// The operator's username — **inside** the signed string.
     pub approved_by: String,
-    /// Timestamp, unix seconds UTC.
+    /// Timestamp, unix seconds UTC: the signer's own clock. Signed; no `verify`
+    /// compares it with a clock.
     pub timestamp: i64,
     /// Who signed. Today `"portal"`; later `"op:<name>"` if the operator gets
     /// their own key. The shape does not change — only the key (§6.4).

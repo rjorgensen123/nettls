@@ -76,7 +76,8 @@ pub struct AnnouncementJson {
     pub new_fingerprint: String,
     /// The new certificate, in its entirety.
     pub new_cert_pem: String,
-    /// The sender's own clock, unix seconds UTC (§6.7b).
+    /// The sender's own clock, unix seconds UTC (§6.7b). Signed; no `verify`
+    /// compares it with a clock.
     pub sent_at: i64,
     /// Signature with the previous key, hex. `None` only at the first rotation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -570,7 +571,8 @@ pub struct ReceiptJson {
     pub announcer: String,
     /// The fingerprint being acked.
     pub new_fingerprint: String,
-    /// The acker's own clock (§6.7b).
+    /// The acker's own clock (§6.7b). Signed; no `verify` compares it with a
+    /// clock.
     pub sent_at: i64,
     /// Ed25519 signature, hex.
     pub sig: String,
