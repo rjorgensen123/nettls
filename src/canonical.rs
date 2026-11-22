@@ -23,6 +23,7 @@
 //! therefore compare **exact bytes**, not strings.
 
 use crate::error::TlsError;
+use crate::fingerprint::same_fingerprint;
 
 /// `nettls-approve/v1` — the operator approval (§6.4).
 pub const APPROVE_V1: &str = "nettls-approve/v1";
@@ -209,6 +210,27 @@ pub fn rotate_v2(
     }
     require_fingerprint(curr_fp, "curr_fp")?;
     require_fingerprint(new_fp, "new_fp")?;
+    // **The certificates of a rotation are different ones.** Nothing else
+    // requires it: it is an assumption of the rotation, that every generation
+    // is a new certificate, and this is where it is written down and checked.
+    // The check matters on receipt, where the announcement comes from someone
+    // else: it is verified over these bytes, so one that names the same
+    // certificate twice is refused. An announcement is also made over these
+    // bytes, so the sender gets the same check; it costs nothing there.
+    let twice = if same_fingerprint(new_fp, curr_fp) {
+        Some(("new_fp", "curr_fp"))
+    } else if prev_fp.is_some_and(|p| same_fingerprint(p, new_fp)) {
+        Some(("prev_fp", "new_fp"))
+    } else if prev_fp.is_some_and(|p| same_fingerprint(p, curr_fp)) {
+        Some(("prev_fp", "curr_fp"))
+    } else {
+        None
+    };
+    if let Some((a, b)) = twice {
+        return Err(TlsError::Params(format!(
+            "{a} and {b} are the same fingerprint: the certificates of a rotation must be different"
+        )));
+    }
     let t = sent_at.to_string();
     Ok(assemble(&[
         ROTATE_V2,
@@ -303,6 +325,22 @@ mod tests {
         assert!(approve_v1("gateway", FP_A, "rog\ner", 1).is_err());
         assert!(approve_v1("net\rgw", FP_A, "operator", 1).is_err());
         assert!(rotate_v2("net\ngw", Some(FP_A), FP_B, FP_C, 1).is_err());
+    }
+
+    #[test]
+    fn a_rotation_naming_one_certificate_twice_is_rejected() {
+        assert!(rotate_v2("gateway", Some(FP_A), FP_B, FP_C, 1).is_ok());
+        assert!(rotate_v2("gateway", None, FP_B, FP_C, 1).is_ok());
+        for (prev, curr, new, both) in [
+            (Some(FP_A), FP_B, FP_B, "new_fp and curr_fp"),
+            (None, FP_B, FP_B, "new_fp and curr_fp"),
+            (Some(FP_A), FP_B, FP_A, "prev_fp and new_fp"),
+            (Some(FP_A), FP_A, FP_C, "prev_fp and curr_fp"),
+        ] {
+            let e = rotate_v2("gateway", prev, curr, new, 1).unwrap_err();
+            assert!(matches!(e, TlsError::Params(_)), "{e}");
+            assert!(e.to_string().contains(both), "{e}");
+        }
     }
 
     #[test]

@@ -55,6 +55,12 @@ Ten texts that said more, or something else, than the code are corrected,
 and the rotation constants now say why they have their values. No code
 changed.
 
+### Fixed — an announcement that names one certificate twice is refused *(2026-11-22)*
+
+The previous, current and new certificate of a rotation must be different
+ones. A received announcement where two were the same was accepted and left
+the receiver out of step. It is now refused, on receipt and when made.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

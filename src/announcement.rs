@@ -410,6 +410,33 @@ mod tests {
     // --- the fingerprint is checked FIRST ------------------------------------- //
 
     #[test]
+    fn a_received_announcement_naming_one_certificate_twice_is_rejected() {
+        let c0 = generation("c0");
+        let c1 = generation("c1");
+        let c2 = generation("c2");
+        let k = Announcement::new(
+            "gateway",
+            Some((&c0.fp, &c0.pkcs8)),
+            (&c1.fp, &c1.pkcs8),
+            &c2.pem,
+            100,
+        )
+        .unwrap();
+
+        // What a receiver can be sent: the current certificate named as the new one.
+        let mut j = k.to_json().unwrap();
+        j.new_cert_pem = c1.pem.clone();
+        j.new_fingerprint = c1.fp.clone();
+        let received = Announcement::from_json(&j).unwrap();
+
+        let err = received.verify(Some(&c0.der), &c1.der).unwrap_err();
+        assert!(
+            format!("{err}").contains("new_fp and curr_fp are the same fingerprint"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn swapped_certificate_rejected_even_with_valid_signatures() {
         let c0 = generation("c0");
         let c1 = generation("c1");
