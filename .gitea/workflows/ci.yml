@@ -39,6 +39,11 @@ on:
     branches: [main]
   pull_request:
 
+# The jobs only read the repository. Said here, so it does not depend on a
+# setting at the host.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -169,10 +174,13 @@ jobs:
               fetch -q --depth 1 origin "${GITHUB_SHA}"
           git checkout -q --detach FETCH_HEAD
 
+      # A release file can be replaced, so it is checked against its SHA-256
+      # before it is unpacked.
       - name: Fetch cargo-deny
         run: |
           curl -sSfL -o /tmp/cd.tgz \
             https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz
+          echo "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f  /tmp/cd.tgz" | sha256sum -c -
           tar -xzf /tmp/cd.tgz -C /tmp --strip-components=1
           install /tmp/cargo-deny /usr/local/bin/
 

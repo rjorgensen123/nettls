@@ -32,6 +32,11 @@ The file with the previous key must say which certificate it belongs to and
 when the pair came about. A file without them was accepted; it now gives an
 error that says what is missing.
 
+### Changed — CI checks what it downloads, and only reads the repository *(2026-11-22)*
+
+The `cargo-deny` release file is checked against its SHA-256 before it is
+unpacked, and both workflows declare `permissions: contents: read`.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python
