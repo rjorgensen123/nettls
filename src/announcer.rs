@@ -338,7 +338,7 @@ impl Announcer {
         &self,
         previous: &(String, krypto::SecretBuf),
         current: &str,
-        rolled_at: Option<i64>,
+        rolled_at: i64,
     ) -> Result<(), TlsError> {
         let path = self.previous_path();
         let (fp, pkcs8) = previous;
@@ -349,7 +349,7 @@ impl Announcer {
                 fingerprint: fp.clone(),
                 pkcs8: pkcs8.expose(|b| b.to_vec()),
                 current: Some(current.to_string()),
-                rolled_at,
+                rolled_at: Some(rolled_at),
             };
             serde_json::to_vec(&on_disk)
         }
@@ -391,6 +391,18 @@ impl Announcer {
             return Ok(false);
         };
         let path = self.previous_path();
+        let (Some(c), Some(at)) = (read_back.current.as_deref(), read_back.rolled_at) else {
+            let missing = match (read_back.current.is_some(), read_back.rolled_at.is_some()) {
+                (false, true) => "does not say which certificate it belongs to",
+                (true, false) => "does not say when the pair came about",
+                _ => "says neither which certificate it belongs to nor when the pair came about",
+            };
+            return Err(TlsError::Chain(format!(
+                "the previous key in {} {missing}. Both are required; files written before \
+                 0.10.0 have neither. The chain cannot be checked, and it cannot be used",
+                path.display()
+            )));
+        };
 
         // `current` is derived from the material actually on disk — that is
         // the single truth about what we are running now.
@@ -405,10 +417,8 @@ impl Announcer {
                  disk is inconsistent, and the chain cannot be used"
             )));
         }
-        // §6.11 N-4. Files from before 0.10.0 do not name their `current`.
-        if let Some(c) = &read_back.current
-            && !same_fingerprint(c, &current_fp)
-        {
+        // §6.11 N-4. The previous key must belong to the `current` on disk.
+        if !same_fingerprint(c, &current_fp) {
             return Err(TlsError::Chain(format!(
                 "the previous key in {} belongs to {c}, but the material in {} is {current_fp}. \
                  The two do not match, and the chain cannot be used",
@@ -416,12 +426,10 @@ impl Announcer {
                 self.dir.display()
             )));
         }
-        if let Some(at) = read_back.rolled_at {
-            self.schedule
-                .write()
-                .map_err(|_| TlsError::poisoned("the rotation lock"))?
-                .restore_last_rolled(at);
-        }
+        self.schedule
+            .write()
+            .map_err(|_| TlsError::poisoned("the rotation lock"))?
+            .restore_last_rolled(at);
 
         *self
             .material
@@ -538,10 +546,13 @@ impl Announcer {
 struct PreviousOnDisk {
     fingerprint: String,
     pkcs8: Vec<u8>,
-    /// The `current` this `previous` belongs to. Absent before 0.10.0.
+    /// The fingerprint of the `current` this `previous` belongs to. Files
+    /// written before 0.10.0 do not have it, and such a file is refused at
+    /// start *(0.12.0)*.
     #[serde(default)]
     current: Option<String>,
-    /// When the pair came about. Absent before 0.10.0.
+    /// When the pair came about. Files written before 0.10.0 do not have it,
+    /// and such a file is refused at start *(0.12.0)*.
     #[serde(default)]
     rolled_at: Option<i64>,
 }
@@ -1463,7 +1474,7 @@ impl Announcer {
                 .map_err(|_| TlsError::poisoned("the material lock"))?;
             (m.current.0.clone(), crate::secret::copy(&m.current.1)?)
         };
-        self.save_previous(&previous, &new_fp, Some(now))?;
+        self.save_previous(&previous, &new_fp, now)?;
         self.save(&fresh, &self.dir)?;
         self.verify_switch(&new_fp, &previous.0)?;
 

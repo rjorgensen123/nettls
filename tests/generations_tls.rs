@@ -1132,3 +1132,111 @@ fn after_a_restart_a_peer_taken_out_of_the_list_is_not_waited_for() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Rotates once without a password in a fresh directory named after `name`,
+/// lets `edit` change `previous-key.json`, and builds the announcer again over
+/// the same directory, as the next start would.
+fn restart_after_editing_previous_key(
+    name: &str,
+    edit: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>),
+) -> Result<nettls::announcer::Announcer, nettls::TlsError> {
+    use nettls::announcer::{Announcer, OwnMaterial, Schedule};
+
+    nettls::install_crypto_provider();
+    let c0 = generation();
+    let dir = dir_with(name, &c0);
+    let resolver = Arc::new(nettls::RotatingResolver::new(&c0.material).unwrap());
+    let a = announcer_in(&dir, &c0, &resolver);
+    a.prepare(100).unwrap();
+    a.acked("service").unwrap();
+    assert!(a.roll_if_ready(200).unwrap().is_some(), "could not roll");
+    drop(a);
+
+    let file = dir.join("previous-key.json");
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    edit(
+        json.as_object_mut()
+            .expect("the previous key is a JSON object"),
+    );
+    std::fs::write(&file, serde_json::to_vec(&json).unwrap()).unwrap();
+
+    let restarted = Announcer::new(
+        "gateway",
+        &dir,
+        SelfSignedParams::new("localhost", ["localhost"]),
+        resolver,
+        OwnMaterial {
+            previous: None,
+            current: (c0.fp_bar(), c0.key()),
+        },
+        Schedule::new(vec!["service".to_string()], 0),
+        None,
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    restarted
+}
+
+#[test]
+fn a_previous_key_without_current_is_refused_at_start() {
+    let err = restart_after_editing_previous_key("prev-no-current", |m| {
+        m.remove("current");
+    })
+    .err()
+    .expect("a previous key without `current` is refused");
+    assert!(matches!(err, nettls::TlsError::Chain(_)), "{err:?}");
+    assert!(
+        err.to_string().contains("which certificate it belongs to"),
+        "{err}"
+    );
+    assert!(err.to_string().contains("0.10.0"), "{err}");
+}
+
+#[test]
+fn a_previous_key_with_a_null_current_is_refused_at_start() {
+    let err = restart_after_editing_previous_key("prev-null-current", |m| {
+        m.insert("current".into(), serde_json::Value::Null);
+    })
+    .err()
+    .expect("a previous key with `current: null` is refused");
+    assert!(matches!(err, nettls::TlsError::Chain(_)), "{err:?}");
+    assert!(
+        err.to_string().contains("which certificate it belongs to"),
+        "{err}"
+    );
+    assert!(err.to_string().contains("0.10.0"), "{err}");
+}
+
+#[test]
+fn a_previous_key_without_rolled_at_is_refused_at_start() {
+    let err = restart_after_editing_previous_key("prev-no-rolled-at", |m| {
+        m.remove("rolled_at");
+    })
+    .err()
+    .expect("a previous key without `rolled_at` is refused");
+    assert!(matches!(err, nettls::TlsError::Chain(_)), "{err:?}");
+    assert!(
+        err.to_string()
+            .contains("does not say when the pair came about"),
+        "{err}"
+    );
+    assert!(err.to_string().contains("0.10.0"), "{err}");
+}
+
+#[test]
+fn a_previous_key_for_another_certificate_is_refused_at_start() {
+    let err = restart_after_editing_previous_key("prev-other-current", |m| {
+        m.insert("current".into(), serde_json::Value::String("ab".repeat(32)));
+    })
+    .err()
+    .expect("a previous key that belongs to another certificate is refused");
+    assert!(matches!(err, nettls::TlsError::Chain(_)), "{err:?}");
+    assert!(err.to_string().contains("belongs to"), "{err}");
+}
+
+#[test]
+fn an_unchanged_previous_key_is_restored_at_start() {
+    let restarted = restart_after_editing_previous_key("prev-unchanged", |_| {})
+        .expect("an unchanged previous key is restored");
+    assert!(restarted.own_trio().unwrap().previous_fingerprint.is_some());
+}

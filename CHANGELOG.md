@@ -26,6 +26,12 @@ freshness is the caller's rule. No behaviour changed.
 The rolling path and the message checks compared fingerprints as text. They
 now use `krypto::ct_eq`, as the fixed pin does. No behaviour changed.
 
+### ⚠ Changed — a previous-key file from before 0.10.0 is refused at start *(2026-11-22)*
+
+The file with the previous key must say which certificate it belongs to and
+when the pair came about. A file without them was accepted; it now gives an
+error that says what is missing.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

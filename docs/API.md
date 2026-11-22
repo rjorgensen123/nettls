@@ -617,7 +617,9 @@ impl Announcer {
 `prepare` and `acked` save the promise themselves, so a restart resumes it *(0.10.0)*. A switch
 writes the new pair and reads it back before anything in memory moves: a failed write changes
 nothing, and the next call tries again. At start, the stored chain is checked against the material,
-and the 24-hour cap holds across the restart.
+and the 24-hour cap holds across the restart. The file with the previous key must name the
+certificate it belongs to and when the pair came about. One that lacks either, as files written
+before 0.10.0 do, is refused at start *(0.12.0)*.
 
 `password: None` means **key material in cleartext on disk**. Legitimate (mode 1 with an
 operator-uploaded certificate), but it is a choice, and it must be visible as one. *(0.12.0)* A
