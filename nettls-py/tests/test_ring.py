@@ -20,10 +20,13 @@ carries without the anchor. Rotation 4 shows it does so **again** — and that
 the N-2 deletion is general, not just something that went well the one time
 N-2 happened to be the anchor.
 
-**Rust and Python nodes.** The Python node is `ringnode.py` on nettls_py, the
-same Rust code as `examples/ringnode.rs`, reached through the binding. Mixing
+**Rust and Python nodes.** The Python node is `ringnode.py` on nettls_py: the
+same crate that `examples/ringnode.rs` uses, reached through the binding. Mixing
 them shows the binding carries the protocol and TLS the way the crate does,
 in every direction.
+
+**The two nodes differ on purpose.** The Rust node is the strict one and the
+Python node the relaxed one; the top of each file says what that means.
 
 Skipped if `cargo` is missing.
 """
@@ -189,6 +192,7 @@ def _approve_all(nodes: list[NodeProcess]) -> None:
             name=neighbour.name,
             port=neighbour.port,
             ed25519_pub=neighbour.pub.hex(),
+            fp=neighbour.start_fp,
         )
         # The predecessor: the one who PINS us, and who therefore must ack OUR
         # rotation. We must also be able to verify its receipt.
@@ -541,6 +545,39 @@ def test_ring_6_all_neighbourhoods():
     _run_ring(["python", "python", "rust", "rust", "python", "rust"], inject_after=2)
 
 
+# ── The strict node and the relaxed node ─────────────────────────────────── #
+#
+# `examples/ringnode.rs` checks what it is given; `ringnode.py` only uses the
+# functionality. The difference is deliberate, and this test shows it on the
+# first check an operator meets.
+
+
+@pytest.mark.slow
+def test_approve_with_wrong_fingerprint_rust_refuses_python_pins():
+    """A Rust and a Python node in one ring, each told a wrong fingerprint for the other.
+
+    The Rust node compares the certificate it is shown with `fp` and pins
+    nothing; the Python node ignores `fp` and pins what it sees.
+    """
+    nodes = _build_ring(["rust", "python"])
+    rust, python = nodes
+    try:
+        wrong = "ab" * 32  # well-formed, and neither node's fingerprint
+        assert wrong not in (rust.start_fp, python.start_fp)
+
+        with pytest.raises(AssertionError, match="not the expected"):
+            rust.control(op="approve", name=python.name, port=python.port,
+                         ed25519_pub=python.pub.hex(), fp=wrong)
+        assert rust.control(op="status")["peers"] == {}
+
+        reply = python.control(op="approve", name=rust.name, port=rust.port,
+                               ed25519_pub=rust.pub.hex(), fp=wrong)
+        assert reply["ok"] is True
+    finally:
+        for nd in nodes:
+            nd.kill()
+
+
 # ── Restart and resumption (§6.8) ─────────────────────────────────────────── #
 #
 # Roger: "if we introduce a fault, we restart exactly that node — we fix the
@@ -590,13 +627,16 @@ def _pin_anew(nodes: list[NodeProcess], i: int) -> None:
     successor = nodes[(i + 1) % len(nodes)]
     predecessor = nodes[(i - 1) % len(nodes)]
 
+    # The successor may have rotated since it started, so its fingerprint is
+    # taken from `status`; the restarted node is still on its starting one.
     restarted.control(op="approve", name=successor.name, port=successor.port,
-                      ed25519_pub=successor.pub.hex())
+                      ed25519_pub=successor.pub.hex(),
+                      fp=successor.control(op="status")["fp"])
     restarted.control(op="know_key", name=predecessor.name, ed25519_pub=predecessor.pub.hex())
     restarted.control(op="require_ack_from", name=predecessor.name)
 
     predecessor.control(op="approve", name=restarted.name, port=restarted.port,
-                        ed25519_pub=restarted.pub.hex())
+                        ed25519_pub=restarted.pub.hex(), fp=restarted.start_fp)
 
 
 @pytest.mark.slow

@@ -1,9 +1,32 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 """A ring node in Python (SPEC-nettls §6.15), on nettls_py.
 
-Run as a subprocess of the ring test. It is `examples/ringnode.rs` in Python:
-the same Rust code underneath, the same protocol, the same operations. The node
-does not know which language its neighbours are written in.
+A test of the functionality, run as a subprocess of the ring test: it shows
+nettls working in a ring through the binding. It is a test tool, not a
+finished implementation of a node.
+
+This is the **relaxed** node: it uses the functionality in the simplest way.
+`examples/ringnode.rs` is the **strict** node, and the difference is
+deliberate. What this node leaves out, and the strict node does:
+
+- `approve` pins the first certificate it sees; the `fp` field is ignored;
+- `fetch_and_ack` signs and sends a receipt for a name it has not pinned,
+  and does not look at the neighbour's reply;
+- a receipt that arrives with no announcement pending is accepted if its
+  signature holds, since its fingerprint is compared with itself;
+- a neighbour that is not pinned is reached over an unverified connection;
+  after `import` so is a pinned one when the marker is passed on, because
+  `import` does not restore the neighbour's name;
+- a control line that is not JSON ends the control loop, so the node takes
+  no more commands, and malformed input from the network is logged and gets
+  no reply;
+- no bounds beyond the socket timeouts: not on line length, on concurrent
+  connections or on `skip`.
+
+The two speak the same protocol and work together in one ring:
+`test_ring_6_all_neighbourhoods` in `test_ring.py` shows it, and
+`test_approve_with_wrong_fingerprint_rust_refuses_python_pins` there shows
+the difference.
 
 ## The protocol between the nodes
 

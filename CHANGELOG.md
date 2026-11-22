@@ -43,6 +43,12 @@ unpacked, and both workflows declare `permissions: contents: read`.
 what their names say, and five are added for core behaviour that had none.
 No code outside the tests changed.
 
+### Changed — the two ring nodes say what they are *(2026-11-22)*
+
+The Rust ring node now checks what it is given, and the Python one stays as
+simple as it was. The top of each file says so, and that both are test tools.
+No change to the crate itself.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python
