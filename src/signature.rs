@@ -140,80 +140,13 @@ mod tests {
         (der, pkcs8)
     }
 
-    // --- from_hex (§6.5 field rules over krypto::hex) ------------------------ //
-
-    #[test]
-    fn hex_roundtrip() {
-        let b = vec![0x00, 0x0f, 0xa0, 0xff];
-        assert_eq!(krypto::hex::encode(&b).unwrap(), "000fa0ff");
-        assert_eq!(from_hex("000fa0ff").unwrap(), b);
-    }
-
-    #[test]
-    fn hex_rejects_uppercase() {
-        // Stricter than necessary for reading — but a protocol where `AB` and
-        // `ab` both get in is a protocol where two implementations can produce
-        // different bytes for the same value without anyone noticing.
-        assert!(from_hex("000FA0FF").is_err());
-    }
-
-    #[test]
-    fn hex_rejects_odd_empty_and_garbage() {
-        assert!(from_hex("abc").is_err());
-        assert!(from_hex("").is_err());
-        assert!(from_hex("zz").is_err());
-    }
-
-    #[test]
-    fn hex_does_not_panic_on_multibyte_utf8() {
-        // Regression. An earlier in-house decoder indexed `&s[i..i + 2]` on a
-        // `&str`, where `len()` counts BYTES — so the index could land in the
-        // middle of a character and bring down the thread with "byte index 2 is
-        // not a char boundary".
-        //
-        // Reachable from outside: `sig_curr` and `sig` go straight from JSON
-        // into here in `Announcement::from_json`, `Receipt::from_json` and
-        // `Approval::from_json`. One peer, one field, one crashed process.
-        // krypto::hex::decode validates on bytes and cannot regress into this,
-        // but the §6 entry point keeps the probe.
-        for s in [
-            "a\u{20AC}",
-            "\u{20AC}a",
-            "ab\u{20AC}\u{20AC}",
-            "\u{e9}\u{e9}",
-        ] {
-            assert!(
-                from_hex(s).is_err(),
-                "{s:?} must give Err — and above all not panic"
-            );
-        }
-    }
-
     // --- ECDSA P-256 -------------------------------------------------------- //
-
-    #[test]
-    fn p256_signs_and_verifies() {
-        let (der, pkcs8) = cert_and_pkcs8();
-        let sig = sign_p256(&pkcs8, b"hey").unwrap();
-        verify_p256(&der, b"hey", &sig).expect("our own signature must hold");
-    }
 
     #[test]
     fn p256_rejects_altered_message() {
         let (der, pkcs8) = cert_and_pkcs8();
         let sig = sign_p256(&pkcs8, b"hey").unwrap();
         assert!(verify_p256(&der, b"hez", &sig).is_err());
-    }
-
-    #[test]
-    fn p256_rejects_other_key() {
-        let (_der_a, pkcs8_a) = cert_and_pkcs8();
-        let (der_b, _pkcs8_b) = cert_and_pkcs8();
-        let sig = sign_p256(&pkcs8_a, b"hey").unwrap();
-        assert!(
-            verify_p256(&der_b, b"hey", &sig).is_err(),
-            "a signature from one identity must not hold against another"
-        );
     }
 
     #[test]

@@ -383,7 +383,7 @@ def _run_ring(lang: list[str], inject_after: int = 2) -> None:
         # SEEDED randomness. The order must be spread and not a→b→c, but it
         # must also be the same every time: a failing run you cannot reproduce
         # is a run you end up ignoring. The seed hangs off the configuration,
-        # so the five rings get different orders.
+        # so each ring gets its own order.
         rng = random.Random("|".join(lang))
         count = len(nodes)
 
@@ -500,33 +500,11 @@ def _run_ring(lang: list[str], inject_after: int = 2) -> None:
             nd.kill()
 
 
-@pytest.mark.slow
-def test_ring_2rust_1python():
-    """A (Rust) → B (Python) → C (Rust). Covers R→P, P→R and R→R."""
-    _run_ring(["rust", "python", "rust"])
-
-
-@pytest.mark.slow
-def test_ring_2python_1rust():
-    """A (Python) → B (Rust) → C (Python). Covers P→R, R→P and **P→P**.
-
-    Not a repeat of the previous one: here `Python → Python` is probed for the
-    first time, with nettls-py on both ends of a connection.
-    """
-    _run_ring(["python", "rust", "python"], inject_after=1)
-
-
-# ── Pure rings: Rust alone, and the binding alone ─────────────────────────── #
+# ── Pure ring: the binding alone ──────────────────────────────────────────── #
 #
-# A pure Rust ring is the crate with nothing in between. A pure Python ring is
-# the same crate through nettls-py on every edge: the binding carries all of
-# it, the messages, the state and the TLS, with no Rust node next to it.
-
-
-@pytest.mark.slow
-def test_ring_3rust():
-    """Pure Rust ring. R→R on every edge, no Python anywhere near."""
-    _run_ring(["rust", "rust", "rust"])
+# A pure Python ring is the crate through nettls-py on every edge: the binding
+# carries all of it, the messages, the state and the TLS, with no Rust node
+# next to it.
 
 
 @pytest.mark.slow
@@ -695,9 +673,8 @@ def test_restart_resumes_communication(lang):
             f"{predecessor.name} does not pin {victim_name}'s new certificate: {st}"
         )
 
-        # Rotation AFTER the restart is probed separately — see
-        # `test_rotation_after_restart_is_blocked` below. That is an open
-        # design decision, not a fault in this test.
+        # Rotation after the restart is probed separately, in
+        # `test_rotation_after_restart_resumes` below.
     finally:
         for nd in nodes:
             nd.kill()

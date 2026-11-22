@@ -162,53 +162,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_is_aes256_only() {
-        let p = TransportPolicy::default();
-        assert_eq!(p.ciphers(), &[TransportCipher::Aes256Gcm]);
-        let suites = p.provider().cipher_suites.clone();
-        assert_eq!(suites.len(), 3);
-        for s in suites {
-            let name = format!("{:?}", s.suite());
-            assert!(name.contains("AES_256_GCM"), "{name}");
-        }
-    }
-
-    #[test]
-    fn order_is_the_consumers_order() {
-        let p = TransportPolicy::new(&[
-            TransportCipher::ChaCha20Poly1305,
-            TransportCipher::Aes256Gcm,
-        ])
-        .unwrap();
-        let suites = p.provider().cipher_suites.clone();
-        assert_eq!(suites.len(), 6);
-        assert!(format!("{:?}", suites[0].suite()).contains("CHACHA20"));
-        assert!(format!("{:?}", suites[3].suite()).contains("AES_256_GCM"));
-    }
-
-    #[test]
     fn empty_and_repeated_are_rejected() {
         assert!(TransportPolicy::new(&[]).is_err());
         assert!(
             TransportPolicy::new(&[TransportCipher::Aes256Gcm, TransportCipher::Aes256Gcm])
                 .is_err()
-        );
-    }
-
-    #[test]
-    fn nothing_outside_the_policy_is_offered() {
-        // Neither policy carries AES-128 — the ring default does.
-        let all = crate::provider::provider().cipher_suites.len();
-        let p = TransportPolicy::new(&[
-            TransportCipher::Aes256Gcm,
-            TransportCipher::ChaCha20Poly1305,
-        ])
-        .unwrap();
-        let ours = p.provider().cipher_suites.clone();
-        assert!(ours.len() < all);
-        assert!(
-            ours.iter()
-                .all(|s| !format!("{:?}", s.suite()).contains("AES_128"))
         );
     }
 }

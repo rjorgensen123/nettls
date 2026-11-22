@@ -25,7 +25,3 @@ def material(name: str, days: int = 30) -> tuple[str, bytes, str, bytes]:
 def ed25519_public(seed: bytes) -> bytes:
     """The Ed25519 public key for a seed. Ed25519 is krypto's, in Rust too."""
     return krypto_py.sign.ed25519_public(krypto_py.SecretBuf.from_vec(bytearray(seed)))
-
-
-def ed25519_sign(seed: bytes, message: bytes) -> bytes:
-    return krypto_py.sign.ed25519_sign(krypto_py.SecretBuf.from_vec(bytearray(seed)), message)

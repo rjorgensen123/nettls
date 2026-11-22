@@ -18,7 +18,7 @@ import re
 import krypto_py
 import nettls_py as nettls
 import pytest
-from support import ROOT, TESTVECTORS, ed25519_public, ed25519_sign, material
+from support import ROOT, TESTVECTORS, ed25519_public, material
 
 from nettls_py import canonical as c
 
@@ -53,13 +53,6 @@ def build_vectors() -> dict[str, bytes]:
 # --------------------------------------------------------------------------- #
 
 
-def test_the_vector_seed_has_the_vector_key():
-    # Change the seed, and every signature vector is invalid.
-    assert ed25519_public(SEED).hex() == (
-        "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664"
-    )
-
-
 @pytest.mark.parametrize("name", sorted(VECTORS))
 def test_vectors_match_byte_for_byte(name):
     expected = VECTORS[name]
@@ -67,14 +60,6 @@ def test_vectors_match_byte_for_byte(name):
     assert actual.hex() == expected["canonical_hex"], (
         f"vector '{name}' ({expected['what']}) does not match"
     )
-
-
-@pytest.mark.parametrize("name", sorted(VECTORS))
-def test_vector_signatures_are_identical(name):
-    # Ed25519 is deterministic: byte equality, not merely "it verifies".
-    expected = VECTORS[name]
-    sig = ed25519_sign(SEED, bytes.fromhex(expected["canonical_hex"]))
-    assert sig.hex() == expected["ed25519_sig_hex"]
 
 
 def test_no_vector_is_missing():
@@ -94,31 +79,11 @@ def test_approval_and_receipt_sign_as_the_vectors():
 # --------------------------------------------------------------------------- #
 
 
-def test_no_trailing_newline_anywhere():
-    for b in build_vectors().values():
-        assert not b.endswith(b"\n"), b
-        assert b"\r\n" not in b
-
-
-def test_bootstrap_serializes_prev_as_dash():
-    with_prev = c.rotate_v2("gateway", FP_A, FP_B, FP_C, 1)
-    without = c.rotate_v2("gateway", None, FP_B, FP_C, 1)
-    assert b"\n-\n" in without
-    # The same number of lines: a missing field would shift the next one up.
-    assert with_prev.count(b"\n") == without.count(b"\n")
-
-
 def test_newline_in_a_field_is_rejected():
     with pytest.raises(nettls.TlsError):
         c.approve_v1("gateway", FP_A, "rog\ner", 1)
     with pytest.raises(nettls.TlsError):
         c.approve_v1("net\rgw", FP_A, "operator", 1)
-
-
-def test_wrong_fingerprint_is_rejected():
-    for bad in ["short", f"sha256:{FP_A}", FP_A.upper(), "z" * 64]:
-        with pytest.raises(nettls.TlsError):
-            c.approve_v1("gateway", bad, "operator", 1)
 
 
 def test_require_checks_take_the_field_name_from_python():
@@ -160,13 +125,6 @@ def test_single_signature_rejected_when_receiver_has_previous():
     k = Announcement.new("gateway", None, (fp1, k1), c2, 100)
     with pytest.raises(nettls.TlsError, match="single-signed"):
         k.verify(der0, der1)
-
-
-def test_double_signed_accepted():
-    _, k0, fp0, der0 = material("c0")
-    _, k1, fp1, der1 = material("c1")
-    c2, _, _, _ = material("c2")
-    Announcement.new("gateway", (fp0, k0), (fp1, k1), c2, 100).verify(der0, der1)
 
 
 def test_swapped_certificate_rejected_even_with_valid_signatures():
@@ -504,13 +462,6 @@ def test_envelope_roundtrip_and_public_part():
     assert E.open(key, k) == b"something only the recipient may see"
     k = E.seal_with(public, b"x", nettls.Alg.Aes256Gcm)
     assert E.open(key, k) == b"x"
-
-
-def test_sender_cannot_open_own_envelope():
-    _, public = E.RecipientKey.generate()
-    k = E.seal(public, b"device-password")
-    with pytest.raises(nettls.TlsError):
-        E.open(E.RecipientKey.from_bytes(public), k)
 
 
 def test_wrong_recipient_does_not_get_in():

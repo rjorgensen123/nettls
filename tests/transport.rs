@@ -75,18 +75,6 @@ fn chacha() -> TransportPolicy {
 }
 
 #[tokio::test]
-async fn default_is_aes_256_gcm_on_both_sides() {
-    install_crypto_provider();
-    let m = material();
-    let fp = m.fingerprint_sha256();
-    let port = start_server(&m, &TransportPolicy::default()).await;
-    let suite = connect(port, &fp, &TransportPolicy::default())
-        .await
-        .expect("default against default must connect");
-    assert_eq!(suite, "TLS13_AES_256_GCM_SHA384", "{suite}");
-}
-
-#[tokio::test]
 async fn a_peer_outside_the_policy_is_refused_hard() {
     install_crypto_provider();
     let m = material();

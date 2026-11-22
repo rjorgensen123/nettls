@@ -55,7 +55,11 @@ def _verify_kind(kind: str, obj) -> None:
 
 
 def _entries(kind: str):
-    return [pytest.param(p, id=p["name"]) for p in CORPUS[kind]]
+    # pytest turns an empty list into one skipped test, and the run stays green;
+    # this makes it a collection error instead.
+    entries = CORPUS[kind]
+    assert entries, f"{kind}: an empty corpus probes nothing"
+    return [pytest.param(p, id=p["name"]) for p in entries]
 
 
 @pytest.mark.parametrize("kind", ["announcement", "receipt", "approval"])

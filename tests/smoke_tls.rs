@@ -88,6 +88,22 @@ async fn right_fingerprint_gets_through_wrong_fingerprint_rejected() {
         .expect("pinning on the right fingerprint must get through");
     assert_eq!(reply, GREETING, "got wrong data over the pinned connection");
 
+    // The same pin the way an operator pastes it: prefix, uppercase, colons
+    // and spaces around. It is the same identity, so it gets through too.
+    let pasted = format!(
+        "  SHA256:{}  ",
+        fp_a.to_uppercase()
+            .as_bytes()
+            .chunks(2)
+            .map(|pair| String::from_utf8_lossy(pair).into_owned())
+            .collect::<Vec<_>>()
+            .join(":")
+    );
+    let port_a = start_server(server_a.server_config().unwrap()).await;
+    connect_to(port_a, &pasted)
+        .await
+        .expect("the pin in the operator's form must get through");
+
     // 2) Pinned on A, but the server is B → must be rejected.
     let port_b = start_server(server_b.server_config().unwrap()).await;
     let err = connect_to(port_b, &fp_a).await.expect_err(
@@ -158,31 +174,49 @@ async fn handshake_uses_tls13_and_alpn_negotiates() {
     );
 }
 
-#[tokio::test]
-async fn cert_loaded_from_disk_works_in_a_real_handshake() {
-    install_crypto_provider();
-
-    // The whole round: generate → save → load back → server → pinned client.
-    // This is exactly the `auto` flow a service gets at restart.
-    let dir = std::env::temp_dir().join(format!(
-        "nettls-smoke-disk-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+/// A server showing `shown`'s certificate while signing the handshake with
+/// `signing`'s key: someone who copied a certificate without its key.
+fn copied_certificate(
+    shown: &TlsMaterial,
+    signing: &TlsMaterial,
+) -> Arc<nettls::rustls::ServerConfig> {
+    use nettls::rustls;
+    #[derive(Debug)]
+    struct Fixed(Arc<rustls::sign::CertifiedKey>);
+    impl rustls::server::ResolvesServerCert for Fixed {
+        fn resolve(
+            &self,
+            _: rustls::server::ClientHello<'_>,
+        ) -> Option<Arc<rustls::sign::CertifiedKey>> {
+            Some(self.0.clone())
+        }
+    }
+    let provider = nettls::provider();
+    let key_der = signing
+        .anchor_pkcs8()
+        .unwrap()
+        .expose(|k| rustls::pki_types::PrivateKeyDer::Pkcs8(k.to_vec().into()));
+    let signer = provider.key_provider.load_private_key(key_der).unwrap();
+    // `CertifiedKey::new` does not check that key and certificate match.
+    let ck = rustls::sign::CertifiedKey::new(vec![shown.cert_chain()[0].clone()], signer);
+    Arc::new(
+        rustls::ServerConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
             .unwrap()
-            .as_nanos()
-    ));
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(Fixed(Arc::new(ck)))),
+    )
+}
 
-    let first = TlsMaterial::load(&CertSource::auto(&dir, params())).unwrap();
-    let after_restart = TlsMaterial::load(&CertSource::auto(&dir, params())).unwrap();
-    assert_eq!(
-        first.fingerprint_sha256(),
-        after_restart.fingerprint_sha256(),
-        "the fingerprint must survive a restart, otherwise pinning does not work in practice"
-    );
-
-    let port = start_server(after_restart.server_config().unwrap()).await;
-    let reply = connect_to(port, &first.fingerprint_sha256()).await.unwrap();
-    assert_eq!(reply, GREETING);
-
-    let _ = std::fs::remove_dir_all(&dir);
+#[tokio::test]
+async fn the_pinned_certificate_without_its_key_does_not_get_through() {
+    install_crypto_provider();
+    // The fingerprint matches, so only the handshake signature can stop it.
+    let pinned = TlsMaterial::load(&CertSource::self_signed(params())).unwrap();
+    let other = TlsMaterial::load(&CertSource::self_signed(params())).unwrap();
+    let port = start_server(copied_certificate(&pinned, &other)).await;
+    let err = connect_to(port, &pinned.fingerprint_sha256())
+        .await
+        .expect_err("a server without the pinned key must be rejected");
+    assert!(err.contains("BadSignature"), "{err}");
 }

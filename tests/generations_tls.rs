@@ -51,7 +51,7 @@ fn generation() -> Gen {
     let der = material.cert_chain()[0].as_ref().to_vec();
     let pem = pem_of(&der);
     let fp = material.fingerprint_sha256();
-    let pkcs8 = pkcs8_of(&material, &der);
+    let pkcs8 = pkcs8_of(&material);
     Gen {
         material,
         pem,
@@ -96,7 +96,7 @@ fn base64_std(data: &[u8]) -> String {
 
 /// Extracts PKCS#8 from the material via `save_pem` + `load`, since the
 /// internal conversion is not public.
-fn pkcs8_of(m: &TlsMaterial, _der: &[u8]) -> krypto::SecretBuf {
+fn pkcs8_of(m: &TlsMaterial) -> krypto::SecretBuf {
     let dir = std::env::temp_dir().join(format!(
         "nettls-m6-{}-{}",
         std::process::id(),
@@ -179,6 +179,7 @@ async fn announced_successor_accepted_without_client_knowing_when() {
 
     // The announcement: c0 appoints c1. First rotation → single-signed (§6.3).
     let k = Announcement::new("gateway", None, (&c0.fp_bar(), &c0.pkcs8), &c1.pem, 1).unwrap();
+    assert!(k.is_bootstrap(), "a first announcement has no previous");
     trust
         .receive(&k)
         .expect("the announcement must be accepted");
@@ -263,18 +264,11 @@ impl Gen {
         self.material.server_config().expect("server config")
     }
 
-    /// The fingerprint without a `sha256:` prefix, as §6 uses it.
+    /// The fingerprint as §6 uses it: the bare hex `fingerprint_sha256()` gives.
     fn fp_bar(&self) -> String {
-        self.fp
-            .strip_prefix("sha256:")
-            .unwrap_or(&self.fp)
-            .to_string()
+        self.fp.clone()
     }
 }
-
-/// Keeps `Arc` in use (keeps the import honest if the tests change).
-#[allow(dead_code)]
-fn _use_arc(_: Arc<()>) {}
 
 // --------------------------------------------------------------------------- //
 // 3.6 — the announcer actually drives a rotation, end to end
@@ -1193,21 +1187,6 @@ fn a_previous_key_without_current_is_refused_at_start() {
 }
 
 #[test]
-fn a_previous_key_with_a_null_current_is_refused_at_start() {
-    let err = restart_after_editing_previous_key("prev-null-current", |m| {
-        m.insert("current".into(), serde_json::Value::Null);
-    })
-    .err()
-    .expect("a previous key with `current: null` is refused");
-    assert!(matches!(err, nettls::TlsError::Chain(_)), "{err:?}");
-    assert!(
-        err.to_string().contains("which certificate it belongs to"),
-        "{err}"
-    );
-    assert!(err.to_string().contains("0.10.0"), "{err}");
-}
-
-#[test]
 fn a_previous_key_without_rolled_at_is_refused_at_start() {
     let err = restart_after_editing_previous_key("prev-no-rolled-at", |m| {
         m.remove("rolled_at");
@@ -1231,12 +1210,5 @@ fn a_previous_key_for_another_certificate_is_refused_at_start() {
     .err()
     .expect("a previous key that belongs to another certificate is refused");
     assert!(matches!(err, nettls::TlsError::Chain(_)), "{err:?}");
-    assert!(err.to_string().contains("belongs to"), "{err}");
-}
-
-#[test]
-fn an_unchanged_previous_key_is_restored_at_start() {
-    let restarted = restart_after_editing_previous_key("prev-unchanged", |_| {})
-        .expect("an unchanged previous key is restored");
-    assert!(restarted.own_trio().unwrap().previous_fingerprint.is_some());
+    assert!(err.to_string().contains("but the material in"), "{err}");
 }

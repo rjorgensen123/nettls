@@ -109,6 +109,26 @@ fn auto_generates_first_time_and_reuses_thereafter() {
 }
 
 #[test]
+fn auto_reuses_an_expired_certificate_and_says_so() {
+    // Expired an hour ago. `SelfSignedParams` cannot make that, so rcgen
+    // builds it, as in `tests/expiry.rs`, and it is stored where `auto` looks.
+    let dir = TempDir::new("expired");
+    let mut p = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
+    let t = time::OffsetDateTime::now_utc();
+    p.not_before = t - time::Duration::days(2);
+    p.not_after = t - time::Duration::hours(1);
+    let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+    let cert = p.self_signed(&key).unwrap();
+    let expired = TlsMaterial::load(&CertSource::pem(cert.pem(), key.serialize_pem())).unwrap();
+    expired.save_pem(dir.path()).unwrap();
+
+    let m = TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();
+    assert_eq!(m.origin(), CertOrigin::ReusedExpired);
+    assert!(!m.is_valid_now());
+    assert_eq!(m.fingerprint_sha256(), expired.fingerprint_sha256());
+}
+
+#[test]
 fn auto_reports_a_corrupt_stored_cert_and_leaves_it() {
     let dir = TempDir::new("corrupt");
     TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();

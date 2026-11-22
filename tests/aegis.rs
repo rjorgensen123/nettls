@@ -3,7 +3,8 @@
 //! never forced on anyone: proven with real handshakes over loopback.
 //!
 //! The deviation itself (nonce padding, private code point, SHA-384 pairing)
-//! and its exit condition are documented and unit-tested in `src/aegis.rs`.
+//! and its exit condition are documented in `src/aegis.rs`; the nonce padding
+//! and the exit condition are unit-tested there, the code point is pinned here.
 
 use nettls::{
     CertSource, Expiry, SelfSignedParams, TlsMaterial, TransportCipher, TransportPolicy,
@@ -103,6 +104,12 @@ async fn two_nettls_ends_speak_aegis_in_both_directions() {
         .await
         .expect("AEGIS against AEGIS must connect");
     assert_eq!(suite, our_codepoint(), "{suite}");
+    // The number on the wire, written out: changing it is a wire change.
+    assert_eq!(
+        suite,
+        format!("{:?}", nettls::rustls::CipherSuite::Unknown(0xFF06)),
+        "the suite must be offered under the private code point 0xFF06"
+    );
     assert_eq!(
         server.await.unwrap(),
         HELLO,
@@ -146,6 +153,27 @@ async fn an_aegis_only_client_against_a_default_server_fails_hard() {
     assert!(
         err.to_lowercase().contains("handshake") || err.to_lowercase().contains("alert"),
         "expected a handshake failure, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn an_aegis_only_server_against_a_default_client_fails_hard() {
+    install_crypto_provider();
+    let m = material();
+    let fp = m.fingerprint_sha256();
+    // The server insists on AEGIS; the default client offers AES-256-GCM only.
+    // The server refuses: no connection on the weaker suite.
+    let (port, server) = start_server(&m, &aegis_only()).await;
+    let err = connect(port, &fp, &TransportPolicy::default())
+        .await
+        .expect_err("no common suite must fail the handshake");
+    assert!(
+        err.to_lowercase().contains("handshake") || err.to_lowercase().contains("alert"),
+        "expected a handshake failure, got: {err}"
+    );
+    assert!(
+        server.await.unwrap().is_empty(),
+        "the server must not have accepted a connection"
     );
 }
 

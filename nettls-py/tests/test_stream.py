@@ -25,8 +25,6 @@ from nettls_py.stream import (
     UntrustedPeerError,
 )
 
-A = nettls.announcer
-
 
 def identity(name: str) -> nettls.TlsMaterial:
     params = nettls.SelfSignedParams.new(name, ["localhost", "127.0.0.1"])

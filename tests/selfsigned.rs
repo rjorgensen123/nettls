@@ -69,17 +69,6 @@ fn fingerprint_is_64_hex_digits_and_stable_for_same_cert() {
 }
 
 #[test]
-fn fingerprint_changes_when_cert_changes() {
-    let a = TlsMaterial::load(&CertSource::self_signed(params())).unwrap();
-    let b = TlsMaterial::load(&CertSource::self_signed(params())).unwrap();
-    assert_ne!(
-        a.fingerprint_sha256(),
-        b.fingerprint_sha256(),
-        "two generations with the same parameters must yield different keys and thus different fingerprints"
-    );
-}
-
-#[test]
 fn validity_window_is_as_ordered() {
     let m = TlsMaterial::load(&CertSource::self_signed(params().valid_days(30))).unwrap();
     assert!(m.is_valid_now());
@@ -130,6 +119,33 @@ fn debug_never_leaks_the_key() {
     let dbg = format!("{m:?}");
     assert!(dbg.contains("[REDACTED]"), "{dbg}");
     assert!(!dbg.to_lowercase().contains("private key"), "{dbg}");
+
+    // The key itself is in no form `Debug` could print it. The probe is the
+    // first 16 bytes of the private scalar, which follows `INTEGER 1, OCTET
+    // STRING (32 bytes)` in the PKCS#8: 128 random bits, so they cannot be in
+    // the output by accident.
+    let (hex, list) = m.anchor_pkcs8().unwrap().expose(|der| {
+        let at = der
+            .windows(5)
+            .position(|w| w == [0x02, 0x01, 0x01, 0x04, 0x20])
+            .expect("a P-256 key in PKCS#8")
+            + 5;
+        let probe = &der[at..at + 16];
+        let list = format!("{probe:?}");
+        (
+            krypto::hex::encode(probe).unwrap(),
+            list[1..list.len() - 1].to_string(),
+        )
+    });
+    assert!(!dbg.to_lowercase().contains(&hex), "the key as hex: {dbg}");
+    assert!(!dbg.contains(&list), "the key as a list of bytes: {dbg}");
+    let dir = std::env::temp_dir().join(format!("nettls-debug-{}", std::process::id()));
+    m.save_pem(&dir).unwrap();
+    let key_pem = std::fs::read_to_string(dir.join(nettls::KEY_FILE)).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    for line in key_pem.lines().filter(|l| !l.starts_with("-----")) {
+        assert!(!dbg.contains(line), "the key as PEM: {dbg}");
+    }
 
     // Same requirement for CertSource::pem, which actually carries the key.
     let src = CertSource::pem(b"cert".to_vec(), b"secret-key-bytes".to_vec());

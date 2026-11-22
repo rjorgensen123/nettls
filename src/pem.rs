@@ -142,20 +142,8 @@ mod tests {
     use super::*;
 
     // (The base64 vectors live in krypto::base64 now — the body is its output;
-    // the readback test below proves the whole PEM block end-to-end.)
-
-    #[test]
-    fn pem_can_be_read_back_by_pki_types() {
-        use rustls_pki_types::pem::PemObject;
-        // 200 bytes of "DER" → several lines → covers the line wrapping.
-        let der: Vec<u8> = (0..200u32).map(|i| (i * 7 % 251) as u8).collect();
-        let pem = encode("CERTIFICATE", &der).unwrap();
-        let certs: Vec<_> = rustls_pki_types::CertificateDer::pem_slice_iter(&pem)
-            .collect::<Result<_, _>>()
-            .unwrap();
-        assert_eq!(certs.len(), 1);
-        assert_eq!(certs[0].as_ref(), &der[..]);
-    }
+    // the tests in `tests/files_and_auto.rs` read written PEM blocks back
+    // end-to-end.)
 
     /// DER one byte over krypto's limit is `TlsError::Encode`, and the message
     /// carries krypto's own reason (0.12.0).
@@ -224,17 +212,6 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
-        let _ = fs::remove_dir_all(&d);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_final_mode_is_the_one_asked_for() {
-        let d = scratch("mode");
-        write_atomic(&d.join("cert.pem"), b"cert", 0o644).unwrap();
-        write_atomic(&d.join("key.pem"), b"key", 0o600).unwrap();
-        assert_eq!(mode_of(&d.join("cert.pem")), 0o644);
-        assert_eq!(mode_of(&d.join("key.pem")), 0o600);
         let _ = fs::remove_dir_all(&d);
     }
 

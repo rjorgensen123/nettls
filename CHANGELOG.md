@@ -37,6 +37,12 @@ error that says what is missing.
 The `cargo-deny` release file is checked against its SHA-256 before it is
 unpacked, and both workflows declare `permissions: contents: read`.
 
+### Changed — the test suite is tidied *(2026-11-22)*
+
+66 tests that repeated another test are removed, five weak ones now check
+what their names say, and five are added for core behaviour that had none.
+No code outside the tests changed.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

@@ -5,7 +5,7 @@
 
 use krypto::Alg;
 use nettls::capability::{SupportStatement, alg_from_token, choose};
-use nettls::{CertSource, SelfSignedParams, TlsMaterial};
+use nettls::{CertSource, SelfSignedParams, TlsError, TlsMaterial};
 
 fn identity(name: &str) -> TlsMaterial {
     TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::new(
@@ -61,12 +61,27 @@ fn statement_is_fail_closed_on_form() {
     let pkcs8 = m.anchor_pkcs8().unwrap();
     // Empty support set is not a statement.
     assert!(SupportStatement::signed("service", &[], 1, &pkcs8).is_err());
-    // Unknown tokens in a received statement are rejected at verify.
-    let mut s =
-        SupportStatement::signed("service", &[Alg::Aes256Gcm], 1_760_000_000, &pkcs8).unwrap();
-    s.supported = vec!["rot13".into()];
+    // A received statement with an unknown token, the supported list out of
+    // order, or a token twice is refused by the form check, before the
+    // signature (which would give `ProofInvalid`) is looked at.
+    let signed = SupportStatement::signed(
+        "service",
+        &[Alg::Aegis256, Alg::Aes256Gcm],
+        1_760_000_000,
+        &pkcs8,
+    )
+    .unwrap();
     let cert = m.cert_chain()[0].as_ref().to_vec();
-    assert!(s.verify(&cert).is_err());
+    for supported in [
+        vec!["rot13"],
+        vec!["aes256gcm", "aegis256"],
+        vec!["aes256gcm", "aes256gcm"],
+    ] {
+        let mut s = signed.clone();
+        s.supported = supported.iter().map(|t| t.to_string()).collect();
+        let err = s.verify(&cert).unwrap_err();
+        assert!(matches!(err, TlsError::Params(_)), "{supported:?}: {err:?}");
+    }
     // Tokens are the cli's — one vocabulary.
     assert!(alg_from_token("aegis256").is_ok());
     assert!(alg_from_token("AEGIS256").is_err());

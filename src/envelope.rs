@@ -293,24 +293,6 @@ mod tests {
     }
 
     #[test]
-    fn wrong_recipient_cannot_open() {
-        let (_a, public_a) = RecipientKey::generate().unwrap();
-        let (b, _public_b) = RecipientKey::generate().unwrap();
-        let k = seal(&public_a, b"secret").unwrap();
-        assert!(open(&b, &k).is_err());
-    }
-
-    #[test]
-    fn swapped_sender_key_is_rejected() {
-        // The binding in `derive`: swap the ephemeral key and it breaks.
-        let (n, public) = RecipientKey::generate().unwrap();
-        let (_other, other_public) = RecipientKey::generate().unwrap();
-        let mut k = seal(&public, b"secret").unwrap();
-        k[MAGIC.len()..MAGIC.len() + X25519_LEN].copy_from_slice(&other_public);
-        assert!(open(&n, &k).is_err());
-    }
-
-    #[test]
     fn altered_ciphertext_is_rejected() {
         let (n, public) = RecipientKey::generate().unwrap();
         let mut k = seal(&public, b"secret").unwrap();
@@ -333,6 +315,18 @@ mod tests {
         // envelope "sealed" to it would have a predictable key, so it must
         // never be made.
         assert!(seal(&[0u8; 32], b"x").is_err());
+    }
+
+    #[test]
+    fn low_order_ephemeral_key_is_rejected_at_opening() {
+        // The same point as the sender's key in a received envelope: refused
+        // at the key exchange, before the blob is tried.
+        let (n, public) = RecipientKey::generate().unwrap();
+        let mut envelope = seal(&public, b"x").unwrap();
+        envelope[MAGIC.len()..MAGIC.len() + X25519_LEN].fill(0);
+        let err = open(&n, &envelope).unwrap_err();
+        assert!(matches!(err, TlsError::ProofInvalid(_)), "{err:?}");
+        assert!(format!("{err}").contains("ephemeral key"), "{err}");
     }
 
     #[test]
@@ -397,11 +391,5 @@ mod tests {
         assert!(d.contains("REDACTED"), "{d}");
         assert!(!d.contains("171"), "key bytes in Debug: {d}");
         assert!(!d.to_lowercase().contains("ab"), "key bytes in Debug: {d}");
-    }
-
-    #[test]
-    fn public_key_is_stable_for_same_private() {
-        let n = RecipientKey::from_bytes(secret([7u8; 32])).unwrap();
-        assert_eq!(n.public().unwrap(), n.public().unwrap());
     }
 }

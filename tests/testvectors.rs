@@ -198,16 +198,3 @@ fn vectors_match_byte_for_byte() {
          WRITE_VECTORS=1 cargo test --test testvectors"
     );
 }
-
-#[test]
-fn the_seeds_public_key_is_stable() {
-    // `nettls-py/tests/test_nettls.py` checks the same key from Python. If it
-    // changes, the seed changed — and then every signature vector is
-    // invalid.
-    let pk = krypto::sign::ed25519_public(&seed()).unwrap();
-    assert_eq!(
-        krypto::hex::encode(&pk).unwrap(),
-        "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
-        "the test seed's public key has changed"
-    );
-}

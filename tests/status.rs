@@ -78,16 +78,6 @@ fn broken_peer_is_alert_and_named_in_the_headline() {
 const DAY: i64 = 86_400;
 
 #[test]
-fn a_fresh_thirty_day_certificate_is_ok() {
-    // Mode 2 lifetime. A fixed 30-day threshold made this amber from the
-    // first hour, so the report could never be green in mode 2.
-    let m = material(30);
-    let r = Report::collect(now(), &m, None, vec![]);
-    assert_eq!(r.level, Level::Ok, "{}", r.headline);
-    assert!(!r.identity.expiry_warning);
-}
-
-#[test]
 fn expiry_warning_is_warn_once_half_the_lifetime_has_passed() {
     let m = material(30);
     let (nb, na) = (m.not_before().unwrap(), m.not_after().unwrap());
@@ -136,7 +126,7 @@ fn days_until_expiry_is_negative_from_the_first_second_after_expiry() {
 }
 
 #[test]
-fn rotation_alarm_beats_warn_and_pending_reads_from_generations() {
+fn a_rotation_alarm_is_alert_and_named_and_a_bootstrap_peer_is_ok() {
     let m = material(365);
     let status = Status {
         waiting_for: vec!["gateway".into()],
@@ -147,11 +137,12 @@ fn rotation_alarm_beats_warn_and_pending_reads_from_generations() {
     assert_eq!(r.level, Level::Alert);
     assert!(r.headline.contains("gateway"), "{}", r.headline);
 
-    // A peer with an announced next reads as RotationPending.
+    // A peer in bootstrap, with nothing announced, reads as Ok.
     let g = Generations::from_approval(
         Generation::from_der(m.cert_chain()[0].as_ref().to_vec()).unwrap(),
     );
     let p = PeerReport::from_generations("gateway", &g);
-    assert_eq!(p.state, PeerState::Ok); // bootstrap: nothing pending
+    assert!(g.is_bootstrap());
+    assert_eq!(p.state, PeerState::Ok);
     assert_eq!(p.current_fingerprint, m.fingerprint_sha256());
 }

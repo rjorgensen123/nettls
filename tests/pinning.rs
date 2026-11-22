@@ -15,25 +15,6 @@ fn fresh_fingerprint() -> String {
 }
 
 #[test]
-fn accepts_canonical_form() {
-    let fp = fresh_fingerprint();
-    pinned_client_config(&fp).unwrap();
-}
-
-#[test]
-fn accepts_openssl_format_with_colons_and_uppercase() {
-    let fp = fresh_fingerprint();
-    let openssl_style: Vec<String> = fp
-        .as_bytes()
-        .chunks(2)
-        .map(|c| String::from_utf8_lossy(c).to_uppercase())
-        .collect();
-    pinned_client_config(&openssl_style.join(":")).unwrap();
-    pinned_client_config(&format!("sha256:{}", openssl_style.join(":"))).unwrap();
-    pinned_client_config(&format!("  {fp}  ")).unwrap();
-}
-
-#[test]
 fn rejects_everything_not_32_bytes() {
     for bad in [
         "",

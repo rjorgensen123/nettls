@@ -354,17 +354,6 @@ mod tests {
     // --- bootstrap: rotation 1 ------------------------------------------------ //
 
     #[test]
-    fn bootstrap_is_single_signed_and_accepted_without_previous() {
-        let c0 = generation("c0");
-        let c1 = generation("c1");
-        let k = Announcement::new("gateway", None, (&c0.fp, &c0.pkcs8), &c1.pem, 100).unwrap();
-
-        assert!(k.is_bootstrap());
-        k.verify(None, &c0.der)
-            .expect("rotation 1 must be accepted");
-    }
-
-    #[test]
     fn single_signature_rejected_when_receiver_has_a_previous() {
         // The emphasis is on HAS: it is the receiver's own state that decides,
         // not a field in the message. This is the attack the rule exists for —
@@ -382,22 +371,6 @@ mod tests {
     }
 
     // --- steady state: two signatures ------------------------------------------ //
-
-    #[test]
-    fn double_signed_announcement_accepted() {
-        let c0 = generation("c0");
-        let c1 = generation("c1");
-        let c2 = generation("c2");
-        let k = Announcement::new(
-            "gateway",
-            Some((&c0.fp, &c0.pkcs8)),
-            (&c1.fp, &c1.pkcs8),
-            &c2.pem,
-            100,
-        )
-        .unwrap();
-        k.verify(Some(&c0.der), &c1.der).expect("must hold");
-    }
 
     #[test]
     fn wrong_previous_signature_rejected() {
@@ -516,44 +489,6 @@ mod tests {
         let text = serde_json::to_string(&k.to_json().unwrap()).unwrap();
         assert!(!text.contains("prev_fingerprint"), "{text}");
         assert!(!text.contains("sig_prev"), "{text}");
-    }
-
-    #[test]
-    fn half_announcement_rejected() {
-        // `prev_fingerprint` without `sig_prev` — we do not guess at what was meant.
-        let c0 = generation("c0");
-        let c1 = generation("c1");
-        let c2 = generation("c2");
-        let k = Announcement::new(
-            "gateway",
-            Some((&c0.fp, &c0.pkcs8)),
-            (&c1.fp, &c1.pkcs8),
-            &c2.pem,
-            100,
-        )
-        .unwrap();
-        let mut j = k.to_json().unwrap();
-        j.sig_prev = None;
-        assert!(Announcement::from_json(&j).is_err());
-    }
-
-    #[test]
-    fn unknown_version_rejected() {
-        let c0 = generation("c0");
-        let c1 = generation("c1");
-        let k = Announcement::new("gateway", None, (&c0.fp, &c0.pkcs8), &c1.pem, 100).unwrap();
-        let mut j = k.to_json().unwrap();
-        j.v = "nettls-rotate/v3".into();
-        assert!(Announcement::from_json(&j).is_err());
-    }
-
-    #[test]
-    fn pem_with_multiple_certificates_rejected() {
-        let a = generation("a");
-        let b = generation("b");
-        let both = format!("{}{}", a.pem, b.pem);
-        assert!(fingerprint_from_pem(&both).is_err());
-        assert!(fingerprint_from_pem("not pem at all").is_err());
     }
 }
 
@@ -756,14 +691,6 @@ mod receipt_tests {
         let read_back: ReceiptJson = serde_json::from_str(&text).unwrap();
         assert_eq!(Receipt::from_json(&read_back).unwrap(), k);
     }
-
-    #[test]
-    fn unknown_version_rejected() {
-        let k = Receipt::new("service", "gateway", FP, 100, &seed()).unwrap();
-        let mut j = k.to_json().unwrap();
-        j.v = "nettls-rotate-ack/v1".into();
-        assert!(Receipt::from_json(&j).is_err());
-    }
 }
 
 // --------------------------------------------------------------------------- //
@@ -883,16 +810,6 @@ mod archive_tests {
         assert_eq!(v.len(), 2);
         assert_eq!(v[0], a);
         assert_eq!(v[1], b);
-        let _ = std::fs::remove_dir_all(&d);
-    }
-
-    #[test]
-    fn archiving_appends_and_does_not_overwrite() {
-        let d = tmpdir("append");
-        archive(&d, &announcement("a")).unwrap();
-        archive(&d, &announcement("b")).unwrap();
-        archive(&d, &announcement("c")).unwrap();
-        assert_eq!(read_archive(&d).unwrap().0.len(), 3);
         let _ = std::fs::remove_dir_all(&d);
     }
 

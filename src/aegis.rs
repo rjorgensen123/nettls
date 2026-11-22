@@ -274,16 +274,6 @@ mod tests {
     }
 
     #[test]
-    fn record_roundtrip() {
-        let (mut enc, mut dec) = pair();
-        let plain = b"the seam, not the primitive";
-        let mut body = encrypt(&mut *enc, plain, 0);
-        assert_eq!(body.len(), plain.len() + 1 + TAG_LEN);
-        let out = decrypt(&mut *dec, &mut body, 0).unwrap();
-        assert_eq!(out, plain);
-    }
-
-    #[test]
     fn tampering_and_wrong_sequence_are_refused() {
         let (mut enc, mut dec) = pair();
         let mut body = encrypt(&mut *enc, b"payload", 5);
@@ -304,14 +294,6 @@ mod tests {
         assert_eq!(&n[..NONCE_LEN], &Nonce::new(&iv, 1).0);
         assert!(n[NONCE_LEN..].iter().all(|b| *b == 0));
         assert_ne!(nonce32(&iv, 1), nonce32(&iv, 2));
-    }
-
-    #[test]
-    fn the_suite_is_ours_and_tls13_only() {
-        let s = suite();
-        assert_eq!(s.suite(), CipherSuite::Unknown(CODEPOINT));
-        assert!(s.tls13().is_some());
-        assert_eq!(s.tls13().unwrap().aead_alg.key_len(), KEY_LEN);
     }
 
     /// **The exit condition, checked by the build.** In rustls 0.23 the TLS 1.3

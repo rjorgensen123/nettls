@@ -192,13 +192,6 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip() {
-        let file = lock(&pw("secret"), b"peer registry + keys").unwrap();
-        let out = unlock(&pw("secret"), &file).unwrap();
-        out.expose(|b| assert_eq!(b, b"peer registry + keys"));
-    }
-
-    #[test]
     fn wrong_password_gives_authentication_failure() {
         // O-7: no stored verification hash — the AEAD speaks up.
         let file = lock(&pw("secret"), b"x").unwrap();

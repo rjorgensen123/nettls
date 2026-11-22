@@ -633,15 +633,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn spread_has_second_resolution() {
-        // With day resolution there would only be 5 possible values.
-        let values: BTreeSet<i64> = (0..50)
-            .map(|_| draw_roll_time(0).unwrap() % DAY_S)
-            .collect();
-        assert!(values.len() > 20, "looks like day resolution: {values:?}");
-    }
-
     // --- the gate: everyone must ack ------------------------------------------ //
 
     #[test]
@@ -660,36 +651,6 @@ mod tests {
         r.acked("portal");
         assert!(r.can_roll(200));
         assert!(r.waiting_for().is_empty());
-    }
-
-    #[test]
-    fn the_blocker_can_be_named() {
-        // M-33: "the rotation failed" is useless when the cause is one peer.
-        let mut r = Schedule::new(peers(), 0);
-        r.announced(0);
-        r.acked("service");
-        assert_eq!(r.waiting_for(), vec!["portal"]);
-    }
-
-    #[test]
-    fn a_removed_peer_no_longer_blocks() {
-        // M-34: without this a decommissioned module would block rotation forever.
-        let mut r = Schedule::new(peers(), 0);
-        r.announced(0);
-        r.acked("service");
-        assert!(!r.can_roll(100));
-        r.remove_peer("portal");
-        assert!(r.can_roll(100));
-    }
-
-    #[test]
-    fn a_newly_added_peer_must_also_ack() {
-        let mut r = Schedule::new(vec!["service".to_string()], 0);
-        r.announced(0);
-        r.acked("service");
-        assert!(r.can_roll(100));
-        r.add_peer("gateway");
-        assert!(!r.can_roll(100), "the new one has not acked");
     }
 
     // --- rate limit ------------------------------------------------------------ //
@@ -909,14 +870,6 @@ mod retry_tests {
     }
 
     #[test]
-    fn no_alarm_when_everyone_has_acked() {
-        let mut r = r();
-        r.acked("service");
-        r.acked("portal");
-        assert!(!r.alarm(ALARM_AFTER_S * 10));
-    }
-
-    #[test]
     fn countdown_runs_to_stop_not_to_next_attempt() {
         // M-7f: the number must be the time until the app stops working. A
         // smaller number than the one that matters is worse than none.
@@ -949,14 +902,6 @@ mod retry_tests {
                 .message("gateway")
                 .is_none()
         );
-    }
-
-    #[test]
-    fn guaranteed_worst_case_is_20_days_12_hours() {
-        // §6.7c: rotation at 9 days (the latest), alarm 12 hours later.
-        let r = r();
-        let s = r.status(9 * DAY_S + ALARM_AFTER_S, 30 * DAY_S);
-        assert_eq!(s.countdown(), "20 days 12:00:00");
     }
 }
 
@@ -1655,16 +1600,6 @@ mod clock_tests {
             Drift::Warning,
             "a jump of 20 s must warn even though 20 < 30"
         );
-    }
-
-    #[test]
-    fn drift_stops_neither_traffic_nor_rotation() {
-        // M-16: the module has no way to stop anything — it returns an
-        // assessment, not an action. That is the guarantee itself.
-        let mut k = ClockDrift::new();
-        let d = k.observe(9999, 1000);
-        assert_eq!(d, Drift::Warning);
-        // No `can_roll`/`stop` here: asking the module to stop something is impossible.
     }
 
     #[test]

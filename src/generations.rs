@@ -291,18 +291,6 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_has_no_previous_and_accepts_single_signature() {
-        let c0 = new_gen("c0");
-        let c1 = new_gen("c1");
-        let mut g = Generations::from_approval(c0.g.clone());
-        assert!(g.is_bootstrap());
-
-        let k = announce("gateway", None, &c0, &c1, 1);
-        assert_eq!(g.receive(&k).unwrap(), Received::Stored);
-        assert_eq!(g.next().unwrap().fingerprint(), c1.g.fingerprint());
-    }
-
-    #[test]
     fn the_two_roles_are_not_the_same() {
         // The core of the module: previous verifies announcements, but lets
         // no one into a handshake.
@@ -332,23 +320,6 @@ mod tests {
         let (previous, current) = g.for_signing();
         assert_eq!(previous.unwrap().fingerprint(), c0.g.fingerprint());
         assert_eq!(current.fingerprint(), c1.g.fingerprint());
-    }
-
-    #[test]
-    fn promotion_happens_on_observation() {
-        let c0 = new_gen("c0");
-        let c1 = new_gen("c1");
-        let mut g = Generations::from_approval(c0.g.clone());
-        g.receive(&announce("gateway", None, &c0, &c1, 1)).unwrap();
-
-        // Before observation: nothing has moved.
-        assert_eq!(g.current().fingerprint(), c0.g.fingerprint());
-        assert!(g.previous().is_none());
-
-        assert!(g.observed(c1.g.fingerprint()));
-        assert_eq!(g.current().fingerprint(), c1.g.fingerprint());
-        assert_eq!(g.previous().unwrap().fingerprint(), c0.g.fingerprint());
-        assert!(g.next().is_none());
     }
 
     #[test]

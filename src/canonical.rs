@@ -293,77 +293,6 @@ mod tests {
     const FP_B: &str = "bb00112233445566778899aabbccddeeff00112233445566778899aabbccddee";
     const FP_C: &str = "cc00112233445566778899aabbccddeeff00112233445566778899aabbccddee";
 
-    // --- exact bytes, not string equality ----------------------------------- //
-
-    #[test]
-    fn approve_yields_exactly_expected_bytes() {
-        let out = approve_v1("gateway", FP_A, "operator", 1_700_000_000).unwrap();
-        let expected = format!("nettls-approve/v1\ngateway\n{FP_A}\noperator\n1700000000");
-        assert_eq!(out, expected.as_bytes());
-        assert_ne!(*out.last().unwrap(), b'\n', "a trailing LF must NOT exist");
-    }
-
-    #[test]
-    fn rotate_yields_exactly_expected_bytes() {
-        let out = rotate_v2("gateway", Some(FP_A), FP_B, FP_C, 1_700_000_000).unwrap();
-        let expected = format!("nettls-rotate/v2\ngateway\n{FP_A}\n{FP_B}\n{FP_C}\n1700000000");
-        assert_eq!(out, expected.as_bytes());
-    }
-
-    #[test]
-    fn first_rotation_serializes_prev_as_dash() {
-        let out = rotate_v2("gateway", None, FP_B, FP_C, 1_700_000_000).unwrap();
-        let expected = format!("nettls-rotate/v2\ngateway\n-\n{FP_B}\n{FP_C}\n1700000000");
-        assert_eq!(out, expected.as_bytes());
-        // The line count is the same as with prev — a vanished field would
-        // make the next line shift up and mean something else.
-        assert_eq!(
-            out.iter().filter(|b| **b == b'\n').count(),
-            rotate_v2("gateway", Some(FP_A), FP_B, FP_C, 1)
-                .unwrap()
-                .iter()
-                .filter(|b| **b == b'\n')
-                .count()
-        );
-    }
-
-    #[test]
-    fn ack_yields_exactly_expected_bytes() {
-        let out = rotate_ack_v2("service", "gateway", FP_C, 1_700_000_000).unwrap();
-        assert_eq!(
-            out,
-            format!("nettls-rotate-ack/v2\nservice\ngateway\n{FP_C}\n1700000000").as_bytes()
-        );
-    }
-
-    #[test]
-    fn pairsecret_yields_exactly_expected_bytes() {
-        let out = pairsecret_v1("service", "gateway", FP_A, FP_B, 1_700_000_000).unwrap();
-        assert_eq!(
-            out,
-            format!("nettls-pairsecret/v1\nservice\ngateway\n{FP_A}\n{FP_B}\n1700000000")
-                .as_bytes()
-        );
-    }
-
-    // --- CRLF and trailing LF ------------------------------------------------ //
-
-    #[test]
-    fn no_crlf_anywhere() {
-        for out in [
-            approve_v1("gateway", FP_A, "operator", 1).unwrap(),
-            rotate_v2("gateway", Some(FP_A), FP_B, FP_C, 1).unwrap(),
-            rotate_ack_v2("service", "gateway", FP_C, 1).unwrap(),
-            pairsecret_v1("service", "gateway", FP_A, FP_B, 1).unwrap(),
-        ] {
-            assert!(
-                !out.windows(2).any(|w| w == b"\r\n"),
-                "CRLF in canonical form"
-            );
-            assert_ne!(*out.last().unwrap(), b'\n');
-        }
-    }
-
     // --- field validation: everything that could break the line structure --- //
 
     #[test]
@@ -380,31 +309,5 @@ mod tests {
     fn empty_name_is_rejected() {
         assert!(approve_v1("", FP_A, "operator", 1).is_err());
         assert!(approve_v1("gateway", FP_A, "", 1).is_err());
-    }
-
-    #[test]
-    fn wrong_fingerprint_is_rejected() {
-        assert!(approve_v1("gateway", "short", "operator", 1).is_err());
-        assert!(approve_v1("gateway", &format!("sha256:{FP_A}"), "operator", 1).is_err());
-        assert!(approve_v1("gateway", &FP_A.to_uppercase(), "operator", 1).is_err());
-        assert!(approve_v1("gateway", &"z".repeat(64), "operator", 1).is_err());
-    }
-
-    #[test]
-    fn non_ascii_in_names_is_allowed() {
-        // `approved_by` is a username. Norwegian characters must not be
-        // blocked — but they must yield the same bytes on both sides, so the
-        // weight is on UTF-8. (The value below deliberately probes non-ASCII.)
-        let out = approve_v1("gateway", FP_A, "bjørn-øyvind", 1).unwrap();
-        assert_eq!(
-            out,
-            format!("nettls-approve/v1\ngateway\n{FP_A}\nbjørn-øyvind\n1").as_bytes()
-        );
-    }
-
-    #[test]
-    fn negative_timestamp_serializes_as_signed_decimal() {
-        let out = approve_v1("gateway", FP_A, "operator", -5).unwrap();
-        assert!(out.ends_with(b"\n-5"));
     }
 }

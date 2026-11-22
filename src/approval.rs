@@ -253,13 +253,6 @@ mod tests {
     }
 
     #[test]
-    fn approval_verifies_against_pinned_key() {
-        let g = Approval::new("gateway", FP, "operator", 100, "portal", &seed()).unwrap();
-        let r = register();
-        g.verify(&r).expect("must hold");
-    }
-
-    #[test]
     fn unknown_key_id_says_anchor_cannot_be_verified() {
         let g = Approval::new("gateway", FP, "operator", 100, "op:operator", &seed()).unwrap();
         let r = register();
@@ -306,14 +299,6 @@ mod tests {
         let t = serde_json::to_string(&g.to_json().unwrap()).unwrap();
         let read_back: ApprovalJson = serde_json::from_str(&t).unwrap();
         assert_eq!(Approval::from_json(&read_back).unwrap(), g);
-    }
-
-    #[test]
-    fn unknown_version_rejected() {
-        let g = Approval::new("gateway", FP, "operator", 100, "portal", &seed()).unwrap();
-        let mut j = g.to_json().unwrap();
-        j.v = "nettls-approve/v2".into();
-        assert!(Approval::from_json(&j).is_err());
     }
 
     // --- the ONE code path (M-9) ---------------------------------------------- //
