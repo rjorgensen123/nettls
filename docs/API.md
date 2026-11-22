@@ -938,7 +938,7 @@ Do not build one of your own.
 **Safe to build on:** the wire format (the frozen table
 at the top — changing it is breaking regardless of semver) · the `TlsError` branches
 (`#[non_exhaustive]`) · the `CertSource`/`TlsMaterial` surface · the pinning model (full
-signature verification, constant-time fingerprint comparison in `pin`, resumption off) · the §6
+signature verification, constant-time fingerprint comparison, resumption off) · the §6
 message forms and verification orders · the generation pair's two roles · the `Announcer::new`
 contract (load-or-init, fail-closed) · the switch point (chain + serving together, consumer's
 port) · the algorithm layers (AEGIS-256 default, AES-256-GCM as the bridge, algorithm from the

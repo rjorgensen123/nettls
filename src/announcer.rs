@@ -37,6 +37,7 @@ use zeroize::Zeroize;
 
 use crate::announcement::Announcement;
 use crate::error::{TlsError, to_hex};
+use crate::fingerprint::same_fingerprint;
 
 /// Seconds in a day.
 pub const DAY_S: i64 = 86_400;
@@ -398,7 +399,7 @@ impl Announcer {
         let current_fp = to_hex("the certificate fingerprint", &krypto::sha256(&der))?;
         let current_pkcs8 = crate::pkcs8::pkcs8_p256(material.key_der(), &der)?;
 
-        if read_back.fingerprint == current_fp {
+        if same_fingerprint(&read_back.fingerprint, &current_fp) {
             return Err(TlsError::Chain(format!(
                 "previous and current have the same fingerprint ({current_fp}). The state on \
                  disk is inconsistent, and the chain cannot be used"
@@ -406,7 +407,7 @@ impl Announcer {
         }
         // §6.11 N-4. Files from before 0.10.0 do not name their `current`.
         if let Some(c) = &read_back.current
-            && *c != current_fp
+            && !same_fingerprint(c, &current_fp)
         {
             return Err(TlsError::Chain(format!(
                 "the previous key in {} belongs to {c}, but the material in {} is {current_fp}. \
@@ -492,10 +493,13 @@ impl Announcer {
             "the certificate fingerprint",
             &krypto::sha256(m.cert_chain()[0].as_ref()),
         )?;
-        let chain_ok = self
-            .read_previous()?
-            .is_some_and(|p| p.fingerprint == previous && p.current.as_deref() == Some(current));
-        if on_disk == current && chain_ok {
+        let chain_ok = self.read_previous()?.is_some_and(|p| {
+            same_fingerprint(&p.fingerprint, previous)
+                && p.current
+                    .as_deref()
+                    .is_some_and(|c| same_fingerprint(c, current))
+        });
+        if same_fingerprint(&on_disk, current) && chain_ok {
             return Ok(());
         }
         Err(TlsError::Chain(format!(
@@ -1846,7 +1850,7 @@ impl Announcer {
             .current
             .0
             .clone();
-        if k.new_fingerprint() == current {
+        if same_fingerprint(k.new_fingerprint(), &current) {
             self.clean_up_switch(&current)?;
             return Ok(false);
         }

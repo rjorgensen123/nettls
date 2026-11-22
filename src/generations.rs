@@ -35,6 +35,7 @@
 
 use crate::announcement::Announcement;
 use crate::error::{TlsError, to_hex};
+use crate::fingerprint::same_fingerprint;
 use krypto::sha256;
 
 /// One certificate with its fingerprint.
@@ -149,7 +150,7 @@ impl Generations {
     ) -> Result<Self, TlsError> {
         for (name, g) in [("previous", &previous), ("next", &next)] {
             if let Some(g) = g
-                && g.fingerprint() == current.fingerprint()
+                && same_fingerprint(g.fingerprint(), current.fingerprint())
             {
                 return Err(TlsError::Params(format!(
                     "restored state has \"{name}\" equal to \"current\" ({}) — \
@@ -159,7 +160,7 @@ impl Generations {
             }
         }
         if let (Some(f), Some(n)) = (&previous, &next)
-            && f.fingerprint() == n.fingerprint()
+            && same_fingerprint(f.fingerprint(), n.fingerprint())
         {
             return Err(TlsError::Params(format!(
                 "restored state has \"previous\" equal to \"next\" ({}) — \
@@ -183,7 +184,7 @@ impl Generations {
     /// whole point (`Announcement::verify`).
     pub fn receive(&mut self, k: &Announcement) -> Result<Received, TlsError> {
         if let Some(n) = &self.next
-            && n.fingerprint() == k.new_fingerprint()
+            && same_fingerprint(n.fingerprint(), k.new_fingerprint())
         {
             return Ok(Received::Known);
         }
@@ -200,7 +201,7 @@ impl Generations {
     /// (`accepted_in_handshake`).
     pub fn observed(&mut self, fp: &str) -> bool {
         let Some(n) = &self.next else { return false };
-        if n.fingerprint() != fp {
+        if !same_fingerprint(n.fingerprint(), fp) {
             return false;
         }
         let fresh = self.next.take().expect("checked above");
@@ -582,7 +583,7 @@ impl ServerCertVerifier for GenerationVerifier {
         let accepted = g
             .accepted_in_handshake()
             .iter()
-            .any(|x| x.fingerprint() == fp);
+            .any(|x| same_fingerprint(x.fingerprint(), &fp));
         if !accepted {
             // The fingerprints are deliberately left out of the error: the
             // client knows what it expected, and what it saw belongs in a log

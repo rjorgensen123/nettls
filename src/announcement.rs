@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::canonical;
 use crate::error::{TlsError, to_hex};
+use crate::fingerprint::same_fingerprint;
 use crate::signature::{from_hex, verify_p256};
 use krypto::sha256;
 
@@ -165,7 +166,7 @@ impl Announcement {
     ) -> Result<(), TlsError> {
         // 1. The certificate MUST hash to the stated fingerprint (§6.5).
         let actual = fingerprint_from_pem(&self.new_cert_pem)?;
-        if actual != self.new_fp {
+        if !same_fingerprint(&actual, &self.new_fp) {
             return Err(TlsError::ProofInvalid(format!(
                 "new_cert_pem hashes to {actual}, but the announcement says {} — \
                  the certificate was swapped in transit",
@@ -175,7 +176,7 @@ impl Announcement {
 
         // 2. The announcement must apply to the identity we actually have.
         let actual_curr = to_hex("the certificate fingerprint", &sha256(curr_cert_der))?;
-        if actual_curr != self.curr_fp {
+        if !same_fingerprint(&actual_curr, &self.curr_fp) {
             return Err(TlsError::Chain(format!(
                 "the announcement is issued by {}, but we know {actual_curr} as current — \
                  we have missed a rotation, or this is a different instance",
@@ -192,7 +193,7 @@ impl Announcement {
         match (prev_cert_der, &self.prev_fp, &self.sig_prev) {
             (Some(der), Some(fp), Some(sig)) => {
                 let actual_prev = to_hex("the certificate fingerprint", &sha256(der))?;
-                if &actual_prev != fp {
+                if !same_fingerprint(&actual_prev, fp) {
                     return Err(TlsError::Chain(format!(
                         "the announcement states {fp} as previous, we have {actual_prev}"
                     )));
@@ -630,7 +631,7 @@ impl Receipt {
     /// Both are required. A receipt that is genuine but applies to a *different*
     /// rotation is a replay — and it must not make us roll.
     pub fn verify(&self, pinned_pubkey: &[u8], expected_new_fp: &str) -> Result<(), TlsError> {
-        if self.new_fp != expected_new_fp {
+        if !same_fingerprint(&self.new_fp, expected_new_fp) {
             return Err(TlsError::ProofInvalid(format!(
                 "the receipt covers {}, but we announced {expected_new_fp} — \
                  this is a receipt for a different rotation",

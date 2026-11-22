@@ -10,8 +10,9 @@
 //!
 //! The primitives live in `krypto` (0.5): the hash is `krypto::sha256`, the
 //! canonical serialization is `krypto::hex`, and authentication-decision
-//! comparisons are `krypto::ct_eq`. What remains here is the one thing that is
-//! *ours*: parsing a fingerprint the way an **operator** writes one.
+//! comparisons are `krypto::ct_eq`. What remains here are the two things that
+//! are *ours*: parsing a fingerprint the way an **operator** writes one, and
+//! the one place where two fingerprint strings are compared.
 
 use crate::error::TlsError;
 
@@ -63,6 +64,15 @@ pub(crate) fn parse_fingerprint(s: &str) -> Result<[u8; 32], TlsError> {
     Ok(out)
 }
 
+/// Whether two fingerprint strings are the same, compared with
+/// `krypto::ct_eq`. The text is compared as it is given: the canonical form is
+/// 64 lowercase hex characters, and a value in any other form is simply a
+/// different one. Every comparison of fingerprint strings that decides an
+/// answer in this crate goes through here.
+pub(crate) fn same_fingerprint(a: &str, b: &str) -> bool {
+    krypto::ct_eq(a.as_bytes(), b.as_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,5 +103,18 @@ mod tests {
         assert!(parse_fingerprint("abcd").is_err());
         assert!(parse_fingerprint(&"z".repeat(64)).is_err());
         assert!(parse_fingerprint("").is_err());
+    }
+
+    #[test]
+    fn same_fingerprint_is_true_only_for_an_exact_match() {
+        let fp = krypto::hex::encode(&[0xabu8; 32]).unwrap();
+        let equal = krypto::hex::encode(&[0xabu8; 32]).unwrap();
+        assert!(same_fingerprint(&fp, &equal));
+
+        let mut one_character_off = fp.clone();
+        one_character_off.replace_range(63.., "c");
+        assert!(!same_fingerprint(&fp, &one_character_off));
+
+        assert!(!same_fingerprint(&fp, &fp[..63]));
     }
 }

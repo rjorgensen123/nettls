@@ -21,6 +21,11 @@ sentence now names both.
 The docs now say it: the time fields are the sender's clock, for logs, and
 freshness is the caller's rule. No behaviour changed.
 
+### Changed — fingerprints are compared the same way everywhere *(2026-11-22)*
+
+The rolling path and the message checks compared fingerprints as text. They
+now use `krypto::ct_eq`, as the fixed pin does. No behaviour changed.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python
