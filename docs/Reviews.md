@@ -16,5 +16,5 @@ nettls has been reviewed by AI models. These are not audits by a security firm.
 | 2026-11-12 | Gemini | 0.11.0 | security audit |
 | 2026-11-12 | MiMo V2.6 Flash | 0.11.0 | security audit |
 
-The MiMo security audit used Cloudflare's
+The Gemini and MiMo security audits used Cloudflare's
 [`security-audit`](https://github.com/cloudflare/security-audit-skill) skill.

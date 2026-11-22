@@ -8,6 +8,14 @@ and the project follows [Semantic Versioning](https://semver.org/).
 > marked with the version it applies from, so a reader sees what holds for their version
 > without guessing.
 
+## [0.12.0] — not yet released
+
+### Changed — both security audits named with the skill they used *(2026-11-22)*
+
+`docs/Reviews.md` said that the MiMo security audit used Cloudflare's
+`security-audit` skill. The Gemini security audit used it too, and the
+sentence now names both.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python
