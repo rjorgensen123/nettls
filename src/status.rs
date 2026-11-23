@@ -15,8 +15,8 @@
 //!   user: component version, one traffic light, one headline. Serve this on
 //!   the general About surface.
 //! - [`Report`] itself — the **detailed** view: identity, rotation state,
-//!   per-peer trust. Peer names, waiting lists and deviations are operations
-//!   data — serve this **only on the admin surface**.
+//!   per-peer trust. Peer names and waiting lists are operations data — serve
+//!   this **only on the admin surface**.
 //!
 //! Both serialize with serde; drop them straight into your status JSON. No
 //! I/O, no clock: the caller passes `now` (Unix seconds), like the rest of
@@ -177,6 +177,27 @@ pub struct Summary {
     pub headline: String,
 }
 
+/// The three headlines that name peers. [`Report::collect`] writes them, and
+/// [`Report::summary`] recognises them by building the same text from the same
+/// data, so the two cannot drift apart.
+fn broken_headline(names: &[&str]) -> String {
+    format!(
+        "trust chain broken to {} — operator action required",
+        names.join(", ")
+    )
+}
+
+fn unreachable_headline(names: &[&str]) -> String {
+    format!("no answer from {}", names.join(", "))
+}
+
+fn alarm_headline(waiting_for: &[String]) -> String {
+    format!(
+        "rotation alarm: still waiting for {}",
+        waiting_for.join(", ")
+    )
+}
+
 impl Report {
     /// Collect the report. `now` is Unix seconds (the caller owns the clock,
     /// as everywhere else in the crate); `announcer_status` is `None` for a
@@ -243,13 +264,7 @@ impl Report {
             .unwrap_or(false);
 
         let (level, headline) = if !broken.is_empty() {
-            (
-                Level::Alert,
-                format!(
-                    "trust chain broken to {} — operator action required",
-                    broken.join(", ")
-                ),
-            )
+            (Level::Alert, broken_headline(&broken))
         } else if expired || stopping {
             (
                 Level::Alert,
@@ -261,19 +276,15 @@ impl Report {
                 "certificate expires within a day — communication stops then".to_string(),
             )
         } else if !unreachable.is_empty() {
-            (
-                Level::Alert,
-                format!("no answer from {}", unreachable.join(", ")),
-            )
+            (Level::Alert, unreachable_headline(&unreachable))
         } else if alarm {
             (
                 Level::Alert,
-                format!(
-                    "rotation alarm: still waiting for {}",
+                alarm_headline(
                     rotation
                         .as_ref()
-                        .map(|r| r.waiting_for.join(", "))
-                        .unwrap_or_default()
+                        .map(|r| r.waiting_for.as_slice())
+                        .unwrap_or(&[]),
                 ),
             )
         } else if expiry_warning {
@@ -295,11 +306,36 @@ impl Report {
     }
 
     /// The general view — what every logged-in user may see.
+    ///
+    /// The headline is the report's own, except where that one names peers: a
+    /// broken trust chain, a peer that does not answer and a rotation alarm
+    /// get a headline without the names *(0.12.0)*.
     pub fn summary(&self) -> Summary {
+        let named = |state: PeerState| -> Vec<&str> {
+            self.peers
+                .iter()
+                .filter(|p| p.state == state)
+                .map(|p| p.name.as_str())
+                .collect()
+        };
+        let waiting_for = self
+            .rotation
+            .as_ref()
+            .map(|r| r.waiting_for.as_slice())
+            .unwrap_or(&[]);
+        let headline = if self.headline == broken_headline(&named(PeerState::Broken)) {
+            "trust chain broken — operator action required".to_string()
+        } else if self.headline == unreachable_headline(&named(PeerState::Unreachable)) {
+            "no answer from a peer".to_string()
+        } else if self.headline == alarm_headline(waiting_for) {
+            "rotation alarm: still waiting for a peer".to_string()
+        } else {
+            self.headline.clone()
+        };
         Summary {
             version: self.version,
             level: self.level,
-            headline: self.headline.clone(),
+            headline,
         }
     }
 }

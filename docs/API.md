@@ -735,7 +735,7 @@ pub struct Summary { pub version: &'static str, pub level: Level, pub headline: 
 | View | Audience | Serve it on |
 |---|---|---|
 | `Report::summary()` — version, traffic light, headline; nothing else | every logged-in user | the general About surface |
-| `Report` — identity, rotation state, per-peer trust | admin only (peer names, waiting lists and deviations are operations data) | the admin surface |
+| `Report` — identity, rotation state, per-peer trust | admin only (peer names and waiting lists are operations data) | the admin surface |
 
 Everything serializes with serde — drop it straight into your status JSON. No I/O, no clock:
 you pass `now` (Unix seconds). The `expiry_warning` flag and the `level` are the crate's own
@@ -744,7 +744,8 @@ rules — never re-derive them.
 **A peer that does not answer** *(0.11.0)* is `PeerState::Unreachable`, set by the consumer with
 `PeerReport::unreachable` — it decides after how many failed attempts, or how long. The report is
 `Alert` with the headline `no answer from <names>`; a broken trust chain or an expiring
-certificate of our own takes the headline first. **`PeerState` is `#[non_exhaustive]` from
+certificate of our own takes the headline first. Where the headline names peers (a broken trust
+chain, no answer, a rotation alarm), `summary()` gives it without the names *(0.12.0)*. **`PeerState` is `#[non_exhaustive]` from
 0.11.0:** a `match` on it outside the crate needs a `_` arm, and how a state it does not know is
 shown is the consumer's own choice. A state added later changes nothing for anyone.
 

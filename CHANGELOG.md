@@ -67,6 +67,12 @@ the receiver out of step. It is now refused, on receipt and when made.
 certificate the caller built it from. It now puts the restored certificate
 into the resolver, as a rotation does.
 
+### Fixed — the short status view names no peers *(2026-11-23)*
+
+`Report::summary()` copied the headline, which names peers at three alarms:
+a broken trust chain, a peer that does not answer and a rotation alarm. It
+now gives those headlines without the names. `Report` itself is unchanged.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

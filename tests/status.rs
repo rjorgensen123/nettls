@@ -66,6 +66,33 @@ fn a_peer_that_does_not_answer_is_alert_and_named() {
 }
 
 #[test]
+fn the_summary_names_no_peer_where_the_report_does() {
+    let m = material(365);
+    let alarm = Status {
+        waiting_for: vec!["gateway".into()],
+        alarm: true,
+        seconds_until_stop: 86_400,
+    };
+    for (status, peers) in [
+        (None, vec![PeerReport::broken("gateway", "aa".repeat(32))]),
+        (
+            None,
+            vec![PeerReport::unreachable("gateway", "aa".repeat(32))],
+        ),
+        (Some(&alarm), vec![]),
+    ] {
+        let r = Report::collect(now(), &m, status, peers);
+        assert_eq!(r.level, Level::Alert);
+        assert!(r.headline.contains("gateway"), "{}", r.headline);
+
+        let s = r.summary();
+        assert_eq!(s.level, Level::Alert);
+        assert!(!s.headline.contains("gateway"), "{}", s.headline);
+        assert!(!s.headline.is_empty());
+    }
+}
+
+#[test]
 fn broken_peer_is_alert_and_named_in_the_headline() {
     let m = material(365);
     let peers = vec![PeerReport::broken("service", "aa".repeat(32))];
