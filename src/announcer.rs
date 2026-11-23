@@ -1383,6 +1383,10 @@ impl Announcer {
     /// memory moves. If that fails, nothing has been switched, the error is
     /// returned, and the next call tries again. An error after the switch can
     /// only come from removing the promise or `new/`, and says so *(0.10.0)*.
+    ///
+    /// What is read back from `new/` must be the certificate that was
+    /// announced. If it is not, the switch is refused with
+    /// [`TlsError::Chain`] and nothing moves *(0.12.0)*.
     pub fn roll_if_ready_gated(
         &self,
         now: i64,
@@ -1397,9 +1401,10 @@ impl Announcer {
                 return Ok(None);
             }
         }
-        // Only the key is needed from `Pending`, and it is copied into a new
-        // lock — the original stays until the switch has actually happened.
-        let new_pkcs8 = {
+        // The key and the announced fingerprint are taken from `Pending`. The
+        // key is copied into a new lock — the original stays until the switch
+        // has actually happened.
+        let (new_pkcs8, announced_fp) = {
             let g = self
                 .pending
                 .read()
@@ -1407,7 +1412,10 @@ impl Announcer {
             let Some(p) = g.as_ref() else {
                 return Ok(None);
             };
-            crate::secret::copy(&p.new_pkcs8)?
+            (
+                crate::secret::copy(&p.new_pkcs8)?,
+                p.announcement.new_fingerprint().to_string(),
+            )
         };
 
         // The consumer's gate — last word before anything moves (SPEC-nettls §6.7e).
@@ -1422,6 +1430,17 @@ impl Announcer {
             "the certificate fingerprint",
             &krypto::sha256(fresh.cert_chain()[0].as_ref()),
         )?;
+        // What is installed must be what was announced and acknowledged. The
+        // material in `new/` is our own, but it is read back from disk: a
+        // second `prepare`, another process on the same directory or a changed
+        // file puts something else there.
+        if !same_fingerprint(&new_fp, &announced_fp) {
+            return Err(TlsError::Chain(format!(
+                "the certificate in {} is {new_fp}, but {announced_fp} was announced and \
+                 acknowledged. The switch is refused, and the current certificate stays",
+                self.dir.join("new").display()
+            )));
+        }
         let mut next = self
             .schedule
             .read()

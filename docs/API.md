@@ -608,6 +608,7 @@ impl Announcer {
     pub fn roll_if_ready(&self, now: i64) -> Result<Option<String>, TlsError>;
     pub fn roll_if_ready_gated(&self, now: i64, safe_now: impl FnOnce() -> bool)
         -> Result<Option<String>, TlsError>;   // the consumer's last word; chain+serving switch together
+        // refused if what lies in `new/` is not the certificate that was announced (0.12.0)
     pub fn should_announce(&self, now: i64) -> bool;      // false if the lock is poisoned
     pub fn status(&self, now: i64, expires: i64) -> Result<Status, TlsError>;
     pub fn pending(&self) -> Option<Announcement>;        // None if the lock is poisoned

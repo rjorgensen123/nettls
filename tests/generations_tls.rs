@@ -882,6 +882,29 @@ fn a_failed_write_changes_nothing_and_the_next_call_switches() {
 }
 
 #[test]
+fn the_switch_refuses_material_that_is_not_what_was_announced() {
+    nettls::install_crypto_provider();
+    let c0 = generation();
+    let dir = dir_with("not-announced", &c0);
+    let resolver = Arc::new(nettls::RotatingResolver::new(&c0.material).unwrap());
+    let a = announcer_in(&dir, &c0, &resolver);
+    let k = a.prepare(100).unwrap();
+    a.acked("service").unwrap();
+
+    // Something else now lies where the announced certificate was put.
+    let other = generation();
+    other.material.save_pem(&dir.join("new")).unwrap();
+
+    let err = a.roll_if_ready(200).unwrap_err();
+    assert!(format!("{err}").contains("was announced"), "{err}");
+    assert_eq!(resolver.fingerprint_sha256(), c0.fp_bar());
+    let trio = a.own_trio().unwrap();
+    assert_eq!(trio.current_fingerprint, c0.fp_bar());
+    assert_eq!(trio.next_fingerprint.as_deref(), Some(k.new_fingerprint()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn after_a_restart_the_resolver_serves_the_restored_certificate() {
     nettls::install_crypto_provider();
     let c0 = generation();

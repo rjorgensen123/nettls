@@ -73,6 +73,12 @@ into the resolver, as a rotation does.
 a broken trust chain, a peer that does not answer and a rotation alarm. It
 now gives those headlines without the names. `Report` itself is unchanged.
 
+### Fixed — the switch installs only the certificate that was announced *(2026-11-23)*
+
+At the switch the new certificate is read back from `new/`. It was installed
+without a check; it must now be the one that was announced, or the switch is
+refused and the current certificate stays.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python
