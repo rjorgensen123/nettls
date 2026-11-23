@@ -92,6 +92,12 @@ in a name is refused too.
 call. `read_archive` skips a line that is not UTF-8 instead of failing, and
 its text says that what it returns is not verified.
 
+### Fixed — the Python stream takes over a real socket only *(2026-11-23)*
+
+`Stream.connect` and `Stream.accept` took any object with the right two
+methods. They now require a `socket.socket` and raise `TypeError` for
+anything else, before the object is asked to hand anything over.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

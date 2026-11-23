@@ -282,6 +282,29 @@ def test_a_non_blocking_socket_is_refused_and_left_alone():
         listener.close()
 
 
+def test_an_object_that_is_not_a_socket_is_refused_before_it_is_asked_for_anything():
+    class Lookalike:
+        detached = False
+
+        def gettimeout(self):
+            return None
+
+        def detach(self):
+            self.detached = True
+            return 0
+
+    server = identity("server").server_config()
+    client = nettls.pinned_client_config("ab" * 32)
+    for take in (
+        lambda s: Stream.connect(s, client, "localhost"),
+        lambda s: Stream.accept(s, server),
+    ):
+        fake = Lookalike()
+        with pytest.raises(TypeError, match="socket.socket"):
+            take(fake)
+        assert not fake.detached, "the object must not be asked to hand anything over"
+
+
 def test_a_closed_stream_refuses_and_closes_once():
     m = identity("server")
     port, thread, _ = serve_once(m.server_config(), echo_line)

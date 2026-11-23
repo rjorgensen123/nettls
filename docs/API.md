@@ -1067,7 +1067,8 @@ decision — `Trust::client_config` accepts `current` and `next` and promotes on
 so a `RotatingResolver` server follows the rotation. Both constructors complete the handshake
 before they return; an invalid `server_name` is `ParamsError`. `Stream` is a context manager that
 closes on exit, and its methods raise `ValueError` after `close`. The stream takes the socket over
-(`socket.detach()`), and its timeout carries over. `read`, `write`, `flush`, `close` and the
+(`socket.detach()`), and its timeout carries over; the object must be a `socket.socket`, and
+anything else is a `TypeError` *(0.12.0)*. `read`, `write`, `flush`, `close` and the
 handshake wait without the GIL; `peer_fingerprint`, `peer_certificate` and `alpn_protocol` wait
 for the stream's lock while holding it. A non-blocking socket is refused and left to the caller.
 The stream does one thing at a time: a read that waits holds it, so a write from another thread

@@ -33,7 +33,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use nettls::rustls;
-use pyo3::exceptions::{PyConnectionResetError, PyOSError, PyValueError};
+use pyo3::exceptions::{PyConnectionResetError, PyOSError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 use rustls::pki_types::ServerName;
@@ -195,7 +195,18 @@ impl Conn {
 
 /// Takes the socket over: after this, the Python socket object is detached
 /// and only the stream owns the descriptor.
+///
+/// The object must be a `socket.socket`, and that is checked before it is
+/// asked for anything (0.12.0): the hand-over below is only true of a real
+/// socket.
 fn take_socket(sock: &Bound<'_, PyAny>) -> PyResult<TcpStream> {
+    let socket_type = sock.py().import("socket")?.getattr("socket")?;
+    if !sock.is_instance(&socket_type)? {
+        return Err(PyTypeError::new_err(format!(
+            "expected a socket.socket, got {}",
+            sock.get_type().name()?
+        )));
+    }
     let timeout: Option<f64> = sock.call_method0("gettimeout")?.extract()?;
     let timeout = match timeout {
         None => None,
