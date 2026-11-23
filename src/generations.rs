@@ -54,19 +54,22 @@ impl std::fmt::Debug for Generation {
 }
 
 impl Generation {
-    /// From a DER-encoded certificate. Fails with [`TlsError::Encode`] when
-    /// the fingerprint cannot be encoded as hex *(0.12.0)*.
+    /// From a DER-encoded certificate. The bytes must be exactly one X.509
+    /// certificate, of any key type; anything else, bytes left over after the
+    /// certificate included, is a [`TlsError::Certificate`] *(0.12.0)*. Fails
+    /// with [`TlsError::Encode`] when the fingerprint cannot be encoded as hex
+    /// *(0.12.0)*.
     pub fn from_der(der: impl Into<Vec<u8>>) -> Result<Self, TlsError> {
         let der = der.into();
+        crate::material::read_certificate(&der)?;
         let fp = to_hex("the certificate fingerprint", &sha256(&der))?;
         Ok(Self { der, fp })
     }
 
-    /// From PEM.
+    /// From PEM: the one CERTIFICATE block, read as [`Generation::from_der`]
+    /// reads it *(0.12.0)*.
     pub fn from_pem(pem: &str) -> Result<Self, TlsError> {
-        let fp = crate::announcement::fingerprint_from_pem(pem)?;
-        let der = crate::announcement::der_from_pem(pem)?;
-        Ok(Self { der, fp })
+        Self::from_der(crate::announcement::der_from_pem(pem)?)
     }
 
     /// The certificate, DER-encoded.
@@ -133,9 +136,11 @@ impl Generations {
     ///
     /// # What the caller vouches for
     ///
-    /// This function **verifies nothing** — there is nothing to verify
-    /// against. Whoever calls it thereby asserts that the contents come from
-    /// the service's own, unmodified storage. Whoever can modify that storage
+    /// A [`Generation`] has been read as an X.509 certificate *(0.12.0)*, but
+    /// whether it is one we should trust, this function **cannot verify** —
+    /// there is nothing to verify it against.
+    /// Whoever calls it thereby asserts that the contents come from the
+    /// service's own, unmodified storage. Whoever can modify that storage
     /// chooses whom we trust, and that is why the integrity of the store is a
     /// security requirement on the consumer (SPEC-nettls §6.11b).
     ///
@@ -288,6 +293,23 @@ mod tests {
             t,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn a_generation_is_always_a_certificate() {
+        // 0.12.0: exactly one X.509 certificate, nothing else and nothing after it.
+        let c0 = new_gen("c0");
+        let mut trailing = c0.g.der().to_vec();
+        trailing.push(0);
+        for der in [b"not a certificate".to_vec(), trailing] {
+            let err = Generation::from_der(der).unwrap_err();
+            assert!(matches!(err, TlsError::Certificate(_)), "{err:?}");
+        }
+        let pem =
+            String::from_utf8(crate::pem::encode("CERTIFICATE", b"not a certificate").unwrap())
+                .unwrap();
+        let err = Generation::from_pem(&pem).unwrap_err();
+        assert!(matches!(err, TlsError::Certificate(_)), "{err:?}");
     }
 
     #[test]

@@ -161,6 +161,11 @@ impl TlsMaterial {
 }
 ```
 
+`load` refuses a leaf certificate whose SAN extension cannot be read, or that has a control
+character in its subject or in a name in its SAN list, with `TlsError::Certificate` *(0.12.0)*.
+Only control characters are refused; the stricter rules for names nettls generates itself do not
+apply to a certificate that is loaded.
+
 **`anchor_pkcs8` (0.8.1)** is the ONE documented place the key crosses from the TLS domain into
 the §6 domain: it feeds `Announcer::new`'s anchor, so announcements are signed with the same
 identity the server serves. It is not a general key export — the output is PKCS#8 for the anchor
@@ -332,6 +337,10 @@ impl Generation {
 pub enum Received { Stored, Known }   // Known = idempotent re-receipt, not an error
 ```
 
+A `Generation` is always exactly one X.509 certificate, of any key type: `from_der`, and `from_pem`
+after reading the one CERTIFICATE block, refuse anything else, bytes left over after the
+certificate included, with `TlsError::Certificate` *(0.12.0)*.
+
 `Generation::from_der` fails with `TlsError::Encode` when the fingerprint cannot be encoded as hex
 *(0.12.0)*.
 
@@ -341,7 +350,7 @@ pub enum Received { Stored, Known }   // Known = idempotent re-receipt, not an e
 impl Generations {
     pub fn from_approval(current: Generation) -> Self;
     pub fn restore(previous: Option<Generation>, current: Generation, next: Option<Generation>)
-        -> Result<Self, TlsError>;   // your own storage back in; shape-checked, nothing verified
+        -> Result<Self, TlsError>;   // your own storage back in; shape-checked, trust not verifiable (0.12.0)
     pub fn receive(&mut self, k: &Announcement) -> Result<Received, TlsError>;
     pub fn observed(&mut self, fp: &str) -> bool;                    // promotion ON OBSERVATION
     pub fn accepted_in_handshake(&self) -> Vec<&Generation>;         // current + next — NEVER previous
@@ -422,6 +431,10 @@ impl Announcement {
 > double-signed announcement whose `curr` matches the anchor: generation numbering is local to
 > the receiver.
 
+`verify` requires `new_cert_pem` to be an X.509 certificate with a P-256 key, right after the
+fingerprint check and before anything else: it is the key the next announcement is signed with
+*(0.12.0)*.
+
 `AnnouncementJson` (serialized form; the field names are contract): `v` · `announcer` ·
 `prev_fingerprint` · `curr_fingerprint` · `new_fingerprint` · `new_cert_pem` · `sent_at` ·
 `sig_prev` · `sig_curr`
@@ -468,6 +481,11 @@ impl IdentityJson {
 Read `fingerprint`/`cert_pem` **from what is actually served** (the resolver), never from a
 cached startup value. `new` fails with `TlsError::Encode` when the announcement's signatures cannot
 be encoded as hex *(0.12.0)*.
+
+Reading an `IdentityJson` (serde, and `loads` in Python) requires `fingerprint`, written as
+lowercase hex with or without its `sha256:` prefix, to be the SHA-256 of the one certificate in
+`cert_pem`. A mismatch, or a `cert_pem` that is not exactly one X.509 certificate, fails the read
+*(0.12.0)*.
 
 ---
 
@@ -772,6 +790,9 @@ pub fn p256_public_key(cert_der: &[u8]) -> Result<Vec<u8>, TlsError>;           
 pub fn sign_p256(pkcs8: &krypto::SecretBuf, message: &[u8]) -> Result<Vec<u8>, TlsError>;  // → krypto::sign; key never leaves the lock (0.8.3)
 pub fn verify_p256(cert_der: &[u8], message: &[u8], signature: &[u8]) -> Result<(), TlsError>;
 ```
+
+`p256_public_key` refuses bytes left over after the certificate, and a key whose parameters do not
+name the curve P-256 (OID 1.2.840.10045.3.1.7) *(0.12.0)*.
 
 ## `canonical` — what actually gets signed
 

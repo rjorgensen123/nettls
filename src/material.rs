@@ -291,6 +291,10 @@ impl fmt::Debug for TlsMaterial {
 
 impl TlsMaterial {
     /// Fetches, validates and (for `auto`) possibly generates and saves.
+    ///
+    /// A leaf certificate whose SAN extension cannot be read, or that has a
+    /// control character in its subject or in a name in its SAN list, is
+    /// refused with [`TlsError::Certificate`] *(0.12.0)*.
     pub fn load(src: &CertSource) -> Result<Self, TlsError> {
         match &src.kind {
             Kind::Files {
@@ -644,6 +648,24 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+/// Reads `der` as exactly one X.509 certificate. Bytes that do not parse, and
+/// bytes left over after the certificate, are a [`TlsError::Certificate`].
+pub(crate) fn read_certificate(
+    der: &[u8],
+) -> Result<x509_parser::certificate::X509Certificate<'_>, TlsError> {
+    let (rest, cert) = x509_parser::certificate::X509Certificate::from_der(der)
+        .map_err(|e| TlsError::Certificate(e.to_string()))?;
+    if !rest.is_empty() {
+        return Err(TlsError::Certificate(format!(
+            "there is data after the certificate ({} of {} bytes) — the input must be exactly \
+             one DER-encoded certificate",
+            rest.len(),
+            der.len()
+        )));
+    }
+    Ok(cert)
+}
+
 /// `notBefore` and `notAfter` of a certificate, as Unix seconds — what the
 /// client verifiers check the peer's certificate against *(0.11.0)*.
 pub(crate) fn validity(der: &[u8]) -> Result<(i64, i64), TlsError> {
@@ -656,6 +678,11 @@ pub(crate) fn validity(der: &[u8]) -> Result<(i64, i64), TlsError> {
 }
 
 /// Extracts the validity window, SAN list and subject from the leaf DER.
+///
+/// A SAN extension that cannot be read, and a control character in the
+/// subject or in a SAN, are errors: both end up in logs and on screens. Only
+/// control characters are refused here, not the stricter rules for names
+/// nettls generates itself, so certificates made by others keep loading.
 fn inspect(leaf: &CertificateDer<'_>) -> Result<(i64, i64, Vec<String>, String), TlsError> {
     let (_rest, cert) = x509_parser::certificate::X509Certificate::from_der(leaf.as_ref())
         .map_err(|e| TlsError::Certificate(e.to_string()))?;
@@ -663,16 +690,32 @@ fn inspect(leaf: &CertificateDer<'_>) -> Result<(i64, i64, Vec<String>, String),
     let not_before = cert.validity().not_before.timestamp();
     let not_after = cert.validity().not_after.timestamp();
     let subject = cert.subject().to_string();
+    if let Some(c) = subject.chars().find(|c| c.is_control()) {
+        return Err(TlsError::Certificate(format!(
+            "the subject {subject:?} contains the control character {c:?}"
+        )));
+    }
 
     let mut sans = Vec::new();
-    if let Ok(Some(ext)) = cert.subject_alternative_name() {
+    let san_extension = cert.subject_alternative_name().map_err(|e| {
+        TlsError::Certificate(format!(
+            "the subject alternative name extension cannot be read: {e}"
+        ))
+    })?;
+    if let Some(ext) = san_extension {
         for name in &ext.value.general_names {
             use x509_parser::extensions::GeneralName;
-            match name {
-                GeneralName::DNSName(s) => sans.push((*s).to_string()),
-                GeneralName::IPAddress(b) => sans.push(format_ip(b)),
-                other => sans.push(format!("{other}")),
+            let text = match name {
+                GeneralName::DNSName(s) => (*s).to_string(),
+                GeneralName::IPAddress(b) => format_ip(b),
+                other => format!("{other}"),
+            };
+            if let Some(c) = text.chars().find(|c| c.is_control()) {
+                return Err(TlsError::Certificate(format!(
+                    "the subject alternative name {text:?} contains the control character {c:?}"
+                )));
             }
+            sans.push(text);
         }
     }
 
@@ -907,4 +950,69 @@ fn validate_common_name(cn: &str) -> Result<(), TlsError> {
 /// hex *(0.12.0)*.
 pub fn cert_fingerprint_sha256(cert_der: &[u8]) -> Result<String, TlsError> {
     to_hex("the certificate fingerprint", &sha256(cert_der))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A self-signed P-256 certificate and its key as PEM, with the rcgen
+    /// parameters changed by `edit`. `SelfSignedParams` refuses the names
+    /// these tests need, so rcgen builds them.
+    fn built(edit: impl FnOnce(&mut rcgen::CertificateParams)) -> CertSource {
+        let mut p = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
+        edit(&mut p);
+        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let cert = p.self_signed(&key).unwrap();
+        CertSource::pem(cert.pem(), key.serialize_pem())
+    }
+
+    #[test]
+    fn a_san_list_that_cannot_be_read_is_an_error_at_load() {
+        // 0.12.0. The one entry in the list is an OCTET STRING, which is not a
+        // general name.
+        let src = built(|p| {
+            p.subject_alt_names.clear();
+            p.custom_extensions
+                .push(rcgen::CustomExtension::from_oid_content(
+                    &[2, 5, 29, 17],
+                    vec![0x30, 0x03, 0x04, 0x01, 0x00],
+                ));
+        });
+        let err = TlsMaterial::load(&src).unwrap_err();
+        assert!(matches!(err, TlsError::Certificate(_)), "{err:?}");
+        assert!(
+            format!("{err}").contains("the subject alternative name extension cannot be read"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_control_character_in_the_subject_or_a_san_is_an_error_at_load() {
+        // 0.12.0
+        let subject = built(|p| {
+            p.distinguished_name
+                .push(rcgen::DnType::CommonName, "example\u{7}portal");
+        });
+        let err = TlsMaterial::load(&subject).unwrap_err();
+        assert!(
+            format!("{err}").contains(
+                "the subject \"CN=example\\u{7}portal\" contains the control character '\\u{7}'"
+            ),
+            "{err}"
+        );
+
+        let san = built(|p| {
+            p.subject_alt_names = vec![rcgen::SanType::DnsName(
+                "example\u{7}.test".try_into().unwrap(),
+            )];
+        });
+        let err = TlsMaterial::load(&san).unwrap_err();
+        assert!(
+            format!("{err}").contains(
+                "the subject alternative name \"example\\u{7}.test\" contains the control character"
+            ),
+            "{err}"
+        );
+    }
 }

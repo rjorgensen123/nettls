@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use crate::canonical;
 use crate::error::{TlsError, to_hex};
 use crate::fingerprint::same_fingerprint;
-use crate::signature::{from_hex, verify_p256};
+use crate::signature::{from_hex, p256_public_key, verify_p256};
 use krypto::sha256;
 
 /// The fingerprint of a PEM certificate: SHA-256 over DER, hex without prefix.
@@ -159,6 +159,10 @@ impl Announcement {
     /// The order is not accidental either. **The fingerprint is checked first**:
     /// if `new_cert_pem` was swapped in transit, that must be discovered before
     /// we use that key for anything at all.
+    ///
+    /// Right after it, `new_cert_pem` must be an X.509 certificate with a P-256
+    /// key, the key the next announcement is signed with; a certificate of
+    /// another kind is refused before anything else is checked *(0.12.0)*.
     pub fn verify(
         &self,
         prev_cert_der: Option<&[u8]>,
@@ -173,6 +177,18 @@ impl Announcement {
                 self.new_fp
             )));
         }
+
+        // 1b. The new certificate carries the key the next announcement is
+        // signed with, so it must be X.509 with a P-256 key.
+        p256_public_key(&der_from_pem(&self.new_cert_pem)?).map_err(|e| match e {
+            TlsError::Certificate(s) => {
+                TlsError::Certificate(format!("new_cert_pem in the announcement: {s}"))
+            }
+            TlsError::ProofInvalid(s) => {
+                TlsError::ProofInvalid(format!("new_cert_pem in the announcement: {s}"))
+            }
+            other => other,
+        })?;
 
         // 2. The announcement must apply to the identity we actually have.
         let actual_curr = to_hex("the certificate fingerprint", &sha256(curr_cert_der))?;
@@ -326,14 +342,14 @@ mod tests {
     use crate::material::TlsMaterial;
     use crate::{CertSource, SelfSignedParams};
 
-    struct Gen {
-        pem: String,
+    pub(super) struct Gen {
+        pub(super) pem: String,
         der: Vec<u8>,
         pkcs8: krypto::SecretBuf,
-        fp: String,
+        pub(super) fp: String,
     }
 
-    fn generation(name: &str) -> Gen {
+    pub(super) fn generation(name: &str) -> Gen {
         let m = TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::new(
             name,
             [name],
@@ -463,6 +479,37 @@ mod tests {
             format!("{err}").contains("swapped in transit"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn a_new_certificate_without_a_p256_key_is_rejected() {
+        // 0.12.0: it carries the key the next announcement must be signed with.
+        let c0 = generation("c0");
+        let c1 = generation("c1");
+        let ed25519 = rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519).unwrap();
+        let ed25519_cert = rcgen::CertificateParams::new(vec!["c2".to_string()])
+            .unwrap()
+            .self_signed(&ed25519)
+            .unwrap();
+        let not_a_certificate =
+            String::from_utf8(crate::pem::encode("CERTIFICATE", b"not a certificate").unwrap())
+                .unwrap();
+
+        for new_cert_pem in [ed25519_cert.pem(), not_a_certificate] {
+            let k = Announcement::new(
+                "gateway",
+                Some((&c0.fp, &c0.pkcs8)),
+                (&c1.fp, &c1.pkcs8),
+                &new_cert_pem,
+                100,
+            )
+            .unwrap();
+            let err = k.verify(Some(&c0.der), &c1.der).unwrap_err();
+            assert!(
+                format!("{err}").contains("new_cert_pem in the announcement"),
+                "unexpected error: {err}"
+            );
+        }
     }
 
     #[test]
@@ -877,7 +924,14 @@ mod archive_tests {
 /// that is exactly the drift §6.14 is meant to prevent. The hex-versus-base64
 /// discrepancy arose in exactly that way: two sides each filling in their part
 /// of a shape nobody owned.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// # Reading it
+///
+/// Deserializing requires `fingerprint`, written as lowercase hex with or
+/// without its `sha256:` prefix, to be the SHA-256 of the one certificate in
+/// `cert_pem`. A mismatch, or a `cert_pem` that is not exactly one X.509
+/// certificate, fails the read *(0.12.0)*.
+#[derive(Debug, Clone, Serialize)]
 pub struct IdentityJson {
     /// The fingerprint being served right now, with the `sha256:` prefix.
     pub fingerprint: String,
@@ -929,18 +983,66 @@ impl IdentityJson {
     }
 }
 
+/// The fields of [`IdentityJson`] as they come off the wire, before the
+/// fingerprint is checked against the certificate.
+#[derive(Deserialize)]
+#[serde(rename = "IdentityJson")]
+struct IdentityJsonWire {
+    fingerprint: String,
+    cert_pem: String,
+    #[serde(default)]
+    not_after: Option<String>,
+    mode: crate::announcer::Mode,
+    sent_at: i64,
+    #[serde(default)]
+    announcement: Option<AnnouncementJson>,
+}
+
+impl<'de> Deserialize<'de> for IdentityJson {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let w = IdentityJsonWire::deserialize(deserializer)?;
+        require_served_fingerprint(&w.fingerprint, &w.cert_pem)
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            fingerprint: w.fingerprint,
+            cert_pem: w.cert_pem,
+            not_after: w.not_after,
+            mode: w.mode,
+            sent_at: w.sent_at,
+            announcement: w.announcement,
+        })
+    }
+}
+
+/// Requires `fingerprint`, as lowercase hex with or without its `sha256:`
+/// prefix, to be the SHA-256 of the one certificate in `cert_pem`. The error
+/// says which of the two is wrong.
+fn require_served_fingerprint(fingerprint: &str, cert_pem: &str) -> Result<(), String> {
+    let not_one = |e: TlsError| format!("cert_pem is not exactly one X.509 certificate: {e}");
+    let der = der_from_pem(cert_pem).map_err(not_one)?;
+    crate::material::read_certificate(&der).map_err(not_one)?;
+    let actual = to_hex("the certificate fingerprint", &sha256(&der)).map_err(|e| e.to_string())?;
+    let stated = fingerprint.strip_prefix("sha256:").unwrap_or(fingerprint);
+    if !same_fingerprint(stated, &actual) {
+        return Err(format!(
+            "the fingerprint {fingerprint:?} is not the SHA-256 of cert_pem, which is {actual}"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod identity_tests {
+    use super::tests::generation;
     use super::*;
     use crate::announcer::Mode;
 
-    const FP: &str = "aa00112233445566778899aabbccddeeff00112233445566778899aabbccddee";
-
     #[test]
     fn without_pending_rotation_announcement_is_omitted() {
+        let c = generation("gateway");
         let i = IdentityJson::new(
-            format!("sha256:{FP}"),
-            "-----BEGIN CERTIFICATE-----\n",
+            format!("sha256:{}", c.fp),
+            c.pem.clone(),
             None,
             Mode::Rolling,
             100,
@@ -956,9 +1058,10 @@ mod identity_tests {
     fn mode_and_sent_at_are_always_present() {
         // Both are part of the contract: mode because the client must compare
         // (§6.9b), sent_at because drift must be measurable (§6.7b).
+        let c = generation("gateway");
         let i = IdentityJson::new(
-            format!("sha256:{FP}"),
-            "x",
+            format!("sha256:{}", c.fp),
+            c.pem.clone(),
             None,
             Mode::Pinning,
             1_700_000_000,
@@ -972,9 +1075,10 @@ mod identity_tests {
 
     #[test]
     fn round_trip_preserves_everything() {
+        let c = generation("gateway");
         let i = IdentityJson::new(
-            format!("sha256:{FP}"),
-            "cert",
+            format!("sha256:{}", c.fp),
+            c.pem.clone(),
             Some("2026-09-10T12:00:00Z".into()),
             Mode::Rolling,
             5,
@@ -986,5 +1090,36 @@ mod identity_tests {
         assert_eq!(out.fingerprint, i.fingerprint);
         assert_eq!(out.mode, Mode::Rolling);
         assert_eq!(out.not_after.as_deref(), Some("2026-09-10T12:00:00Z"));
+    }
+
+    #[test]
+    fn reading_requires_the_fingerprint_of_cert_pem() {
+        // 0.12.0: the identity read must describe the certificate it carries.
+        let c = generation("gateway");
+        let other = generation("other");
+        let not_a_certificate =
+            String::from_utf8(crate::pem::encode("CERTIFICATE", b"not a certificate").unwrap())
+                .unwrap();
+        let read = |fingerprint: String, cert_pem: &str| {
+            let i = IdentityJson::new(fingerprint, cert_pem, None, Mode::Rolling, 5, None).unwrap();
+            serde_json::from_str::<IdentityJson>(&serde_json::to_string(&i).unwrap())
+        };
+
+        assert!(read(format!("sha256:{}", c.fp), &c.pem).is_ok());
+        assert!(read(c.fp.clone(), &c.pem).is_ok());
+
+        let err = read(format!("sha256:{}", other.fp), &c.pem).unwrap_err();
+        assert!(
+            err.to_string().contains("is not the SHA-256 of cert_pem"),
+            "{err}"
+        );
+
+        let own = krypto::hex::encode(&sha256(b"not a certificate")).unwrap();
+        let err = read(own, &not_a_certificate).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("cert_pem is not exactly one X.509 certificate"),
+            "{err}"
+        );
     }
 }

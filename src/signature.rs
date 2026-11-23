@@ -63,11 +63,11 @@ pub fn from_hex(s: &str) -> Result<Vec<u8>, TlsError> {
 /// Refuses everything but uncompressed P-256. A different key type is not an
 /// "unexpected configuration" here — it means the certificate cannot take part
 /// in §6 at all, and then it must say so at once.
+///
+/// The bytes must be exactly one certificate, nothing after it, and the key's
+/// parameters must name the curve P-256 (OID 1.2.840.10045.3.1.7) *(0.12.0)*.
 pub fn p256_public_key(cert_der: &[u8]) -> Result<Vec<u8>, TlsError> {
-    use x509_parser::prelude::FromDer;
-
-    let (_rest, cert) = x509_parser::certificate::X509Certificate::from_der(cert_der)
-        .map_err(|e| TlsError::Certificate(e.to_string()))?;
+    let cert = crate::material::read_certificate(cert_der)?;
     let spki = cert.public_key();
 
     // 1.2.840.10045.2.1 = id-ecPublicKey.
@@ -76,6 +76,25 @@ pub fn p256_public_key(cert_der: &[u8]) -> Result<Vec<u8>, TlsError> {
         return Err(TlsError::ProofInvalid(format!(
             "the certificate has key type OID {alg}, not ECDSA (id-ecPublicKey) — \
              §6 signatures are defined for ECDSA P-256"
+        )));
+    }
+
+    // 1.2.840.10045.3.1.7 = prime256v1, the curve P-256. The point length alone
+    // does not tell P-256 from another curve of the same size.
+    let curve = match &spki.algorithm.parameters {
+        Some(p) if p.tag() == x509_parser::asn1_rs::Tag::Oid => {
+            p.as_oid().ok().map(|oid| oid.to_id_string())
+        }
+        _ => None,
+    };
+    if curve.as_deref() != Some("1.2.840.10045.3.1.7") {
+        let named = match &curve {
+            Some(oid) => format!("the curve OID {oid}"),
+            None => "no curve OID".to_string(),
+        };
+        return Err(TlsError::ProofInvalid(format!(
+            "the certificate's EC key parameters name {named}, not P-256 \
+             (1.2.840.10045.3.1.7) — §6 signatures are defined for ECDSA P-256"
         )));
     }
 
@@ -96,6 +115,9 @@ pub fn p256_public_key(cert_der: &[u8]) -> Result<Vec<u8>, TlsError> {
 /// It is the certificate and not the fingerprint that must come in: a
 /// fingerprint is a hash, and a public key cannot be derived from it. That is
 /// the whole reason the announcement carries the certificate in full (§6.5).
+///
+/// The key is read with [`p256_public_key`], so the certificate must be
+/// exactly one certificate with a P-256 key *(0.12.0)*.
 pub fn verify_p256(cert_der: &[u8], message: &[u8], signature: &[u8]) -> Result<(), TlsError> {
     let key = p256_public_key(cert_der)?;
     krypto::sign::ecdsa_p256_verify(&key, message, signature).map_err(|_| {
@@ -147,6 +169,34 @@ mod tests {
         let (der, pkcs8) = cert_and_pkcs8();
         let sig = sign_p256(&pkcs8, b"hey").unwrap();
         assert!(verify_p256(&der, b"hez", &sig).is_err());
+    }
+
+    #[test]
+    fn p256_key_requires_one_certificate_on_the_p256_curve() {
+        // 0.12.0
+        let (der, _) = cert_and_pkcs8();
+        let mut trailing = der.clone();
+        trailing.push(0);
+        let err = p256_public_key(&trailing).unwrap_err();
+        assert!(
+            format!("{err}").contains("there is data after the certificate (1 of"),
+            "{err}"
+        );
+
+        // The curve OID 1.2.840.10045.3.1.7 with its last arc set to 1: the
+        // point keeps its 65 bytes, so only the curve check can refuse it.
+        let p256 = [0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
+        let at = der
+            .windows(p256.len())
+            .position(|w| w == p256)
+            .expect("the P-256 curve OID");
+        let mut other_curve = der.clone();
+        other_curve[at + p256.len() - 1] = 0x01;
+        let err = p256_public_key(&other_curve).unwrap_err();
+        assert!(
+            format!("{err}").contains("the curve OID 1.2.840.10045.3.1.1, not P-256"),
+            "{err}"
+        );
     }
 
     #[test]

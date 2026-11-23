@@ -79,6 +79,13 @@ At the switch the new certificate is read back from `new/`. It was installed
 without a check; it must now be the one that was announced, or the switch is
 refused and the current certificate stays.
 
+### ⚠ Changed — a certificate is read as a certificate where it comes in *(2026-11-23)*
+
+A peer's certificate, the new certificate in an announcement, stored state
+and an identity reply are now read as X.509 and refused if they are not.
+A loaded certificate with an unreadable name list or a control character
+in a name is refused too.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python
