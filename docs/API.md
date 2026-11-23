@@ -395,7 +395,9 @@ pub fn der_from_pem(pem: &str) -> Result<Vec<u8>, TlsError>;   // exactly ONE CE
 pub const MAX_CERT_PEM_LEN: usize = 16 * 1024;      // DoS cap on incoming PEM
 pub const ARCHIVE_FILE: &str = "announcements.jsonl";
 pub fn archive(dir: &Path, k: &Announcement) -> Result<(), TlsError>;             // append-only audit
+        // created 0600; one write per record (0.12.0)
 pub fn read_archive(dir: &Path) -> Result<(Vec<Announcement>, usize), TlsError>;  // → (read, skipped)
+        // form-checked only, nothing verified; a line that is not UTF-8 is skipped too (0.12.0)
 ```
 
 ### `Announcement`

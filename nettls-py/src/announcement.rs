@@ -367,12 +367,14 @@ impl Receipt {
     }
 }
 
+/// Appends the announcement to the archive file in `dir`.
 #[pyfunction]
 fn archive(py: Python<'_>, dir: PathBuf, k: &Announcement) -> PyResult<()> {
     py.detach(|| a::archive(&dir, &k.inner)).map_err(err)
 }
 
-/// The announcements, and how many lines could not be read.
+/// The announcements, and how many lines could not be read. They are checked
+/// for form only; no signature is verified.
 #[pyfunction]
 fn read_archive(py: Python<'_>, dir: PathBuf) -> PyResult<(Vec<Announcement>, usize)> {
     let (list, skipped) = py.detach(|| a::read_archive(&dir)).map_err(err)?;

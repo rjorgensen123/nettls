@@ -86,6 +86,12 @@ and an identity reply are now read as X.509 and refused if they are not.
 A loaded certificate with an unreadable name list or a control character
 in a name is refused too.
 
+### Changed — the archive file is written safely *(2026-11-23)*
+
+`archive` creates the file for the owner only and writes each record in one
+call. `read_archive` skips a line that is not UTF-8 instead of failing, and
+its text says that what it returns is not verified.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

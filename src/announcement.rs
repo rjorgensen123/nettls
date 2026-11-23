@@ -794,17 +794,28 @@ pub const ARCHIVE_FILE: &str = "announcements.jsonl";
 /// Append-only on purpose: a log that can be edited is not an audit trail.
 /// We do not enforce it in the filesystem — that belongs in operations — but the
 /// code here never writes anywhere but at the end.
+///
+/// The file is created for the owner only (0600), like the other state files;
+/// a file that exists keeps the mode it has. Each record is written in one
+/// call, so two calls at the same time give two whole lines *(0.12.0)*.
 pub fn archive(dir: &std::path::Path, k: &Announcement) -> Result<(), TlsError> {
     use std::io::Write;
-    let line = serde_json::to_string(&k.to_json()?)
+    let mut line = serde_json::to_string(&k.to_json()?)
         .map_err(|e| TlsError::Proof(format!("could not serialize the announcement: {e}")))?;
+    line.push('\n');
     let path = dir.join(ARCHIVE_FILE);
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
+    let mut open = std::fs::OpenOptions::new();
+    open.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        open.mode(0o600);
+    }
+    let mut f = open.open(&path).map_err(|e| TlsError::io(&path, e))?;
+    // The record and its line break go in one write. The file is opened for
+    // appending, so the system puts each write at the end as one piece.
+    f.write_all(line.as_bytes())
         .map_err(|e| TlsError::io(&path, e))?;
-    writeln!(f, "{line}").map_err(|e| TlsError::io(&path, e))?;
     Ok(())
 }
 
@@ -812,19 +823,27 @@ pub fn archive(dir: &std::path::Path, k: &Announcement) -> Result<(), TlsError> 
 ///
 /// **Skips lines that cannot be parsed**, and reports how many. An archive is an
 /// audit trail: one broken line must not make the rest unreadable precisely when
-/// someone needs to read it.
+/// someone needs to read it. A line that is not valid UTF-8 is skipped and
+/// counted like any other *(0.12.0)*.
+///
+/// What comes back is checked for form only, as [`Announcement::from_json`]
+/// does: no signature is verified. [`Announcement::verify`] is the call for that.
 pub fn read_archive(dir: &std::path::Path) -> Result<(Vec<Announcement>, usize), TlsError> {
     let path = dir.join(ARCHIVE_FILE);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(t) => t,
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
         Err(e) => return Err(TlsError::io(&path, e)),
     };
     let mut out = Vec::new();
     let mut skipped = 0usize;
-    for line in text.lines().filter(|l| !l.trim().is_empty()) {
-        match serde_json::from_str::<AnnouncementJson>(line)
+    for line in bytes
+        .split(|b| *b == b'\n')
+        .filter(|l| !l.iter().all(u8::is_ascii_whitespace))
+    {
+        match std::str::from_utf8(line)
             .ok()
+            .and_then(|l| serde_json::from_str::<AnnouncementJson>(l).ok())
             .and_then(|j| Announcement::from_json(&j).ok())
         {
             Some(k) => out.push(k),
@@ -887,6 +906,21 @@ mod archive_tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn the_archive_is_created_for_the_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tmpdir("mode");
+        archive(&d, &announcement("a")).unwrap();
+        let mode = std::fs::metadata(d.join(ARCHIVE_FILE))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn one_corrupt_line_does_not_make_the_rest_unreadable() {
         // An audit trail must be readable WHEN someone needs it, and then "one
@@ -900,12 +934,14 @@ mod archive_tests {
                 .open(d.join(ARCHIVE_FILE))
                 .unwrap();
             writeln!(f, "{{ this is not valid json").unwrap();
+            // And one that is not even text.
+            f.write_all(&[0xff, 0xfe, b'\n']).unwrap();
         }
         archive(&d, &announcement("b")).unwrap();
 
         let (v, skipped) = read_archive(&d).unwrap();
         assert_eq!(v.len(), 2, "the valid lines must be read");
-        assert_eq!(skipped, 1, "and the broken one must be counted");
+        assert_eq!(skipped, 2, "and the broken ones must be counted");
         let _ = std::fs::remove_dir_all(&d);
     }
 }
