@@ -27,7 +27,9 @@ pub enum TlsError {
     /// The PEM could not be parsed (empty file, wrong block type, truncated base64 …).
     Pem(String),
     /// The private key does not belong to the certificate, or the provider does
-    /// not support it. This is the classic upload error.
+    /// not support it. This is the classic upload error. The message gives the
+    /// certificate's SHA-256 fingerprint, and both file names when the pair was
+    /// read from files *(0.12.0)*.
     KeyMismatch(String),
     /// The certificate could not be parsed as X.509.
     Certificate(String),

@@ -242,6 +242,12 @@ impl CertSource {
     /// else is an error that names the directory, and the files are left
     /// untouched *(0.10.0)*.
     ///
+    /// What an interrupted save left in the directory is settled before the
+    /// pair is looked at *(0.12.0)*: temp files from a save that put nothing in
+    /// place are removed, and a key left between the two renames is put in
+    /// place if it belongs to the certificate there, and removed if not. A temp
+    /// file that cannot be read or removed is an error that names it.
+    ///
     /// If the directory is not writable, the certificate is generated in
     /// memory and [`TlsMaterial::origin`] becomes [`CertOrigin::Ephemeral`].
     /// The consumer **should log a warning** in that case.
@@ -305,7 +311,17 @@ impl TlsMaterial {
                 // Straight into locked memory; `from_vec` zeroizes the read buffer.
                 let key_pem =
                     secret::hold(fs::read(key_path).map_err(|e| TlsError::io(key_path, e))?)?;
-                key_pem.expose(|k| Self::from_pem(&cert_pem, k, CertOrigin::Files))
+                key_pem
+                    .expose(|k| Self::from_pem(&cert_pem, k, CertOrigin::Files))
+                    .map_err(|e| match e {
+                        // Which two files did not match (0.12.0).
+                        TlsError::KeyMismatch(s) => TlsError::KeyMismatch(format!(
+                            "{s}; the certificate was read from {} and the key from {}",
+                            cert_path.display(),
+                            key_path.display()
+                        )),
+                        other => other,
+                    })
             }
             Kind::Pem { cert_pem, key_pem } => Self::from_pem(cert_pem, key_pem, CertOrigin::Pem),
             Kind::SelfSigned(params) => {
@@ -320,6 +336,7 @@ impl TlsMaterial {
         let cert_path = dir.join(CERT_FILE);
         let key_path = dir.join(KEY_FILE);
 
+        settle_interrupted_save(dir)?;
         match (present(&cert_path)?, present(&key_path)?) {
             (false, false) => {}
             (true, true) => match Self::load(&CertSource::files(&cert_path, &key_path)) {
@@ -400,7 +417,7 @@ impl TlsMaterial {
         // key type". A wrong pair gives `InconsistentKeys(KeyMismatch)`. No
         // separate check needed.
         rustls::sign::CertifiedKey::from_der(chain.clone(), key.clone_key(), &provider())
-            .map_err(|e| TlsError::KeyMismatch(e.to_string()))?;
+            .map_err(|e| key_mismatch(e, chain.first()))?;
 
         let leaf = &chain[0];
         let fingerprint = to_hex("the certificate fingerprint", &sha256(leaf.as_ref()))?;
@@ -488,7 +505,7 @@ impl TlsMaterial {
     pub fn certified_key(&self) -> Result<Arc<rustls::sign::CertifiedKey>, TlsError> {
         rustls::sign::CertifiedKey::from_der(self.chain.clone(), self.key.clone_key(), &provider())
             .map(Arc::new)
-            .map_err(|e| TlsError::KeyMismatch(e.to_string()))
+            .map_err(|e| key_mismatch(e, self.chain.first()))
     }
 
     /// The identity anchor as PKCS#8 — for the anchor of
@@ -571,13 +588,32 @@ impl TlsMaterial {
     ///
     /// The directory is created 0700 if missing. Neither file is ever more open
     /// than its final mode.
+    ///
+    /// Both files are written to temp files beside them, and the directory is
+    /// synced, before either is put in place: the certificate is renamed first
+    /// and the directory synced, then
+    /// the key is renamed and the directory synced again *(0.12.0)*. A failure
+    /// before the first rename leaves the stored pair as it was. If the sync
+    /// after the first rename or the key's rename fails, the new certificate is
+    /// in place, its key is left in the temp file, and the error says so. What
+    /// an earlier, interrupted save left in `dir` is settled first, by the rule
+    /// of [`CertSource::auto`].
     pub fn save_pem(&self, dir: &Path) -> Result<(), TlsError> {
         // Both PEMs are built before the directory or either file is touched,
         // so a failure here leaves the stored pair as it was.
         let (cert_pem, key_pem) = self.pem_pair()?;
         pem::create_private_dir(dir)?;
-        pem::write_atomic(&dir.join(CERT_FILE), &cert_pem, 0o644)?;
-        key_pem.expose(|k| pem::write_atomic(&dir.join(KEY_FILE), k, 0o600))
+        settle_interrupted_save(dir)?;
+        key_pem.expose(|k| {
+            pem::write_pair(
+                &dir.join(CERT_FILE),
+                &cert_pem,
+                0o644,
+                &dir.join(KEY_FILE),
+                k,
+                0o600,
+            )
+        })
     }
 
     /// The certificate chain and the private key as PEM, built in memory: the
@@ -619,6 +655,102 @@ fn present(path: &Path) -> Result<bool, TlsError> {
         }),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(TlsError::io(path, e)),
+    }
+}
+
+/// Settles what an interrupted [`TlsMaterial::save_pem`] left in `dir`, by one
+/// rule *(0.12.0)*. A save writes `cert.tmp` and `key.tmp` in full and syncs
+/// the directory, then renames
+/// the certificate into place, then the key, and syncs the directory after each
+/// rename, so what is left tells how far it came:
+///
+/// - No temp file: nothing was interrupted, and nothing is done.
+/// - A temp certificate, with or without a temp key: the save stopped before
+///   anything was put in place, so the stored pair is whole. The temp files are
+///   removed.
+/// - Only a temp key: the save stopped between the two renames, so the new
+///   certificate is in place and its key is not. If the temp key belongs to the
+///   certificate in place, by the check every load of a pair makes, it is
+///   renamed into place and the directory is synced. If it does not, or no
+///   certificate is in place, it is removed.
+///
+/// A temp entry that is a symbolic link is removed and never read through. A
+/// temp entry that is not a regular file, or that cannot be read or removed, is
+/// an error that names it, and so is a certificate in place that cannot be
+/// read. Called before every save of the pair, and wherever nettls loads a pair
+/// from a directory it writes to itself.
+pub(crate) fn settle_interrupted_save(dir: &Path) -> Result<(), TlsError> {
+    let cert_path = dir.join(CERT_FILE);
+    let key_path = dir.join(KEY_FILE);
+    let cert_tmp = pem::temp_path(&cert_path);
+    let key_tmp = pem::temp_path(&key_path);
+    let cert_left = pem::regular_temp_file(&cert_tmp)?;
+    let key_left = pem::regular_temp_file(&key_tmp)?;
+    match (cert_left, key_left) {
+        (None, None) => Ok(()),
+        (Some(_), _) => {
+            // The key first, so a crash in between cannot leave a lone temp key.
+            pem::remove_temp(&key_tmp)?;
+            pem::remove_temp(&cert_tmp)
+        }
+        (None, Some(seen)) => {
+            if !temp_key_belongs(&cert_path, &key_tmp, &seen)? {
+                return pem::remove_temp(&key_tmp);
+            }
+            // A key is put in place for the owner only, whatever mode the temp
+            // file was left with.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&key_tmp, fs::Permissions::from_mode(0o600))
+                    .map_err(|e| TlsError::io(&key_tmp, e))?;
+            }
+            fs::rename(&key_tmp, &key_path).map_err(|e| TlsError::Io {
+                path: Some(key_path.clone()),
+                detail: format!(
+                    "{e}; the key an interrupted save left in {} belongs to {} but could not be \
+                     put in place",
+                    key_tmp.display(),
+                    cert_path.display()
+                ),
+            })?;
+            pem::sync_dir(&key_path, &format!("{} is in place", key_path.display()))
+        }
+    }
+}
+
+/// Whether the temp key at `key_tmp`, found as `seen`, belongs to the
+/// certificate at `cert_path`, by the check [`TlsMaterial::load`] makes. No
+/// certificate there means it does not *(0.12.0)*.
+fn temp_key_belongs(
+    cert_path: &Path,
+    key_tmp: &Path,
+    seen: &fs::Metadata,
+) -> Result<bool, TlsError> {
+    let cert_pem = match fs::read(cert_path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(TlsError::io(cert_path, e)),
+    };
+    let key_pem = pem::read_temp(key_tmp, seen)?;
+    Ok(key_pem
+        .expose(|k| TlsMaterial::from_pem(&cert_pem, k, CertOrigin::Files))
+        .is_ok())
+}
+
+/// [`TlsError::KeyMismatch`] with rustls' reason and the SHA-256 fingerprint of
+/// the certificate the key was checked against *(0.12.0)*.
+fn key_mismatch(reason: rustls::Error, leaf: Option<&CertificateDer<'_>>) -> TlsError {
+    let Some(leaf) = leaf else {
+        return TlsError::KeyMismatch(format!("{reason}; there is no certificate in the chain"));
+    };
+    match cert_fingerprint_sha256(leaf.as_ref()) {
+        Ok(fp) => TlsError::KeyMismatch(format!(
+            "{reason}; the certificate's SHA-256 fingerprint is {fp}"
+        )),
+        Err(e) => TlsError::KeyMismatch(format!(
+            "{reason}; the certificate's fingerprint could not be given: {e}"
+        )),
     }
 }
 

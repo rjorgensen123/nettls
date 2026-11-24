@@ -58,7 +58,9 @@ fingerprint changes every time — and everyone who recognized you no longer doe
 > a file that cannot be read, corrupt PEM, a key that does not belong to the certificate, or one of
 > the two files missing. The error names the directory, and the files are left untouched. The cause
 > is often a manual change gone wrong, and the operator needs to know. To start over, remove both
-> files.
+> files. What an interrupted save left beside them is settled before they are read: a save that
+> put nothing in place is cleaned up, and one that stopped between the certificate and the key is
+> finished when the key belongs to the certificate *(0.12.0)*.
 >
 > ⚠ **An expired stored certificate is reused too** — marked `ReusedExpired`. The service comes
 > up, and clients complain about the date; a nettls client refuses it with an expiry error unless

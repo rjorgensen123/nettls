@@ -931,6 +931,7 @@ fn after_a_restart_the_resolver_serves_the_restored_certificate() {
         rolled,
         "the server must present what the chain says is current"
     );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

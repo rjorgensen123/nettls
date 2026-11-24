@@ -9,8 +9,8 @@
 //! **write atomically, and never leave a file more open than it should be.**
 
 use std::fs;
-use std::io::Write;
-use std::path::Path;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
 use zeroize::Zeroizing;
 
@@ -64,10 +64,11 @@ pub fn encode(label: &str, der: &[u8]) -> Result<Vec<u8>, TlsError> {
 ///
 /// The temp file is created 0600 and only if nothing is there; a leftover or a
 /// symlink in its place is removed first. `mode` is set before `rename`, the temp
-/// file is removed on error, and the directory is synced afterwards. On non-unix
+/// file is removed on error, and the directory is synced afterwards. If only that
+/// sync fails, the error says the file is in place *(0.12.0)*. On non-unix
 /// `mode` is ignored.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<(), TlsError> {
-    let tmp = path.with_extension("tmp");
+    let tmp = temp_path(path);
     match fs::remove_file(&tmp) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -75,13 +76,175 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<(), T
     }
     let written = write_new(&tmp, bytes, mode).and_then(|()| {
         fs::rename(&tmp, path).map_err(|e| TlsError::io(path, e))?;
-        sync_dir(path)
+        sync_dir(path, &format!("{} is in place", path.display()))
     });
     if written.is_err() {
         // Best effort: the next write removes it anyway.
         let _ = fs::remove_file(&tmp);
     }
     written
+}
+
+/// The temp file a write to `path` goes through: `path` with the extension
+/// `tmp`, beside it *(0.12.0)*.
+pub(crate) fn temp_path(path: &Path) -> PathBuf {
+    path.with_extension("tmp")
+}
+
+/// Writes a certificate and its key as a pair: both temp files are written in
+/// full, each with its mode and synced, and the directory is synced, before
+/// either is renamed into place *(0.12.0)*: the temp files are then on disk
+/// under their names. Then the certificate is renamed and the directory synced, then
+/// the key is renamed and the directory synced again. The certificate's rename
+/// is on disk before the key's is asked for, so a crash cannot keep the key's
+/// rename without the certificate's.
+///
+/// A failure before the first rename, or of the first rename, removes both temp
+/// files and leaves the stored pair as it was. If the sync after the first
+/// rename or the key's rename fails, the key's temp file is left for
+/// `material::settle_interrupted_save` to put in place, and the error says so.
+/// On non-unix the modes are ignored.
+pub(crate) fn write_pair(
+    cert: &Path,
+    cert_bytes: &[u8],
+    cert_mode: u32,
+    key: &Path,
+    key_bytes: &[u8],
+    key_mode: u32,
+) -> Result<(), TlsError> {
+    let cert_tmp = temp_path(cert);
+    let key_tmp = temp_path(key);
+    let staged = write_new(&cert_tmp, cert_bytes, cert_mode)
+        .and_then(|()| write_new(&key_tmp, key_bytes, key_mode))
+        .and_then(|()| {
+            sync_parent(cert, |e| {
+                format!(
+                    "{e}; the temp files are written, but the directory could not be synced, \
+                     so nothing was put in place"
+                )
+            })
+        })
+        .and_then(|()| fs::rename(&cert_tmp, cert).map_err(|e| TlsError::io(cert, e)));
+    if let Err(e) = staged {
+        // Key first: a crash in between then leaves the temp certificate, which
+        // marks the pair as untouched.
+        remove_quietly(&key_tmp);
+        remove_quietly(&cert_tmp);
+        return Err(e);
+    }
+    let key_left = || {
+        format!(
+            "its key was left in {}, which the next save, or the next load through \
+             CertSource::auto or an Announcer, puts in place",
+            key_tmp.display()
+        )
+    };
+    sync_dir(
+        cert,
+        &format!("the new certificate is in {}", cert.display()),
+    )
+    .map_err(|e| match e {
+        TlsError::Io { path, detail } => TlsError::Io {
+            path,
+            detail: format!("{detail}; {}", key_left()),
+        },
+        other => other,
+    })?;
+    fs::rename(&key_tmp, key).map_err(|e| TlsError::Io {
+        path: Some(key.to_path_buf()),
+        detail: format!(
+            "{e}; the new certificate is in {}, and {}",
+            cert.display(),
+            key_left()
+        ),
+    })?;
+    sync_dir(
+        key,
+        &format!("{} and {} are in place", cert.display(), key.display()),
+    )
+}
+
+/// Removes a temp file after a failed write of the pair. Best effort: what is
+/// left is settled before the next save or load of the pair.
+fn remove_quietly(tmp: &Path) {
+    let _ = fs::remove_file(tmp);
+}
+
+/// What is at the temp path `path` *(0.12.0)*: `None` when nothing is there, or
+/// when a symbolic link was, which is removed without being followed; its
+/// metadata when it is a regular file. Anything else, and a link that cannot be
+/// removed, is an error that names it.
+pub(crate) fn regular_temp_file(path: &Path) -> Result<Option<fs::Metadata>, TlsError> {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(TlsError::io(path, e)),
+    };
+    if meta.file_type().is_symlink() {
+        fs::remove_file(path).map_err(|e| TlsError::Io {
+            path: Some(path.to_path_buf()),
+            detail: format!(
+                "{e}; it is a symbolic link where a temp file goes, and could not be removed"
+            ),
+        })?;
+        return Ok(None);
+    }
+    if !meta.is_file() {
+        return Err(TlsError::Io {
+            path: Some(path.to_path_buf()),
+            detail: "is there but is not a regular file, so it is not a temp file nettls wrote; \
+                     it was left as it is"
+                .to_string(),
+        });
+    }
+    Ok(Some(meta))
+}
+
+/// Removes the temp file `path` an interrupted save left *(0.12.0)*. Nothing
+/// there is fine; a file that cannot be removed is an error that names it.
+pub(crate) fn remove_temp(path: &Path) -> Result<(), TlsError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(TlsError::Io {
+            path: Some(path.to_path_buf()),
+            detail: format!("{e}; it was left by an interrupted save and could not be removed"),
+        }),
+    }
+}
+
+/// Reads the temp file `path`, which [`regular_temp_file`] found as `seen`,
+/// straight into locked memory: it may hold a private key *(0.12.0)*. A file
+/// that is no longer the one that was looked at, such as a symbolic link put
+/// in its place, is an error and is not read; that comparison is made on unix.
+pub(crate) fn read_temp(path: &Path, seen: &fs::Metadata) -> Result<krypto::SecretBuf, TlsError> {
+    let unreadable = |e: std::io::Error| TlsError::Io {
+        path: Some(path.to_path_buf()),
+        detail: format!("{e}; it was left by an interrupted save and could not be read"),
+    };
+    let mut f = fs::File::open(path).map_err(unreadable)?;
+    let opened = f.metadata().map_err(unreadable)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if opened.dev() != seen.dev() || opened.ino() != seen.ino() {
+            return Err(TlsError::Io {
+                path: Some(path.to_path_buf()),
+                detail: "was replaced between being looked at and being opened; it was not read"
+                    .to_string(),
+            });
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = seen;
+    // Wiped if the read fails part way; `hold` zeroizes it on success. Reserved
+    // up front, as `fs::read` does, so the key is not copied by regrowth.
+    let mut bytes = Zeroizing::new(Vec::new());
+    bytes
+        .try_reserve_exact(usize::try_from(opened.len()).unwrap_or(usize::MAX))
+        .map_err(|_| unreadable(std::io::ErrorKind::OutOfMemory.into()))?;
+    f.read_to_end(&mut bytes).map_err(unreadable)?;
+    crate::secret::hold(std::mem::take(&mut *bytes))
 }
 
 /// Creates `tmp` (it must not exist), writes `bytes`, sets `mode` and syncs.
@@ -107,8 +270,21 @@ fn write_new(tmp: &Path, bytes: &[u8], mode: u32) -> Result<(), TlsError> {
     f.sync_all().map_err(|e| TlsError::io(tmp, e))
 }
 
-/// Syncs the directory `path` lives in, so the `rename` survives a crash.
-fn sync_dir(path: &Path) -> Result<(), TlsError> {
+/// Syncs the directory `path` lives in, so a `rename` into it survives a
+/// crash. `placed` says what is already in place, for the error a failed sync
+/// gives *(0.12.0)*.
+pub(crate) fn sync_dir(path: &Path, placed: &str) -> Result<(), TlsError> {
+    sync_parent(path, |e| {
+        format!(
+            "{e}; {placed}, but the directory could not be synced, so the change may not \
+             survive a crash"
+        )
+    })
+}
+
+/// Syncs the directory `path` lives in. `detail` words the error a failed sync
+/// gives. On non-unix nothing is done.
+fn sync_parent(path: &Path, detail: impl FnOnce(std::io::Error) -> String) -> Result<(), TlsError> {
     #[cfg(unix)]
     {
         let dir = match path.parent() {
@@ -117,10 +293,13 @@ fn sync_dir(path: &Path) -> Result<(), TlsError> {
         };
         fs::File::open(dir)
             .and_then(|d| d.sync_all())
-            .map_err(|e| TlsError::io(dir, e))?;
+            .map_err(|e| TlsError::Io {
+                path: Some(dir.to_path_buf()),
+                detail: detail(e),
+            })?;
     }
     #[cfg(not(unix))]
-    let _ = path;
+    let _ = (path, detail);
     Ok(())
 }
 
@@ -212,6 +391,26 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A pair whose staging fails leaves no temp file it made, and the stored
+    /// pair as it was (0.12.0). A directory where the temp key goes stops it.
+    #[test]
+    fn a_pair_that_cannot_be_staged_leaves_no_temp_file_and_the_pair_as_it_was() {
+        let d = scratch("pair-staging");
+        let cert = d.join("cert.pem");
+        let key = d.join("key.pem");
+        fs::write(&cert, b"the old cert").unwrap();
+        fs::write(&key, b"the old key").unwrap();
+        fs::create_dir(temp_path(&key)).unwrap();
+
+        write_pair(&cert, b"the new cert", 0o644, &key, b"the new key", 0o600).unwrap_err();
+
+        assert!(!temp_path(&cert).exists());
+        assert!(temp_path(&key).is_dir());
+        assert_eq!(fs::read(&cert).unwrap(), b"the old cert");
+        assert_eq!(fs::read(&key).unwrap(), b"the old key");
         let _ = fs::remove_dir_all(&d);
     }
 

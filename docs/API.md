@@ -107,6 +107,8 @@ Where the certificate came from. **Log this.**
 >
 > `auto` makes a new identity only when the directory holds none. A stored one it cannot load is
 > returned as an error that names the directory, and the files are left untouched *(0.10.0)*.
+> What an interrupted save left in the directory is settled first, as described under
+> `TlsMaterial` below *(0.12.0)*.
 
 ### `SelfSignedParams`
 
@@ -156,7 +158,7 @@ impl TlsMaterial {
     pub fn server_config_with_alpn(&self, alpn: &[Vec<u8>]) -> Result<Arc<ServerConfig>, TlsError>;
     pub fn server_config_with(&self, alpn: &[Vec<u8>], transport: &TransportPolicy)
         -> Result<Arc<ServerConfig>, TlsError>;                           // 0.8.3 — see `transport`
-    pub fn save_pem(&self, dir: &Path) -> Result<(), TlsError>;           // atomic; key.pem 0600
+    pub fn save_pem(&self, dir: &Path) -> Result<(), TlsError>;           // atomic; key.pem 0600; both staged first (0.12.0)
     pub fn anchor_pkcs8(&self) -> Result<krypto::SecretBuf, TlsError>;    // 0.8.1, wish #4 — see below
 }
 ```
@@ -165,6 +167,19 @@ impl TlsMaterial {
 character in its subject or in a name in its SAN list, with `TlsError::Certificate` *(0.12.0)*.
 Only control characters are refused; the stricter rules for names nettls generates itself do not
 apply to a certificate that is loaded.
+
+**Saving the pair** *(0.12.0)*. `save_pem` writes both files to temp files beside them,
+`cert.tmp` and `key.tmp`, and syncs the directory, before either is put in place; then it renames the certificate and
+syncs the directory, then renames the key and syncs the directory again, so the certificate's
+rename is on disk before the key's is made. A failure before the first rename leaves the stored
+pair as it was. If the sync after the first rename or the key's rename fails, the new certificate
+is in place, its key is left in `key.tmp`, and the error says so. If only the last sync fails,
+the error says that the files are in place. What an interrupted save left is settled before
+every save, and before `auto`, or an `Announcer` without a password, loads the pair: `cert.tmp`,
+with or without `key.tmp`, means nothing was put in place, and both are removed; `key.tmp` alone
+is put in place when it belongs to the certificate in place, by the same check `load` makes, and
+removed when it does not. A temp file that is a symbolic link is removed and never read; one that
+is not a regular file, or cannot be read or removed, is an error that names it.
 
 **`anchor_pkcs8` (0.8.1)** is the ONE documented place the key crosses from the TLS domain into
 the §6 domain: it feeds `Announcer::new`'s anchor, so announcements are signed with the same
@@ -902,7 +917,7 @@ pub enum TlsError {
 |---|---|
 | `Io` | file/directory |
 | `Pem` | the PEM could not be read |
-| `KeyMismatch` | the key does not belong to the certificate |
+| `KeyMismatch` | the key does not belong to the certificate; the message gives the certificate's SHA-256 fingerprint, and both file names when the pair was read from files *(0.12.0)* |
 | `Certificate` | the certificate could not be parsed |
 | `Generate` | generation failed |
 | `Rustls` | rustls rejected the config |

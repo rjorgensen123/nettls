@@ -98,6 +98,12 @@ its text says that what it returns is not verified.
 methods. They now require a `socket.socket` and raise `TypeError` for
 anything else, before the object is asked to hand anything over.
 
+### Fixed — saving the certificate and key cannot leave half a pair *(2026-11-24)*
+
+Both files are written before either is put in place, and an interrupted
+save is finished or cleaned up at the next save or load. The errors for a
+failed directory sync and for a key that does not belong say what happened.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

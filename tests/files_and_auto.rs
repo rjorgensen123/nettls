@@ -209,10 +209,8 @@ fn auto_reports_an_unreadable_stored_file_and_leaves_it() {
 fn files_gives_understandable_error_on_mismatched_key() {
     let a = TempDir::new("pair-a");
     let b = TempDir::new("pair-b");
-    TlsMaterial::load(&CertSource::self_signed(params()))
-        .unwrap()
-        .save_pem(a.path())
-        .unwrap();
+    let cert_owner = TlsMaterial::load(&CertSource::self_signed(params())).unwrap();
+    cert_owner.save_pem(a.path()).unwrap();
     TlsMaterial::load(&CertSource::self_signed(params()))
         .unwrap()
         .save_pem(b.path())
@@ -229,6 +227,108 @@ fn files_gives_understandable_error_on_mismatched_key() {
         "the error message must say WHAT is wrong: {s}"
     );
     assert!(!s.is_empty());
+    // Which certificate, and which two files (0.12.0).
+    assert!(s.contains(&cert_owner.fingerprint_sha256()), "{s}");
+    assert!(
+        s.contains(&a.path().join(CERT_FILE).display().to_string()),
+        "{s}"
+    );
+    assert!(
+        s.contains(&b.path().join(KEY_FILE).display().to_string()),
+        "{s}"
+    );
+}
+
+/// The temp files a save of the pair goes through (0.12.0).
+const CERT_TMP: &str = "cert.tmp";
+const KEY_TMP: &str = "key.tmp";
+
+/// A pair that is not the one stored in a test's directory, saved in its own.
+fn another_pair(name: &str) -> (TempDir, TlsMaterial) {
+    let dir = TempDir::new(name);
+    let m = TlsMaterial::load(&CertSource::self_signed(params())).unwrap();
+    m.save_pem(dir.path()).unwrap();
+    (dir, m)
+}
+
+#[test]
+fn a_save_that_fails_before_anything_is_in_place_leaves_the_stored_pair_whole() {
+    // 0.12.0. A directory where the temp key goes: the save refuses it before
+    // it writes anything.
+    let dir = TempDir::new("save-fails");
+    let stored = TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();
+    fs::create_dir(dir.path().join(KEY_TMP)).unwrap();
+
+    TlsMaterial::load(&CertSource::self_signed(params()))
+        .unwrap()
+        .save_pem(dir.path())
+        .unwrap_err();
+
+    let m = TlsMaterial::load(&CertSource::files(
+        dir.path().join(CERT_FILE),
+        dir.path().join(KEY_FILE),
+    ))
+    .unwrap();
+    assert_eq!(m.fingerprint_sha256(), stored.fingerprint_sha256());
+}
+
+#[test]
+fn the_next_load_finishes_a_save_stopped_between_the_renames() {
+    // 0.12.0. The new certificate in place, its key in the temp file, and the
+    // old key still in place.
+    let dir = TempDir::new("finish");
+    TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();
+    let (new_dir, new) = another_pair("finish-new");
+    fs::copy(new_dir.path().join(CERT_FILE), dir.path().join(CERT_FILE)).unwrap();
+    fs::copy(new_dir.path().join(KEY_FILE), dir.path().join(KEY_TMP)).unwrap();
+    // A temp key left more open than a key may be.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir.path().join(KEY_TMP), fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    let m = TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();
+    assert_eq!(m.fingerprint_sha256(), new.fingerprint_sha256());
+    assert!(!dir.path().join(KEY_TMP).exists());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(dir.path().join(KEY_FILE))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "a key is put in place for the owner only");
+    }
+}
+
+#[test]
+fn leftover_temp_files_beside_a_whole_pair_are_removed() {
+    // 0.12.0. What a save stopped before the first rename leaves.
+    let dir = TempDir::new("leftovers");
+    let stored = TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();
+    let (other, _) = another_pair("leftovers-other");
+    fs::copy(other.path().join(CERT_FILE), dir.path().join(CERT_TMP)).unwrap();
+    fs::copy(other.path().join(KEY_FILE), dir.path().join(KEY_TMP)).unwrap();
+
+    let m = TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();
+    assert_eq!(m.fingerprint_sha256(), stored.fingerprint_sha256());
+    assert!(!dir.path().join(CERT_TMP).exists());
+    assert!(!dir.path().join(KEY_TMP).exists());
+}
+
+#[test]
+fn a_temp_key_that_does_not_belong_to_the_certificate_is_removed() {
+    // 0.12.0
+    let dir = TempDir::new("stray-key");
+    let stored = TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();
+    let (other, _) = another_pair("stray-key-other");
+    fs::copy(other.path().join(KEY_FILE), dir.path().join(KEY_TMP)).unwrap();
+
+    let m = TlsMaterial::load(&CertSource::auto(dir.path(), params())).unwrap();
+    assert_eq!(m.fingerprint_sha256(), stored.fingerprint_sha256());
+    assert!(!dir.path().join(KEY_TMP).exists());
 }
 
 #[test]

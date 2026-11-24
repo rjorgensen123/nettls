@@ -287,8 +287,12 @@ impl Announcer {
     }
 
     /// Read the material back, locked or not.
+    ///
+    /// Without a password, what an interrupted save left in `dir` is settled
+    /// first, by the rule of [`CertSource::auto`] *(0.12.0)*.
     fn load(&self, dir: &std::path::Path) -> Result<TlsMaterial, TlsError> {
         let Some(pw) = &self.password else {
+            crate::material::settle_interrupted_save(dir)?;
             return TlsMaterial::load(&CertSource::files(
                 dir.join(crate::material::CERT_FILE),
                 dir.join(crate::material::KEY_FILE),
