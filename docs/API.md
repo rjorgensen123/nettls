@@ -92,7 +92,7 @@ the base64 or the PEM text could not be reserved *(0.12.0)*.
 |---|---|
 | `CERT_FILE` · `KEY_FILE` | the file names `auto`/`save_pem` use (`cert.pem`, `key.pem`) |
 | `MAX_VALID_DAYS` | 397 — browsers reject longer |
-| `is_valid_san(name) -> bool` | is this a valid SAN? (syntax only, never DNS lookups) |
+| `is_valid_san(name) -> bool` | is this a valid SAN? (syntax only, never DNS lookups). A wildcard is accepted only as the whole first label with at least two labels after it, as in `*.example.no`; `*` and `*.no` are refused *(0.12.0)* |
 
 ### `CertOrigin`
 

@@ -114,6 +114,12 @@ failed. It now goes straight into krypto's locked memory.
 The errors for an oversized `new_cert_pem` and for a character outside a
 component name had a long gap in the middle of the sentence.
 
+### ⚠ Changed — a wildcard name needs two labels after it *(2026-11-24)*
+
+A name for a generated certificate may have a wildcard only as in
+`*.example.no`. `*`, `*.` and `*.no` were accepted and are now refused;
+`is_valid_san` answers by the same rule.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

@@ -216,6 +216,9 @@ fn illegal_names_are_rejected_with_explanation() {
         ("end-.no", "hyphen last in the part"),
         ("ap*.example.no", "wildcard mid-part"),
         ("example.*.no", "wildcard that is not the first part"),
+        ("*", "a wildcard alone"),
+        ("*.", "a wildcard and a dot"),
+        ("*.no", "a wildcard directly under a top-level name"),
         ("æøå.no", "non-ASCII"),
     ];
     for (name, what) in cases {
@@ -228,6 +231,16 @@ fn illegal_names_are_rejected_with_explanation() {
             message.contains("SAN") || message.contains("common_name"),
             "message without a field name for {name:?}: {message}"
         );
+    }
+}
+
+#[test]
+fn is_valid_san_answers_by_the_same_rule() {
+    for name in ["portal.example.no", "*.example.no", "127.0.0.1", "::1"] {
+        assert!(nettls::is_valid_san(name), "{name:?}");
+    }
+    for name in ["", "*", "*.", "*.no", "example.*.no"] {
+        assert!(!nettls::is_valid_san(name), "{name:?}");
     }
 }
 

@@ -952,7 +952,11 @@ const MAX_DNS_LABEL: usize = 63;
 /// labels of 1–63 characters with `a-z 0-9 -`, and no hyphen first or last in
 /// a label. A wildcard is accepted as the **first** label (`*.example.no`)
 /// because that is legitimate and in use; `*` anywhere else is meaningless in
-/// a certificate name.
+/// a certificate name. At least two labels must follow it *(0.12.0)*: `*`, `*.`
+/// and `*.no` are refused, since a wildcard alone or directly under a
+/// top-level name matches far more than one party's names. The rule counts
+/// labels and knows no list of two-part top-level names, so `*.co.uk` is
+/// accepted.
 ///
 /// We check **syntax, not existence** — no DNS lookups. A service that must
 /// resolve names in order to start is a service that does not start when name
@@ -986,6 +990,7 @@ fn validate_san_name(name: &str, field: &str) -> Result<(), TlsError> {
             "{field} {name:?} consists only of dots"
         )));
     }
+    let parts = body.split('.').count();
     for (i, label) in body.split('.').enumerate() {
         if label.is_empty() {
             return Err(TlsError::Params(format!(
@@ -1000,15 +1005,24 @@ fn validate_san_name(name: &str, field: &str) -> Result<(), TlsError> {
                 label.len()
             )));
         }
-        // Wildcard: only as the entire first label. `*.example.no` is valid
-        // and in use; `ap*.example.no` and `example.*.no` are not.
+        // Wildcard: only as the entire first label, with at least two labels
+        // after it. `*.example.no` is valid and in use; `ap*.example.no` and
+        // `example.*.no` are not, and neither is a wildcard alone (`*`) or
+        // directly under a top-level name (`*.no`).
         if label == "*" {
-            if i == 0 {
-                continue;
+            if i != 0 {
+                return Err(TlsError::Params(format!(
+                    "{field} {name:?}: a wildcard is only legal as the first part (`*.example.no`)"
+                )));
             }
-            return Err(TlsError::Params(format!(
-                "{field} {name:?}: a wildcard is only legal as the first part (`*.example.no`)"
-            )));
+            if parts < 3 {
+                return Err(TlsError::Params(format!(
+                    "{field} {name:?}: a wildcard must have at least two parts after it, as in \
+                     `*.example.no` — alone, or directly under a top-level name, it is not \
+                     accepted"
+                )));
+            }
+            continue;
         }
         if label.starts_with('-') || label.ends_with('-') {
             return Err(TlsError::Params(format!(

@@ -337,6 +337,13 @@ def test_mode1_lifetime_has_floor_and_ceiling():
         A.mode1_params("x", ["x"], 366)
 
 
+def test_is_valid_san_takes_a_wildcard_only_above_two_labels():
+    assert nettls.is_valid_san("portal.example.no")
+    assert nettls.is_valid_san("*.example.no")
+    for name in ["", "*", "*.", "*.no", "example.*.no"]:
+        assert not nettls.is_valid_san(name), name
+
+
 def test_empty_san_list_is_rejected():
     with pytest.raises(nettls.ParamsError, match="the SAN list is empty"):
         nettls.TlsMaterial.load(nettls.CertSource.self_signed(nettls.SelfSignedParams.new("x", [])))
