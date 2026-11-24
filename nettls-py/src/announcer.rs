@@ -513,8 +513,8 @@ impl Announcer {
         result.map_err(err)
     }
 
-    fn should_announce(&self, now: i64) -> bool {
-        self.inner.should_announce(now)
+    fn should_announce(&self, now: i64) -> PyResult<bool> {
+        self.inner.should_announce(now).map_err(err)
     }
 
     fn status(&self, now: i64, expires: i64) -> PyResult<Status> {
@@ -524,8 +524,12 @@ impl Announcer {
             .map_err(err)
     }
 
-    fn pending(&self) -> Option<Announcement> {
-        self.inner.pending().map(|inner| Announcement { inner })
+    fn pending(&self) -> PyResult<Option<Announcement>> {
+        Ok(self
+            .inner
+            .pending()
+            .map_err(err)?
+            .map(|inner| Announcement { inner }))
     }
 
     fn save_pending(&self, py: Python<'_>) -> PyResult<()> {

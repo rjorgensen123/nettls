@@ -98,12 +98,12 @@ impl RotatingResolver {
     }
 
     /// The fingerprint being served right now — the one clients should have in
-    /// their chain.
-    pub fn fingerprint_sha256(&self) -> String {
+    /// their chain. A poisoned lock is [`TlsError::LockPoisoned`] *(0.12.0)*.
+    pub fn fingerprint_sha256(&self) -> Result<String, TlsError> {
         self.current
             .read()
             .map(|c| c.fingerprint.clone())
-            .unwrap_or_default()
+            .map_err(|_| TlsError::poisoned("the RotatingResolver lock"))
     }
 
     /// `ServerConfig` with this resolver, TLS 1.3 + 1.2, ALPN `h2, http/1.1`
@@ -145,5 +145,37 @@ impl ResolvesServerCert for RotatingResolver {
         // the name (same model as the pinning on the client side). One
         // service, one certificate.
         self.current.read().ok().map(|c| c.key.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CertSource, SelfSignedParams};
+
+    /// A thread that panics while holding the lock leaves it poisoned. The
+    /// fingerprint is then an error and not an empty string (0.12.0).
+    #[test]
+    fn a_poisoned_lock_gives_an_error_and_not_an_empty_fingerprint() {
+        let material = TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::new(
+            "localhost",
+            ["localhost"],
+        )))
+        .unwrap();
+        let resolver = RotatingResolver::new(&material).unwrap();
+        assert_eq!(
+            resolver.fingerprint_sha256().unwrap(),
+            material.fingerprint_sha256()
+        );
+
+        let current = Arc::clone(&resolver.current);
+        let _ = std::thread::spawn(move || {
+            let _held = current.write().unwrap();
+            panic!("poison the lock");
+        })
+        .join();
+
+        let err = resolver.fingerprint_sha256().unwrap_err();
+        assert!(matches!(err, TlsError::LockPoisoned(_)), "{err:?}");
     }
 }

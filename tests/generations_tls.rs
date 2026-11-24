@@ -332,7 +332,7 @@ async fn announcer_rolls_only_when_receipt_is_in() {
     connect_to(&trust, port).await.expect("c0 must pass");
 
     // Announce.
-    assert!(announcer.should_announce(100));
+    assert!(announcer.should_announce(100).unwrap());
     let k = announcer.prepare(100).expect("announcement");
     let new_fp = k.new_fingerprint().to_string();
 
@@ -364,7 +364,7 @@ async fn announcer_rolls_only_when_receipt_is_in() {
     assert_eq!(trust.state().unwrap().current().fingerprint(), new_fp);
 
     // And the rate limit blocks an immediate new round (M-22).
-    assert!(!announcer.should_announce(201));
+    assert!(!announcer.should_announce(201).unwrap());
 
     srv.abort();
     let _ = std::fs::remove_dir_all(&dir);
@@ -436,7 +436,7 @@ async fn the_promise_survives_a_restart() {
         "M-26 BROKEN: the promise was not read back"
     );
     assert_eq!(
-        restarted.pending().unwrap().new_fingerprint(),
+        restarted.pending().unwrap().unwrap().new_fingerprint(),
         k.new_fingerprint(),
         "the restored promise covers a different certificate"
     );
@@ -689,7 +689,7 @@ async fn the_gate_postpones_the_switch_without_side_effects() {
     announcer.acked("service", &receipt, &key).unwrap();
 
     // Everything is ready — but the consumer says "not now".
-    let before = resolver.fingerprint_sha256();
+    let before = resolver.fingerprint_sha256().unwrap();
     assert!(
         announcer
             .roll_if_ready_gated(100, || false)
@@ -698,7 +698,7 @@ async fn the_gate_postpones_the_switch_without_side_effects() {
         "a false gate must postpone the switch"
     );
     assert_eq!(
-        resolver.fingerprint_sha256(),
+        resolver.fingerprint_sha256().unwrap(),
         before,
         "the resolver must be untouched after a postponed switch"
     );
@@ -713,7 +713,7 @@ async fn the_gate_postpones_the_switch_without_side_effects() {
         .unwrap()
         .expect("with an open gate the switch must happen");
     assert_eq!(old, before, "swap must return the fingerprint we served");
-    assert_ne!(resolver.fingerprint_sha256(), before);
+    assert_ne!(resolver.fingerprint_sha256().unwrap(), before);
     assert!(announcer.own_trio().unwrap().previous_fingerprint.is_some());
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -831,7 +831,7 @@ const PEER_SEED: [u8; 32] = [7; 32];
 /// A receipt from `peer` for `a`'s pending announcement, and the key pinned for
 /// `peer` that it verifies against.
 fn receipt_for(a: &nettls::announcer::Announcer, peer: &str) -> (Receipt, Vec<u8>) {
-    let k = a.pending().expect("an announcement is pending");
+    let k = a.pending().unwrap().expect("an announcement is pending");
     let seed = krypto::SecretBuf::from_vec(PEER_SEED.to_vec()).expect("mlock");
     let key = krypto::sign::ed25519_public(&seed).unwrap().to_vec();
     let receipt = Receipt::new(peer, k.announcer(), k.new_fingerprint(), 100, &seed).unwrap();
@@ -953,7 +953,10 @@ fn the_promise_and_the_switch_survive_restarts_without_save_pending() {
     drop(a);
 
     let b = announcer_in(&dir, &c0, &resolver);
-    assert_eq!(b.pending().unwrap().new_fingerprint(), k.new_fingerprint());
+    assert_eq!(
+        b.pending().unwrap().unwrap().new_fingerprint(),
+        k.new_fingerprint()
+    );
     assert!(
         b.roll_if_ready(200).unwrap().is_some(),
         "the receipt was lost"
@@ -1021,7 +1024,7 @@ fn the_switch_refuses_material_that_is_not_what_was_announced() {
 
     let err = a.roll_if_ready(200).unwrap_err();
     assert!(format!("{err}").contains("was announced"), "{err}");
-    assert_eq!(resolver.fingerprint_sha256(), c0.fp_bar());
+    assert_eq!(resolver.fingerprint_sha256().unwrap(), c0.fp_bar());
     let trio = a.own_trio().unwrap();
     assert_eq!(trio.current_fingerprint, c0.fp_bar());
     assert_eq!(trio.next_fingerprint.as_deref(), Some(k.new_fingerprint()));
@@ -1052,7 +1055,7 @@ fn after_a_restart_the_resolver_serves_the_restored_certificate() {
     let (resolver, second) = start();
     assert_eq!(second.own_trio().unwrap().current_fingerprint, rolled);
     assert_eq!(
-        resolver.fingerprint_sha256(),
+        resolver.fingerprint_sha256().unwrap(),
         rolled,
         "the server must present what the chain says is current"
     );

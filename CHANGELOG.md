@@ -151,6 +151,13 @@ A record key that was not 32 bytes made the suite panic. Every record is
 now refused with an error that says which length came. rustls gives 32
 bytes; if it did not, its sending side would unwrap the error and panic.
 
+### ⚠ Changed — three calls report a poisoned lock *(2026-11-24)*
+
+`RotatingResolver::fingerprint_sha256`, `Announcer::should_announce` and
+`Announcer::pending` return `Result`: a poisoned lock is `LockPoisoned`,
+where they answered `""`, `false` and `None`. `prepare` stops on it before
+it writes anything.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

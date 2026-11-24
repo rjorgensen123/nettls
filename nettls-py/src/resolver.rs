@@ -36,8 +36,8 @@ impl RotatingResolver {
         self.inner.swap(&material.inner).map_err(err)
     }
 
-    fn fingerprint_sha256(&self) -> String {
-        self.inner.fingerprint_sha256()
+    fn fingerprint_sha256(&self) -> PyResult<String> {
+        self.inner.fingerprint_sha256().map_err(err)
     }
 
     fn server_config(&self) -> PyResult<ServerConfig> {

@@ -325,7 +325,8 @@ exit is announced by the build.
 impl RotatingResolver {
     pub fn new(material: &TlsMaterial) -> Result<Self, TlsError>;
     pub fn swap(&self, material: &TlsMaterial) -> Result<String, TlsError>;  // → the old fingerprint
-    pub fn fingerprint_sha256(&self) -> String;                              // what is served NOW; "" if the lock is poisoned
+    pub fn fingerprint_sha256(&self) -> Result<String, TlsError>;            // what is served NOW
+        // a poisoned lock is `LockPoisoned` (0.12.0)
     pub fn server_config(&self) -> Result<Arc<ServerConfig>, TlsError>;
     pub fn server_config_with_alpn(&self, alpn: &[Vec<u8>]) -> Result<Arc<ServerConfig>, TlsError>;
     pub fn server_config_with(&self, alpn: &[Vec<u8>], transport: &TransportPolicy)
@@ -721,9 +722,10 @@ impl Announcer {
     pub fn roll_if_ready_gated(&self, now: i64, safe_now: impl FnOnce() -> bool)
         -> Result<Option<String>, TlsError>;   // the consumer's last word; chain+serving switch together
         // refused if what lies in `new/` is not the certificate that was announced (0.12.0)
-    pub fn should_announce(&self, now: i64) -> bool;      // false if the lock is poisoned
+    pub fn should_announce(&self, now: i64) -> Result<bool, TlsError>;
     pub fn status(&self, now: i64, expires: i64) -> Result<Status, TlsError>;
-    pub fn pending(&self) -> Option<Announcement>;        // None if the lock is poisoned
+    pub fn pending(&self) -> Result<Option<Announcement>, TlsError>;
+        // should_announce and pending: a poisoned lock is `LockPoisoned` (0.12.0)
     pub fn save_pending(&self) -> Result<(), TlsError>;   // prepare/acked call it (0.10.0); NOT the key
         // acked_handled calls it too (0.12.0)
 }

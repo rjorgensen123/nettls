@@ -1384,12 +1384,10 @@ impl Announcer {
     /// resumes it (§6.9c). If saving fails, the error is returned, and the next
     /// call saves it again *(0.10.0)*.
     pub fn prepare(&self, now: i64) -> Result<Announcement, TlsError> {
-        if let Some(k) = self
-            .pending
-            .read()
-            .ok()
-            .and_then(|v| v.as_ref().map(|p| p.announcement.clone()))
-        {
+        // A poisoned lock is an error here, before anything is written
+        // (0.12.0). Read as "nothing is out", it would put a new certificate
+        // over the announced one in `new/`.
+        if let Some(k) = self.pending()? {
             self.save_pending()?;
             return Ok(k);
         }
@@ -1675,12 +1673,14 @@ impl Announcer {
         Ok(Some(old))
     }
 
-    /// Is it time to announce?
-    pub fn should_announce(&self, now: i64) -> bool {
-        self.schedule
+    /// Is it time to announce? A poisoned lock is [`TlsError::LockPoisoned`]
+    /// *(0.12.0)*, so that a fault is not read as "not yet".
+    pub fn should_announce(&self, now: i64) -> Result<bool, TlsError> {
+        Ok(self
+            .schedule
             .read()
-            .map(|r| r.should_announce(now))
-            .unwrap_or(false)
+            .map_err(|_| TlsError::poisoned("the rotation lock"))?
+            .should_announce(now))
     }
 
     /// The status the operator sees.
@@ -1692,12 +1692,15 @@ impl Announcer {
             .status(now, expires))
     }
 
-    /// The pending announcement, if one exists.
-    pub fn pending(&self) -> Option<Announcement> {
-        self.pending
+    /// The pending announcement, if one exists. A poisoned lock is
+    /// [`TlsError::LockPoisoned`] *(0.12.0)*.
+    pub fn pending(&self) -> Result<Option<Announcement>, TlsError> {
+        Ok(self
+            .pending
             .read()
-            .ok()
-            .and_then(|v| v.as_ref().map(|x| x.announcement.clone()))
+            .map_err(|_| TlsError::poisoned("the pending lock"))?
+            .as_ref()
+            .map(|p| p.announcement.clone()))
     }
 }
 
@@ -2266,4 +2269,65 @@ pub struct OwnTrio {
     pub current_fingerprint: String,
     /// An announced successor awaiting acknowledgement, if any.
     pub next_fingerprint: Option<String>,
+}
+
+#[cfg(test)]
+mod poisoned_tests {
+    use super::*;
+
+    /// A thread that panics while holding a lock leaves it poisoned.
+    fn poison<T: Send + Sync + 'static>(lock: &Arc<RwLock<T>>) {
+        let lock = Arc::clone(lock);
+        let _ = std::thread::spawn(move || {
+            let _held = lock.write().unwrap();
+            panic!("poison the lock");
+        })
+        .join();
+    }
+
+    /// With a poisoned lock the calls that read under it give the error, and
+    /// not "not yet" or "nothing is out"; `prepare` stops before it writes
+    /// anything (0.12.0).
+    #[test]
+    fn a_poisoned_lock_gives_an_error_and_not_an_ordinary_answer() {
+        let dir = std::env::temp_dir().join(format!("nettls-poisoned-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let params = SelfSignedParams::new("localhost", ["localhost"]);
+        let material = TlsMaterial::load(&CertSource::self_signed(params.clone())).unwrap();
+        let announcer = Announcer::new(
+            "gateway",
+            &dir,
+            params,
+            Arc::new(RotatingResolver::new(&material).unwrap()),
+            OwnMaterial {
+                previous: None,
+                current: (
+                    material.fingerprint_sha256(),
+                    material.anchor_pkcs8().unwrap(),
+                ),
+            },
+            Schedule::new(vec!["service".to_string()], 0),
+            None,
+        )
+        .unwrap();
+        assert!(announcer.should_announce(100).unwrap());
+        assert!(announcer.pending().unwrap().is_none());
+
+        poison(&announcer.schedule);
+        let err = announcer.should_announce(100).unwrap_err();
+        assert!(matches!(err, TlsError::LockPoisoned(_)), "{err:?}");
+
+        poison(&announcer.pending);
+        let err = announcer.pending().unwrap_err();
+        assert!(matches!(err, TlsError::LockPoisoned(_)), "{err:?}");
+        let err = announcer.prepare(100).unwrap_err();
+        assert!(matches!(err, TlsError::LockPoisoned(_)), "{err:?}");
+        assert!(
+            !dir.join("new").exists(),
+            "prepare wrote a new certificate before it met the poisoned lock"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
