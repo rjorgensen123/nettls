@@ -3,7 +3,7 @@
 //! without the GIL.
 
 use pyo3::prelude::*;
-use pyo3::types::PyModule;
+use pyo3::types::{PyBytes, PyModule};
 
 use crate::{Alg, Bytes, bytes, err, hold_str, reveal};
 
@@ -26,10 +26,10 @@ fn lock_with(py: Python<'_>, password: &str, plaintext: &[u8], alg: Alg) -> PyRe
 /// The plaintext comes back as `bytes`: a copy Python holds, neither locked
 /// nor wiped.
 #[pyfunction]
-fn unlock(py: Python<'_>, password: &str, file: &[u8]) -> PyResult<Bytes> {
+fn unlock<'py>(py: Python<'py>, password: &str, file: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
     let pw = hold_str(password, "the password")?;
     py.detach(|| nettls::lockbox::unlock(&pw, file))
-        .map(|s| reveal(&s))
+        .map(|s| reveal(py, &s))
         .map_err(err)
 }
 

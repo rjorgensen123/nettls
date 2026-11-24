@@ -13,7 +13,8 @@
 //!
 //! - **rustls' own key.** `TlsMaterial` keeps the key as rustls'
 //!   `PrivateKeyDer` because that is the only type rustls accepts. We wrap it
-//!   in [`zeroize::Zeroizing`] so it is wiped on drop, but it is ordinary heap
+//!   in [`zeroize::Zeroizing`] as the first thing done with it *(0.12.0)*, so
+//!   it is wiped on drop, also when the pair is refused, but it is ordinary heap
 //!   — not locked. And when a `ServerConfig` is built, rustls/ring parse the
 //!   key into their own structures, which live as long as the config does.
 //! - **rcgen at generation.** The freshly generated key pair passes through

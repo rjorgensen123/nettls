@@ -10,12 +10,12 @@ use std::sync::Mutex;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyModule;
+use pyo3::types::{PyBytes, PyModule};
 
 use crate::announcement::{Announcement, Handled, Receipt};
 use crate::material::SelfSignedParams;
 use crate::resolver::RotatingResolver;
-use crate::{Bytes, err, hold, hold_str, lock, reveal};
+use crate::{err, hold, hold_str, lock, reveal};
 use nettls::announcer as an;
 
 #[pyfunction]
@@ -364,9 +364,12 @@ impl OwnMaterial {
 
     /// A copy: the key is `bytes` Python holds, neither locked nor wiped.
     #[getter]
-    fn previous(&self) -> PyResult<Option<(String, Bytes)>> {
+    fn previous<'py>(&self, py: Python<'py>) -> PyResult<Option<(String, Bound<'py, PyBytes>)>> {
         match lock(&self.inner).as_ref() {
-            Some(m) => Ok(m.previous.as_ref().map(|(fp, k)| (fp.clone(), reveal(k)))),
+            Some(m) => Ok(m
+                .previous
+                .as_ref()
+                .map(|(fp, k)| (fp.clone(), reveal(py, k)))),
             None => Err(PyValueError::new_err(
                 "this OwnMaterial was given to an Announcer",
             )),
@@ -375,9 +378,9 @@ impl OwnMaterial {
 
     /// A copy: the key is `bytes` Python holds, neither locked nor wiped.
     #[getter]
-    fn current(&self) -> PyResult<(String, Bytes)> {
+    fn current<'py>(&self, py: Python<'py>) -> PyResult<(String, Bound<'py, PyBytes>)> {
         match lock(&self.inner).as_ref() {
-            Some(m) => Ok((m.current.0.clone(), reveal(&m.current.1))),
+            Some(m) => Ok((m.current.0.clone(), reveal(py, &m.current.1))),
             None => Err(PyValueError::new_err(
                 "this OwnMaterial was given to an Announcer",
             )),

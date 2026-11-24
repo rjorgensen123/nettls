@@ -2,7 +2,7 @@
 //! `nettls::envelope`: a sealed envelope to one recipient (X25519).
 
 use pyo3::prelude::*;
-use pyo3::types::PyModule;
+use pyo3::types::{PyBytes, PyModule};
 
 use crate::{Alg, Bytes, bytes, err, hold, reveal};
 
@@ -56,9 +56,13 @@ fn seal_with(recipient_public: &[u8], plaintext: &[u8], alg: Alg) -> PyResult<By
 /// The plaintext comes back as `bytes`: a copy Python holds, neither locked
 /// nor wiped.
 #[pyfunction]
-fn open(key: &RecipientKey, envelope: &[u8]) -> PyResult<Bytes> {
+fn open<'py>(
+    py: Python<'py>,
+    key: &RecipientKey,
+    envelope: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
     nettls::envelope::open(&key.inner, envelope)
-        .map(|s| reveal(&s))
+        .map(|s| reveal(py, &s))
         .map_err(err)
 }
 

@@ -138,6 +138,13 @@ An operator key `op:<name>` may sign only approvals by `<name>`.
 It now takes the receipt and the peer's key and verifies before the peer
 is struck; `acked_handled` does the same for a `Handled`.
 
+### Fixed — two copies of a secret are no longer left unwiped *(2026-11-24)*
+
+The Python binding made an extra copy of a secret on its way out and
+dropped it unwiped; `bytes` is now made straight from the locked memory.
+A key loaded with its certificate is now wiped also when the pair is
+refused.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

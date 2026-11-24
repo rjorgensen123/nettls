@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use pyo3::prelude::*;
-use pyo3::types::PyModule;
+use pyo3::types::{PyBytes, PyModule};
 
 use crate::stream::ServerConfig;
 use crate::transport::TransportPolicy;
@@ -202,8 +202,11 @@ impl TlsMaterial {
 
     /// The anchor key as PKCS#8 DER. The copy is `bytes` Python holds, neither
     /// locked nor wiped.
-    fn anchor_pkcs8(&self) -> PyResult<Bytes> {
-        self.inner.anchor_pkcs8().map(|s| reveal(&s)).map_err(err)
+    fn anchor_pkcs8<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        self.inner
+            .anchor_pkcs8()
+            .map(|s| reveal(py, &s))
+            .map_err(err)
     }
 
     fn server_config(&self) -> PyResult<ServerConfig> {

@@ -412,6 +412,10 @@ impl TlsMaterial {
         key: PrivateKeyDer<'static>,
         origin: CertOrigin,
     ) -> Result<Self, TlsError> {
+        // Under a guaranteed wipe from the first line (0.12.0): the key is
+        // then wiped on every way out, also when a check below refuses the
+        // pair.
+        let key = Zeroizing::new(key);
         // This call IS the cross-check "does the key belong to the
         // certificate" — and at the same time "does the provider support the
         // key type". A wrong pair gives `InconsistentKeys(KeyMismatch)`. No
@@ -425,7 +429,7 @@ impl TlsMaterial {
 
         Ok(Self {
             chain,
-            key: Zeroizing::new(key),
+            key,
             origin,
             fingerprint,
             not_before,

@@ -40,7 +40,7 @@ use std::borrow::Cow;
 use std::sync::{Mutex, MutexGuard};
 
 use pyo3::prelude::*;
-use pyo3::types::PyModule;
+use pyo3::types::{PyBytes, PyModule};
 
 pub(crate) use error::err;
 
@@ -82,9 +82,11 @@ fn not_held(what: &str, e: krypto::Error) -> nettls::TlsError {
     }
 }
 
-/// A copy of a secret for Python. The copy is ordinary Python memory.
-pub(crate) fn reveal(s: &krypto::SecretBuf) -> Bytes {
-    s.expose(|b| Cow::Owned(b.to_vec()))
+/// A copy of a secret for Python. The copy is ordinary Python memory. It is
+/// made straight from the locked memory, so no copy is left on the Rust side
+/// (0.12.0).
+pub(crate) fn reveal<'py>(py: Python<'py>, s: &krypto::SecretBuf) -> Bound<'py, PyBytes> {
+    s.expose(|b| PyBytes::new(py, b))
 }
 
 /// JSON that serde cannot read is a `ValueError`, as `json.loads` gives.
