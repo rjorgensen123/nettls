@@ -181,7 +181,7 @@ async fn announced_successor_accepted_without_client_knowing_when() {
     let k = Announcement::new("gateway", None, (&c0.fp_bar(), &c0.pkcs8), &c1.pem, 1).unwrap();
     assert!(k.is_bootstrap(), "a first announcement has no previous");
     trust
-        .receive(&k)
+        .receive(&k, "gateway")
         .expect("the announcement must be accepted");
 
     // The server swaps. The client has NOT been told when.
@@ -222,7 +222,7 @@ async fn previous_generation_does_not_get_in_after_promotion() {
         Generation::from_der(c0.material.cert_chain()[0].as_ref().to_vec()).unwrap(),
     );
     let k = Announcement::new("gateway", None, (&c0.fp_bar(), &c0.pkcs8), &c1.pem, 1).unwrap();
-    trust.receive(&k).unwrap();
+    trust.receive(&k, "gateway").unwrap();
 
     // Promote by actually seeing c1.
     let s1 = server(port, c1.cfg()).await;
@@ -344,7 +344,9 @@ async fn announcer_rolls_only_when_receipt_is_in() {
     connect_to(&trust, port).await.expect("must still be c0");
 
     // The client stores and acknowledges.
-    trust.receive(&k).expect("the client stores the new one");
+    trust
+        .receive(&k, "gateway")
+        .expect("the client stores the new one");
     announcer.acked("service").unwrap();
 
     // Now we roll.
@@ -464,7 +466,7 @@ async fn the_promise_survives_a_restart() {
     let trust = Trust::from_approval(
         Generation::from_der(c0.material.cert_chain()[0].as_ref().to_vec()).unwrap(),
     );
-    trust.receive(&k).unwrap();
+    trust.receive(&k, "gateway").unwrap();
     connect_to(&trust, port)
         .await
         .expect("the client does not reach the certificate promised before the restart");
@@ -758,7 +760,7 @@ async fn next_without_its_key_does_not_promote() {
     );
     let k = Announcement::new("gateway", None, (&c0.fp_bar(), &c0.pkcs8), &c1.pem, 1).unwrap();
     trust
-        .receive(&k)
+        .receive(&k, "gateway")
         .expect("the announcement must be accepted");
 
     let s = server(port, cfg_with_foreign_key(&c1, &stranger)).await;

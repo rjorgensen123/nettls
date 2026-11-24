@@ -231,7 +231,7 @@ def test_trust_promotes_next_once_the_handshake_proves_it():
     k = nettls.announcement.Announcement.new(
         "server", None, (m0.fingerprint_sha256(), m0.anchor_pkcs8()), pem1, int(time.time())
     )
-    assert trust.receive(k) == Received.Stored
+    assert trust.receive(k, "server") == Received.Stored
 
     # The server switches. The client config accepts `next`, and promotes it.
     resolver.swap(m1)

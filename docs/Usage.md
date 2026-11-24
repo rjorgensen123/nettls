@@ -137,19 +137,23 @@ This is the part that asks the most of you, so here is the whole flow in broad s
 
 In practice `Announcer` keeps track of this for you: call `prepare()` when you want to announce,
 `acked()` when a peer has answered (after **verifying** the receipt with `Receipt::verify` —
-against both the pinned key and the fingerprint you announced), and `roll_if_ready()` regularly.
-The last one does nothing until everyone has acknowledged.
+against the peer it must come from *(0.12.0)*, its pinned key and the fingerprint you announced),
+and `roll_if_ready()` regularly. The last one does nothing until everyone has acknowledged.
 
 A `Handled` from a peer counts as a receipt once it verifies, with `Handled::verify` and the same
-two checks: an earlier receipt may have been lost, but the peer is ready. Call `acked()` for it the
-same way *(0.12.0)*.
+three checks: an earlier receipt may have been lost, but the peer is ready. Call `acked()` for it
+the same way *(0.12.0)*.
 
-**On the receiving side,** `Trust::receive` verifies the announcement and answers `Stored` or
-`Known`. It verifies first, also when the announcement names the certificate already stored as
-next *(0.12.0)*. Acknowledge every time: on `Stored`, send the `Receipt`; on `Known`, send the
-`Receipt` first, unchanged, and then a `Handled`. A peer on an older nettls accepts the receipt and
-refuses the handled message as an unknown message version, changing nothing — which is why the
-receipt goes first *(0.12.0)*.
+**On the receiving side,** `Trust::receive` verifies the announcement, given the name of the peer
+it must come from *(0.12.0)*, and answers `Stored` or `Known`. It verifies first, also when the
+announcement names the certificate already stored as next *(0.12.0)*. Acknowledge every time: on
+`Stored`, send the `Receipt`; on `Known`, send the `Receipt` first, unchanged, and then a
+`Handled`. A peer on an older nettls accepts the receipt and refuses the handled message as an
+unknown message version, changing nothing — which is why the receipt goes first *(0.12.0)*.
+
+> **Every `verify` takes the name of the peer you expect, and refuses a message about another**
+> *(0.12.0)*: a genuine message for one peer says nothing about another. Give the name the peer is
+> pinned under. An operator key `op:<name>` may sign only approvals that name `<name>` as approver.
 
 > `Announcer::new` restores the chain and any pending switch itself, fail-closed: state on disk
 > is used; state that exists but cannot be read fails construction loudly; nothing on disk means

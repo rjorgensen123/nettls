@@ -168,9 +168,15 @@ impl Announcement {
         self.inner.canonical().map(bytes).map_err(err)
     }
 
-    fn verify(&self, prev_cert_der: Option<Vec<u8>>, curr_cert_der: &[u8]) -> PyResult<()> {
+    /// `expected_announcer` is the peer the announcement must be from (0.12.0).
+    fn verify(
+        &self,
+        expected_announcer: &str,
+        prev_cert_der: Option<Vec<u8>>,
+        curr_cert_der: &[u8],
+    ) -> PyResult<()> {
         self.inner
-            .verify(prev_cert_der.as_deref(), curr_cert_der)
+            .verify(expected_announcer, prev_cert_der.as_deref(), curr_cert_der)
             .map_err(err)
     }
 
@@ -330,9 +336,15 @@ impl Receipt {
         self.inner.canonical().map(bytes).map_err(err)
     }
 
-    fn verify(&self, pinned_pubkey: &[u8], expected_new_fp: &str) -> PyResult<()> {
+    /// `expected_acker` is the peer the receipt must be from (0.12.0).
+    fn verify(
+        &self,
+        expected_acker: &str,
+        pinned_pubkey: &[u8],
+        expected_new_fp: &str,
+    ) -> PyResult<()> {
         self.inner
-            .verify(pinned_pubkey, expected_new_fp)
+            .verify(expected_acker, pinned_pubkey, expected_new_fp)
             .map_err(err)
     }
 
@@ -352,6 +364,10 @@ impl Receipt {
 
     fn acker(&self) -> String {
         self.inner.acker().to_string()
+    }
+
+    fn announcer(&self) -> String {
+        self.inner.announcer().to_string()
     }
 
     fn new_fingerprint(&self) -> String {
@@ -484,9 +500,15 @@ impl Handled {
         self.inner.canonical().map(bytes).map_err(err)
     }
 
-    fn verify(&self, pinned_pubkey: &[u8], expected_new_fp: &str) -> PyResult<()> {
+    /// `expected_acker` is the peer the handled message must be from (0.12.0).
+    fn verify(
+        &self,
+        expected_acker: &str,
+        pinned_pubkey: &[u8],
+        expected_new_fp: &str,
+    ) -> PyResult<()> {
         self.inner
-            .verify(pinned_pubkey, expected_new_fp)
+            .verify(expected_acker, pinned_pubkey, expected_new_fp)
             .map_err(err)
     }
 
@@ -506,6 +528,10 @@ impl Handled {
 
     fn acker(&self) -> String {
         self.inner.acker().to_string()
+    }
+
+    fn announcer(&self) -> String {
+        self.inner.announcer().to_string()
     }
 
     fn new_fingerprint(&self) -> String {

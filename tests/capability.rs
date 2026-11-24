@@ -23,17 +23,39 @@ fn statement_roundtrip_and_wrong_signer_rejected() {
 
     // Verified against the RIGHT pinned identity → the declared set.
     let cert = bridge_side.cert_chain()[0].as_ref().to_vec();
-    assert_eq!(s.verify(&cert).unwrap(), vec![Alg::Aes256Gcm]);
+    assert_eq!(s.verify("service", &cert).unwrap(), vec![Alg::Aes256Gcm]);
 
     // An attacker cannot inject a downgrade: wrong signer → rejected.
     let attacker = identity("attacker");
     let wrong = attacker.cert_chain()[0].as_ref().to_vec();
-    assert!(s.verify(&wrong).is_err());
+    assert!(s.verify("service", &wrong).is_err());
 
     // Nor can the declared set be edited after signing.
     let mut tampered = s.clone();
     tampered.supported = vec!["aegis256".into(), "aes256gcm".into()];
-    assert!(tampered.verify(&cert).is_err());
+    assert!(tampered.verify("service", &cert).is_err());
+}
+
+#[test]
+fn a_statement_from_another_component_is_refused() {
+    // 0.12.0: a genuine statement from one component says nothing about another.
+    let m = identity("service");
+    let s = SupportStatement::signed(
+        "service",
+        &[Alg::Aes256Gcm],
+        1_760_000_000,
+        &m.anchor_pkcs8().unwrap(),
+    )
+    .unwrap();
+    let cert = m.cert_chain()[0].as_ref().to_vec();
+    let err = s.verify("gateway", &cert).unwrap_err();
+    assert!(matches!(err, TlsError::ProofInvalid(_)), "{err:?}");
+    assert!(
+        err.to_string()
+            .contains("from the component \"service\", but \"gateway\" was expected"),
+        "{err}"
+    );
+    assert_eq!(s.verify("service", &cert).unwrap(), vec![Alg::Aes256Gcm]);
 }
 
 #[test]
@@ -79,7 +101,7 @@ fn statement_is_fail_closed_on_form() {
     ] {
         let mut s = signed.clone();
         s.supported = supported.iter().map(|t| t.to_string()).collect();
-        let err = s.verify(&cert).unwrap_err();
+        let err = s.verify("service", &cert).unwrap_err();
         assert!(matches!(err, TlsError::Params(_)), "{supported:?}: {err:?}");
     }
     // Tokens are the cli's — one vocabulary.

@@ -181,7 +181,7 @@ impl Node {
                         "receipt from {:?}, but no announcement is pending", ack.acker()
                     )});
                 };
-                match ack.verify(&pk, &expected) {
+                match ack.verify(ack.acker(), &pk, &expected) {
                     Ok(()) => {
                         self.schedule.lock().unwrap().acked(ack.acker());
                         json!({"ok": true})
@@ -430,7 +430,7 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
                 Ok(v) => v,
                 Err(e) => return json!({"error": e.to_string()}),
             };
-            if let Err(e) = t.receive(&k) {
+            if let Err(e) = t.receive(&k, name) {
                 return json!({"error": e.to_string()});
             }
             let ack = match Receipt::new(&node.name, name, k.new_fingerprint(), now, &node.seed) {
@@ -681,7 +681,7 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
                 let k = Announcement::from_json(&announcement_json).map_err(|e| e.to_string())?;
                 let mp = node.peers.lock().unwrap();
                 let t = mp.get(name).ok_or("unknown peer")?;
-                t.receive(&k).map(|_| ()).map_err(|e| e.to_string())
+                t.receive(&k, name).map(|_| ()).map_err(|e| e.to_string())
             })()
             .err();
             let after_state = state_of(node, name);

@@ -121,9 +121,10 @@ impl Generations {
         .map_err(err)
     }
 
-    fn receive(&self, k: &Announcement) -> PyResult<Received> {
+    /// `expected_announcer` is the peer this state belongs to (0.12.0).
+    fn receive(&self, k: &Announcement, expected_announcer: &str) -> PyResult<Received> {
         lock(&self.inner)
-            .receive(&k.inner)
+            .receive(&k.inner, expected_announcer)
             .map(Received::from)
             .map_err(err)
     }
@@ -205,9 +206,10 @@ impl Trust {
         }
     }
 
-    fn receive(&self, k: &Announcement) -> PyResult<Received> {
+    /// `expected_announcer` is the peer this trust belongs to (0.12.0).
+    fn receive(&self, k: &Announcement, expected_announcer: &str) -> PyResult<Received> {
         self.inner
-            .receive(&k.inner)
+            .receive(&k.inner, expected_announcer)
             .map(Received::from)
             .map_err(err)
     }

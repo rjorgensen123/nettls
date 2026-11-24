@@ -526,7 +526,7 @@ def test_trust_accepts_and_promotes_the_next_certificate_through_httpx():
         announcement = nettls.announcement.Announcement.new(
             "server", None, (old.fingerprint_sha256(), old.anchor_pkcs8()), pem, int(time.time())
         )
-        assert trust.receive(announcement) == Received.Stored
+        assert trust.receive(announcement, "server") == Received.Stored
         resolver.swap(new)
         # The same context: the config reads the trust state at every handshake.
         assert httpx.get(url, verify=context).status_code == 200

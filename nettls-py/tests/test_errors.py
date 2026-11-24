@@ -41,17 +41,23 @@ READERS = {
 
 
 def _verify_kind(kind: str, obj) -> None:
-    """Verification for the kind, with the baseline's keys."""
+    """Verification for the kind, with the baseline's keys, for the baseline's
+    own counterpart: an entry is one mutation of the baseline, so one that does
+    not touch the name keeps it, and the name check (0.12.0) does not refuse it
+    in place of its own mutation."""
     pub = from_hex(BASELINE["ed25519_pub"])
     if kind == "announcement":
         obj.verify(
+            BASELINE["announcement"]["announcer"],
             announcement.der_from_pem(BASELINE["prev_cert_pem"]),
             announcement.der_from_pem(BASELINE["curr_cert_pem"]),
         )
     elif kind == "receipt":
-        obj.verify(pub, obj.new_fingerprint())
+        obj.verify(BASELINE["receipt"]["acker"], pub, obj.new_fingerprint())
     else:
-        obj.verify(lambda key_id: pub if key_id == "portal" else None)
+        obj.verify(
+            BASELINE["approval"]["peer"], lambda key_id: pub if key_id == "portal" else None
+        )
 
 
 def _entries(kind: str):

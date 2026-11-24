@@ -56,7 +56,8 @@ pub fn alg_from_token(token: &str) -> Result<Alg, TlsError> {
 /// The signed support statement: "this is what I actually support".
 ///
 /// Serialize it as JSON and send it however your surfaces talk; the receiver
-/// calls [`SupportStatement::verify`] against the signer's pinned certificate.
+/// calls [`SupportStatement::verify`] with the name of the component it
+/// expects *(0.12.0)* and the signer's pinned certificate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SupportStatement {
     /// Who declares (component name, validated like every §6 name).
@@ -106,13 +107,27 @@ impl SupportStatement {
         })
     }
 
-    /// Verify against the signer's certificate (DER — the pinned identity you
-    /// already trust for this peer) and return the declared algorithms.
+    /// Verify that the statement is from `expected_component`, against the
+    /// signer's certificate (DER — the pinned identity you already trust for
+    /// this peer), and return the declared algorithms.
     ///
+    /// The component is checked first: a statement from another component is
+    /// refused before anything else ([`TlsError::ProofInvalid`]) *(0.12.0)*.
     /// Fail-closed the whole way: unknown tokens, non-canonical order and a
     /// bad signature all reject — an unverifiable statement authorizes
     /// nothing ([`TlsError::ProofInvalid`]).
-    pub fn verify(&self, signer_cert_der: &[u8]) -> Result<Vec<Alg>, TlsError> {
+    pub fn verify(
+        &self,
+        expected_component: &str,
+        signer_cert_der: &[u8],
+    ) -> Result<Vec<Alg>, TlsError> {
+        if self.component != expected_component {
+            return Err(TlsError::ProofInvalid(format!(
+                "support statement: it is from the component {:?}, but {expected_component:?} \
+                 was expected — a statement from another component authorizes nothing here",
+                self.component
+            )));
+        }
         let csv = self.supported.join(",");
         let bytes = algsupport_v1(&self.component, &csv, self.timestamp)?;
         let sig = canonical_hex(&self.signature)?;

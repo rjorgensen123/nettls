@@ -159,7 +159,7 @@ class Node:
             with self.lock:
                 expected = self.pending[0].new_fingerprint() if self.pending else r.new_fingerprint()
             try:
-                r.verify(pk, expected)
+                r.verify(r.acker(), pk, expected)
             except nettls.TlsError as e:
                 return {"error": str(e)}
             self.schedule.acked(r.acker())
@@ -252,7 +252,7 @@ def control(node: Node, m: dict) -> dict:
         try:
             k = Announcement.from_json(AnnouncementJson.loads(json.dumps(reply["announcement"])))
             if name in node.peers:
-                node.peers[name].receive(k)
+                node.peers[name].receive(k, name)
         except (ValueError, nettls.TlsError) as e:
             return {"error": str(e)}
         r = Receipt.new(node.name, name, k.new_fingerprint(), int(m["now"]), node.seed)
@@ -348,7 +348,7 @@ def control(node: Node, m: dict) -> dict:
             k = Announcement.from_json(AnnouncementJson.loads(json.dumps(m["announcement"])))
             if name not in node.peers:
                 raise KeyError(f"unknown peer {name}")
-            node.peers[name].receive(k)
+            node.peers[name].receive(k, name)
         except (ValueError, nettls.TlsError) as e:
             reason = str(e)
         except Exception as e:  # noqa: BLE001

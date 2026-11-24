@@ -100,13 +100,40 @@ impl Approval {
         )
     }
 
-    /// Verify against the pinned key for `key_id`.
+    /// Verify that the approval is for `expected_peer`, against the pinned key
+    /// for `key_id`.
+    ///
+    /// The peer is checked first: an approval for another peer is refused
+    /// before anything else, since it says nothing about the peer expected
+    /// *(0.12.0)*. An operator key, a `key_id` of the form `op:<name>`, may
+    /// sign only an approval that names `<name>` in `approved_by`; other key
+    /// ids, such as `portal`, are not affected *(0.12.0)*.
     ///
     /// `look_up_key` is the call site's key registry. That the lookup comes
     /// from outside is the point of the `key_id` mechanism: if the operator one
     /// day moves from portal-attested to their own key, the lookup changes — not
-    /// the message shape and not this function (§6.4).
-    pub fn verify(&self, look_up_key: &dyn Fn(&str) -> Option<Vec<u8>>) -> Result<(), TlsError> {
+    /// the message shape (§6.4).
+    pub fn verify(
+        &self,
+        expected_peer: &str,
+        look_up_key: &dyn Fn(&str) -> Option<Vec<u8>>,
+    ) -> Result<(), TlsError> {
+        if self.peer != expected_peer {
+            return Err(TlsError::ProofInvalid(format!(
+                "the approval is for the peer {:?}, but {expected_peer:?} was expected — \
+                 an approval for one peer says nothing about another",
+                self.peer
+            )));
+        }
+        if let Some(operator) = self.key_id.strip_prefix("op:")
+            && operator != self.approved_by
+        {
+            return Err(TlsError::ProofInvalid(format!(
+                "the approval is signed with the operator key {:?}, which may sign only \
+                 approvals by {operator:?}, but it names {:?} as approver",
+                self.key_id, self.approved_by
+            )));
+        }
         let Some(pk) = look_up_key(&self.key_id) else {
             return Err(TlsError::Chain(format!(
                 "the approval is signed with \"{}\", which does not exist in the key registry — \
@@ -133,6 +160,10 @@ impl Approval {
     /// The key that signed.
     pub fn key_id(&self) -> &str {
         &self.key_id
+    }
+    /// The timestamp, unix seconds UTC: the signer's own clock *(0.12.0)*.
+    pub fn timestamp(&self) -> i64 {
+        self.timestamp
     }
 
     /// To serialized form. Fails with [`TlsError::Encode`] when the signature
@@ -178,6 +209,9 @@ impl Approval {
 /// Gathers the two kinds' needs in one place, so `verify` has **one** signature
 /// no matter which kind it receives.
 pub struct Context<'a> {
+    /// The counterpart the caller expects: the approval's `peer` or the
+    /// announcement's `announcer` must be this name *(0.12.0)*.
+    pub peer: &'a str,
     /// Key registry for `key_id` → Ed25519 public key (generation 0).
     pub keys: &'a dyn Fn(&str) -> Option<Vec<u8>>,
     /// The receiver's previous generation, if it exists (generation 1..n).
@@ -197,9 +231,12 @@ pub enum Recognition {
 
 impl Recognition {
     /// **One code path** (M-9). The call site does not need to know which kind it has.
+    ///
+    /// `k.peer` goes on to [`Approval::verify`] or [`Announcement::verify`],
+    /// so a recognition about another peer is refused *(0.12.0)*.
     pub fn verify(&self, k: &Context<'_>) -> Result<(), TlsError> {
         match self {
-            Recognition::Operator(g) => g.verify(k.keys),
+            Recognition::Operator(g) => g.verify(k.peer, k.keys),
             Recognition::Schedule(r) => {
                 let Some(current) = k.current_der else {
                     return Err(TlsError::Chain(
@@ -208,8 +245,17 @@ impl Recognition {
                             .into(),
                     ));
                 };
-                r.verify(k.previous_der, current)
+                r.verify(k.peer, k.previous_der, current)
             }
+        }
+    }
+
+    /// The name this recognition is about: the approval's `peer`, or the
+    /// announcement's `announcer` *(0.12.0)*.
+    pub fn peer(&self) -> &str {
+        match self {
+            Recognition::Operator(g) => g.peer(),
+            Recognition::Schedule(r) => r.announcer(),
         }
     }
 
@@ -256,7 +302,7 @@ mod tests {
     fn unknown_key_id_says_anchor_cannot_be_verified() {
         let g = Approval::new("gateway", FP, "operator", 100, "op:operator", &seed()).unwrap();
         let r = register();
-        let err = g.verify(&r).unwrap_err();
+        let err = g.verify("gateway", &r).unwrap_err();
         assert!(
             format!("{err}").contains("not an anchor"),
             "unexpected: {err}"
@@ -272,7 +318,7 @@ mod tests {
         j.approved_by = "someone-else".into();
         let tampered = Approval::from_json(&j).unwrap();
         let r = register();
-        assert!(tampered.verify(&r).is_err());
+        assert!(tampered.verify("gateway", &r).is_err());
     }
 
     #[test]
@@ -282,7 +328,45 @@ mod tests {
         j.fingerprint = "bb".repeat(32);
         let tampered = Approval::from_json(&j).unwrap();
         let r = register();
-        assert!(tampered.verify(&r).is_err());
+        assert!(tampered.verify("gateway", &r).is_err());
+    }
+
+    #[test]
+    fn an_approval_for_another_peer_is_refused() {
+        // 0.12.0: a genuine approval for one peer says nothing about another.
+        let g = Approval::new("gateway", FP, "operator", 100, "portal", &seed()).unwrap();
+        let r = register();
+        let err = g.verify("service", &r).unwrap_err();
+        assert!(matches!(err, TlsError::ProofInvalid(_)), "{err:?}");
+        assert!(
+            format!("{err}").contains("for the peer \"gateway\", but \"service\" was expected"),
+            "unexpected: {err}"
+        );
+        g.verify("gateway", &r).expect("its own peer");
+    }
+
+    #[test]
+    fn an_operator_key_signs_only_approvals_by_its_operator() {
+        // 0.12.0: `op:<name>` may sign only what names `<name>` as approver.
+        let r = |id: &str| {
+            ["portal", "op:bob"]
+                .contains(&id)
+                .then(|| krypto::sign::ed25519_public(&seed()).unwrap().to_vec())
+        };
+        let by_alice = Approval::new("gateway", FP, "alice", 100, "op:bob", &seed()).unwrap();
+        let err = by_alice.verify("gateway", &r).unwrap_err();
+        assert!(matches!(err, TlsError::ProofInvalid(_)), "{err:?}");
+        assert!(
+            format!("{err}").contains("\"op:bob\", which may sign only approvals by \"bob\""),
+            "unexpected: {err}"
+        );
+
+        let by_bob = Approval::new("gateway", FP, "bob", 100, "op:bob", &seed()).unwrap();
+        by_bob.verify("gateway", &r).expect("op:bob for bob");
+        let via_portal = Approval::new("gateway", FP, "alice", 100, "portal", &seed()).unwrap();
+        via_portal
+            .verify("gateway", &r)
+            .expect("portal is not affected");
     }
 
     #[test]
@@ -299,6 +383,7 @@ mod tests {
         let t = serde_json::to_string(&g.to_json().unwrap()).unwrap();
         let read_back: ApprovalJson = serde_json::from_str(&t).unwrap();
         assert_eq!(Approval::from_json(&read_back).unwrap(), g);
+        assert_eq!(g.timestamp(), 1_700_000_000);
     }
 
     // --- the ONE code path (M-9) ---------------------------------------------- //
@@ -334,6 +419,7 @@ mod tests {
         // ONE loop, one call, both kinds.
         for a in &recognitions {
             a.verify(&Context {
+                peer: "gateway",
                 keys: &r,
                 previous_der: None,
                 current_der: Some(&der0),
@@ -341,9 +427,29 @@ mod tests {
             .unwrap_or_else(|e| panic!("recognition failed: {e}"));
         }
 
+        // The same call for another peer refuses both kinds.
+        for a in &recognitions {
+            assert!(
+                a.verify(&Context {
+                    peer: "service",
+                    keys: &r,
+                    previous_der: None,
+                    current_der: Some(&der0),
+                })
+                .is_err()
+            );
+        }
+
         assert!(recognitions[0].is_anchor());
         assert!(!recognitions[1].is_anchor());
         assert_eq!(recognitions[0].fingerprint(), fp0);
+        assert_eq!(
+            recognitions
+                .iter()
+                .map(Recognition::peer)
+                .collect::<Vec<_>>(),
+            ["gateway", "gateway"]
+        );
     }
 
     #[test]
@@ -366,6 +472,7 @@ mod tests {
         let r = register();
         assert!(
             a.verify(&Context {
+                peer: "gateway",
                 keys: &r,
                 previous_der: None,
                 current_der: None,

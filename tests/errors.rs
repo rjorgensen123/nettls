@@ -82,6 +82,17 @@ fn ed25519_pub(k: &serde_json::Value) -> Vec<u8> {
     from_hex(baseline(k)["ed25519_pub"].as_str().unwrap()).expect("the baseline's Ed25519 key")
 }
 
+/// The counterpart every entry of `kind` is verified for: the baseline's own
+/// name in `field`, the peer whose keys the baseline carries. An entry is one
+/// mutation of the baseline, so one that does not touch the name keeps it, and
+/// the name check of `verify` (0.12.0) does not refuse it in place of its own
+/// mutation.
+fn expected_name<'a>(k: &'a serde_json::Value, kind: &str, field: &str) -> &'a str {
+    baseline(k)[kind][field]
+        .as_str()
+        .unwrap_or_else(|| panic!("the baseline {kind} has no {field}"))
+}
+
 fn try_announcement(k: &serde_json::Value, j: &serde_json::Value) -> Outcome {
     let Ok(announcement_json) = serde_json::from_value::<AnnouncementJson>(j.clone()) else {
         return Outcome::RejectedAtParsing;
@@ -90,7 +101,8 @@ fn try_announcement(k: &serde_json::Value, j: &serde_json::Value) -> Outcome {
         return Outcome::RejectedAtParsing;
     };
     let (prev, curr) = prev_curr_der(k);
-    match obj.verify(Some(&prev), &curr) {
+    let announcer = expected_name(k, "announcement", "announcer");
+    match obj.verify(announcer, Some(&prev), &curr) {
         Ok(()) => Outcome::Accepted,
         Err(_) => Outcome::RejectedAtVerification,
     }
@@ -105,7 +117,8 @@ fn try_receipt(k: &serde_json::Value, j: &serde_json::Value) -> Outcome {
     };
     let pk = ed25519_pub(k);
     let fp = obj.new_fingerprint().to_string();
-    match obj.verify(&pk, &fp) {
+    let acker = expected_name(k, "receipt", "acker");
+    match obj.verify(acker, &pk, &fp) {
         Ok(()) => Outcome::Accepted,
         Err(_) => Outcome::RejectedAtVerification,
     }
@@ -126,7 +139,8 @@ fn try_approval(k: &serde_json::Value, j: &serde_json::Value) -> Outcome {
             None
         }
     };
-    match obj.verify(&lookup) {
+    let peer = expected_name(k, "approval", "peer");
+    match obj.verify(peer, &lookup) {
         Ok(()) => Outcome::Accepted,
         Err(_) => Outcome::RejectedAtVerification,
     }

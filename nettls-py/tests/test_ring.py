@@ -344,8 +344,9 @@ def _inject_errors(nodes: list[NodeProcess], round_no: int) -> None:
 
     The level is probed elsewhere: `nettls-py/tests/test_errors.py` and `tests/errors.rs`
     require every entry stopped at the **right** level. Turn off the
-    fingerprint validation and this test still passes (`receive` catches it),
-    while the corpus tests catch it. The two complement each other, and neither
+    fingerprint validation and this test still passes: `receive` catches it,
+    already because the corpus announcements name an announcer no ring node
+    has. The corpus tests catch it. The two complement each other, and neither
     replaces the other.
 
     ## The whole corpus, not a random sample

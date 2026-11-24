@@ -151,23 +151,37 @@ impl Announcement {
 
     /// Verify the announcement against the receiver's **own** state.
     ///
-    /// `prev_cert_der` is the receiver's previous generation, `curr_cert_der` the
-    /// current one. That the condition for a single signature is tied to the
-    /// *receiver's* state and not to a field in the message is the whole point:
-    /// otherwise an attacker could have asked to be let through by omitting `prev`.
+    /// `expected_announcer` is the peer the receiver expects the announcement
+    /// from. `prev_cert_der` is the receiver's previous generation,
+    /// `curr_cert_der` the current one. That the condition for a single
+    /// signature is tied to the *receiver's* state and not to a field in the
+    /// message is the whole point: otherwise an attacker could have asked to be
+    /// let through by omitting `prev`.
     ///
-    /// The order is not accidental either. **The fingerprint is checked first**:
-    /// if `new_cert_pem` was swapped in transit, that must be discovered before
-    /// we use that key for anything at all.
+    /// The order is not accidental either. The announcer is checked first: an
+    /// announcement from another peer is refused before anything else
+    /// *(0.12.0)*. **The fingerprint comes next**: if `new_cert_pem` was
+    /// swapped in transit, that must be discovered before we use that key for
+    /// anything at all.
     ///
     /// Right after it, `new_cert_pem` must be an X.509 certificate with a P-256
     /// key, the key the next announcement is signed with; a certificate of
-    /// another kind is refused before anything else is checked *(0.12.0)*.
+    /// another kind is refused before the rest is checked *(0.12.0)*.
     pub fn verify(
         &self,
+        expected_announcer: &str,
         prev_cert_der: Option<&[u8]>,
         curr_cert_der: &[u8],
     ) -> Result<(), TlsError> {
+        // 0. The announcement must be from the peer we expect it from.
+        if self.announcer != expected_announcer {
+            return Err(TlsError::ProofInvalid(format!(
+                "the announcement is from the announcer {:?}, but {expected_announcer:?} was \
+                 expected — an announcement from one peer says nothing about another",
+                self.announcer
+            )));
+        }
+
         // 1. The certificate MUST hash to the stated fingerprint (§6.5).
         let actual = fingerprint_from_pem(&self.new_cert_pem)?;
         if !same_fingerprint(&actual, &self.new_fp) {
@@ -380,7 +394,7 @@ mod tests {
         let c2 = generation("c2");
         let k = Announcement::new("gateway", None, (&c1.fp, &c1.pkcs8), &c2.pem, 100).unwrap();
 
-        let err = k.verify(Some(&c0.der), &c1.der).unwrap_err();
+        let err = k.verify("gateway", Some(&c0.der), &c1.der).unwrap_err();
         assert!(
             format!("{err}").contains("single-signed"),
             "unexpected error: {err}"
@@ -404,7 +418,7 @@ mod tests {
             100,
         )
         .unwrap();
-        assert!(k.verify(Some(&c0.der), &c1.der).is_err());
+        assert!(k.verify("gateway", Some(&c0.der), &c1.der).is_err());
     }
 
     #[test]
@@ -421,10 +435,10 @@ mod tests {
             100,
         )
         .unwrap();
-        assert!(k.verify(Some(&c0.der), &c1.der).is_err());
+        assert!(k.verify("gateway", Some(&c0.der), &c1.der).is_err());
     }
 
-    // --- the fingerprint is checked FIRST ------------------------------------- //
+    // --- the fingerprint is checked before the signatures --------------------- //
 
     #[test]
     fn a_received_announcement_naming_one_certificate_twice_is_rejected() {
@@ -446,7 +460,9 @@ mod tests {
         j.new_fingerprint = c1.fp.clone();
         let received = Announcement::from_json(&j).unwrap();
 
-        let err = received.verify(Some(&c0.der), &c1.der).unwrap_err();
+        let err = received
+            .verify("gateway", Some(&c0.der), &c1.der)
+            .unwrap_err();
         assert!(
             format!("{err}").contains("new_fp and curr_fp are the same fingerprint"),
             "unexpected error: {err}"
@@ -475,7 +491,9 @@ mod tests {
         j.new_cert_pem = evil.pem.clone();
         let tampered = Announcement::from_json(&j).unwrap();
 
-        let err = tampered.verify(Some(&c0.der), &c1.der).unwrap_err();
+        let err = tampered
+            .verify("gateway", Some(&c0.der), &c1.der)
+            .unwrap_err();
         assert!(
             format!("{err}").contains("swapped in transit"),
             "unexpected error: {err}"
@@ -505,7 +523,7 @@ mod tests {
                 100,
             )
             .unwrap();
-            let err = k.verify(Some(&c0.der), &c1.der).unwrap_err();
+            let err = k.verify("gateway", Some(&c0.der), &c1.der).unwrap_err();
             assert!(
                 format!("{err}").contains("new_cert_pem in the announcement"),
                 "unexpected error: {err}"
@@ -528,11 +546,28 @@ mod tests {
             100,
         )
         .unwrap();
-        let err = k.verify(Some(&c0.der), &c1.der).unwrap_err();
+        let err = k.verify("gateway", Some(&c0.der), &c1.der).unwrap_err();
         assert!(
             format!("{err}").contains("missed a rotation"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn an_announcement_from_another_announcer_is_refused() {
+        // 0.12.0: a genuine announcement from one peer says nothing about another.
+        let c0 = generation("c0");
+        let c1 = generation("c1");
+        let k = Announcement::new("gateway", None, (&c0.fp, &c0.pkcs8), &c1.pem, 100).unwrap();
+        let err = k.verify("service", None, &c0.der).unwrap_err();
+        assert!(matches!(err, TlsError::ProofInvalid(_)), "{err:?}");
+        assert!(
+            format!("{err}")
+                .contains("from the announcer \"gateway\", but \"service\" was expected"),
+            "unexpected error: {err}"
+        );
+        k.verify("gateway", None, &c0.der)
+            .expect("its own announcer");
     }
 
     // --- serialization ---------------------------------------------------------- //
@@ -635,12 +670,27 @@ impl Receipt {
         canonical::rotate_ack_v2(&self.acker, &self.announcer, &self.new_fp, self.sent_at)
     }
 
-    /// Verify against the acker's **pinned** Ed25519 key, and against the
-    /// fingerprint we actually announced.
+    /// Verify that the receipt is from `expected_acker`, against the acker's
+    /// **pinned** Ed25519 key, and against the fingerprint we actually
+    /// announced.
     ///
-    /// Both are required. A receipt that is genuine but applies to a *different*
-    /// rotation is a replay — and it must not make us roll.
-    pub fn verify(&self, pinned_pubkey: &[u8], expected_new_fp: &str) -> Result<(), TlsError> {
+    /// All three are required. The acker is checked first: a receipt from
+    /// another peer is refused before anything else *(0.12.0)*. A receipt that
+    /// is genuine but applies to a *different* rotation is a replay — and it
+    /// must not make us roll.
+    pub fn verify(
+        &self,
+        expected_acker: &str,
+        pinned_pubkey: &[u8],
+        expected_new_fp: &str,
+    ) -> Result<(), TlsError> {
+        if self.acker != expected_acker {
+            return Err(TlsError::ProofInvalid(format!(
+                "the receipt is from the acker {:?}, but {expected_acker:?} was expected — \
+                 this is a receipt from another peer",
+                self.acker
+            )));
+        }
         if !same_fingerprint(&self.new_fp, expected_new_fp) {
             return Err(TlsError::ProofInvalid(format!(
                 "the receipt covers {}, but we announced {expected_new_fp} — \
@@ -691,6 +741,10 @@ impl Receipt {
     pub fn acker(&self) -> &str {
         &self.acker
     }
+    /// The one who announced *(0.12.0)*.
+    pub fn announcer(&self) -> &str {
+        &self.announcer
+    }
     /// The fingerprint that was acked.
     pub fn new_fingerprint(&self) -> &str {
         &self.new_fp
@@ -718,19 +772,12 @@ mod receipt_tests {
     }
 
     #[test]
-    fn receipt_verifies_against_pinned_key() {
-        let pk = public(&seed());
-        let k = Receipt::new("service", "gateway", FP, 100, &seed()).unwrap();
-        k.verify(&pk, FP).expect("must hold");
-    }
-
-    #[test]
     fn receipt_for_another_rotation_rejected() {
         // Replay: the receipt is genuine, but applies to something else. It
         // must not make us roll.
         let pk = public(&seed());
         let k = Receipt::new("service", "gateway", OTHER_FP, 100, &seed()).unwrap();
-        let err = k.verify(&pk, FP).unwrap_err();
+        let err = k.verify("service", &pk, FP).unwrap_err();
         assert!(
             format!("{err}").contains("a different rotation"),
             "unexpected: {err}"
@@ -738,10 +785,24 @@ mod receipt_tests {
     }
 
     #[test]
+    fn a_receipt_from_another_acker_is_refused() {
+        // 0.12.0: a genuine receipt from one peer says nothing about another.
+        let pk = public(&seed());
+        let k = Receipt::new("service", "gateway", FP, 100, &seed()).unwrap();
+        let err = k.verify("portal", &pk, FP).unwrap_err();
+        assert!(matches!(err, TlsError::ProofInvalid(_)), "{err:?}");
+        assert!(
+            format!("{err}").contains("from the acker \"service\", but \"portal\" was expected"),
+            "unexpected: {err}"
+        );
+        k.verify("service", &pk, FP).expect("its own acker");
+    }
+
+    #[test]
     fn receipt_from_wrong_sender_rejected() {
         let other_key = public(&SecretBuf::from_vec(vec![9u8; 32]).unwrap());
         let k = Receipt::new("service", "gateway", FP, 100, &seed()).unwrap();
-        assert!(k.verify(&other_key, FP).is_err());
+        assert!(k.verify("service", &other_key, FP).is_err());
     }
 
     #[test]
@@ -751,12 +812,12 @@ mod receipt_tests {
         let mut j = k.to_json().unwrap();
         j.sent_at = 101;
         let tampered = Receipt::from_json(&j).unwrap();
-        assert!(tampered.verify(&pk, FP).is_err());
+        assert!(tampered.verify("service", &pk, FP).is_err());
 
         let mut j2 = k.to_json().unwrap();
         j2.acker = "portal".into();
         let tampered2 = Receipt::from_json(&j2).unwrap();
-        assert!(tampered2.verify(&pk, FP).is_err());
+        assert!(tampered2.verify("portal", &pk, FP).is_err());
     }
 
     #[test]
@@ -765,6 +826,7 @@ mod receipt_tests {
         let text = serde_json::to_string(&k.to_json().unwrap()).unwrap();
         let read_back: ReceiptJson = serde_json::from_str(&text).unwrap();
         assert_eq!(Receipt::from_json(&read_back).unwrap(), k);
+        assert_eq!(k.announcer(), "gateway");
     }
 }
 
@@ -841,13 +903,27 @@ impl Handled {
         canonical::rotate_handled_v1(&self.acker, &self.announcer, &self.new_fp, self.sent_at)
     }
 
-    /// Verify against the acker's **pinned** Ed25519 key, and against the
-    /// fingerprint we actually announced.
+    /// Verify that the handled message is from `expected_acker`, against the
+    /// acker's **pinned** Ed25519 key, and against the fingerprint we actually
+    /// announced.
     ///
-    /// Both are required, as for a [`Receipt`]: a handled message that is
-    /// genuine but applies to a *different* rotation is a replay — and it must
-    /// not make us roll.
-    pub fn verify(&self, pinned_pubkey: &[u8], expected_new_fp: &str) -> Result<(), TlsError> {
+    /// All three are required, as for a [`Receipt`]. The acker is checked
+    /// first: a handled message from another peer is refused before anything
+    /// else *(0.12.0)*. A handled message that is genuine but applies to a
+    /// *different* rotation is a replay — and it must not make us roll.
+    pub fn verify(
+        &self,
+        expected_acker: &str,
+        pinned_pubkey: &[u8],
+        expected_new_fp: &str,
+    ) -> Result<(), TlsError> {
+        if self.acker != expected_acker {
+            return Err(TlsError::ProofInvalid(format!(
+                "the handled message is from the acker {:?}, but {expected_acker:?} was \
+                 expected — this is a handled message from another peer",
+                self.acker
+            )));
+        }
         if !same_fingerprint(&self.new_fp, expected_new_fp) {
             return Err(TlsError::ProofInvalid(format!(
                 "the handled message covers {}, but we announced {expected_new_fp} — \
@@ -898,6 +974,10 @@ impl Handled {
     pub fn acker(&self) -> &str {
         &self.acker
     }
+    /// The one who announced *(0.12.0)*.
+    pub fn announcer(&self) -> &str {
+        &self.announcer
+    }
     /// The fingerprint that was acked.
     pub fn new_fingerprint(&self) -> &str {
         &self.new_fp
@@ -931,17 +1011,18 @@ mod handled_tests {
         let text = serde_json::to_string(&h.to_json().unwrap()).unwrap();
         let read_back = Handled::from_json(&serde_json::from_str(&text).unwrap()).unwrap();
         assert_eq!(read_back, h);
-        read_back.verify(&pk, FP).expect("must hold");
+        assert_eq!(read_back.announcer(), "gateway");
+        read_back.verify("service", &pk, FP).expect("must hold");
 
         let other_rotation = Handled::new("service", "gateway", OTHER_FP, 100, &seed()).unwrap();
-        let err = other_rotation.verify(&pk, FP).unwrap_err();
+        let err = other_rotation.verify("service", &pk, FP).unwrap_err();
         assert!(
             format!("{err}").contains("a different rotation"),
             "unexpected: {err}"
         );
 
         let other_key = public(&SecretBuf::from_vec(vec![9u8; 32]).unwrap());
-        assert!(read_back.verify(&other_key, FP).is_err());
+        assert!(read_back.verify("service", &other_key, FP).is_err());
 
         // A node that does not know the message reads it as a receipt, the
         // fields being the same, and refuses it by its version.
@@ -969,7 +1050,7 @@ mod handled_tests {
         handled_with_receipt_sig.sig = receipt.sig.clone();
         let err = Handled::from_json(&handled_with_receipt_sig)
             .unwrap()
-            .verify(&pk, FP)
+            .verify("service", &pk, FP)
             .unwrap_err();
         assert!(format!("{err}").contains("does not hold"), "{err}");
 
@@ -977,9 +1058,23 @@ mod handled_tests {
         receipt_with_handled_sig.sig = handled.sig;
         let err = Receipt::from_json(&receipt_with_handled_sig)
             .unwrap()
-            .verify(&pk, FP)
+            .verify("service", &pk, FP)
             .unwrap_err();
         assert!(format!("{err}").contains("does not hold"), "{err}");
+    }
+
+    #[test]
+    fn a_handled_message_from_another_acker_is_refused() {
+        // 0.12.0: a genuine handled message from one peer says nothing about another.
+        let pk = public(&seed());
+        let h = Handled::new("service", "gateway", FP, 100, &seed()).unwrap();
+        let err = h.verify("portal", &pk, FP).unwrap_err();
+        assert!(matches!(err, TlsError::ProofInvalid(_)), "{err:?}");
+        assert!(
+            format!("{err}").contains("from the acker \"service\", but \"portal\" was expected"),
+            "unexpected: {err}"
+        );
+        h.verify("service", &pk, FP).expect("its own acker");
     }
 }
 

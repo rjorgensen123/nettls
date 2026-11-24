@@ -126,6 +126,12 @@ A name for a generated certificate may have a wildcard only as in
 `Known` the receiver sends the receipt and then the new `Handled` message,
 which the announcer takes as a receipt.
 
+### ⚠ Changed — every `verify` takes the counterpart it expects *(2026-11-24)*
+
+A genuine message for one peer verified when presented for another. Each
+`verify`, and `receive`, now takes the expected name and refuses another.
+An operator key `op:<name>` may sign only approvals by `<name>`.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

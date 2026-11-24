@@ -117,7 +117,7 @@ def test_bootstrap_accepted_without_previous():
     c1, _, _, _ = material("c1")
     k = Announcement.new("gateway", None, (fp0, k0), c1, 100)
     assert k.is_bootstrap()
-    k.verify(None, der0)
+    k.verify("gateway", None, der0)
 
 
 def test_single_signature_rejected_when_receiver_has_previous():
@@ -127,7 +127,7 @@ def test_single_signature_rejected_when_receiver_has_previous():
     c2, _, _, _ = material("c2")
     k = Announcement.new("gateway", None, (fp1, k1), c2, 100)
     with pytest.raises(nettls.TlsError, match="single-signed"):
-        k.verify(der0, der1)
+        k.verify("gateway", der0, der1)
 
 
 def test_swapped_certificate_rejected_even_with_valid_signatures():
@@ -139,7 +139,7 @@ def test_swapped_certificate_rejected_even_with_valid_signatures():
     j = Announcement.new("gateway", (fp0, k0), (fp1, k1), c2, 100).to_json()
     j.new_cert_pem = evil
     with pytest.raises(nettls.TlsError, match="swapped in transit"):
-        Announcement.from_json(j).verify(der0, der1)
+        Announcement.from_json(j).verify("gateway", der0, der1)
 
 
 def test_json_roundtrip_preserves_everything():
@@ -170,9 +170,10 @@ def test_invalid_json_is_a_value_error():
 def test_receipt_rejects_replay():
     pk = ed25519_public(SEED)
     r = Receipt.new("service", "gateway", FP_B, 100, SEED)
-    r.verify(pk, FP_B)
+    assert r.announcer() == "gateway"
+    r.verify("service", pk, FP_B)
     with pytest.raises(nettls.TlsError, match="a different rotation"):
-        r.verify(pk, FP_A)
+        r.verify("service", pk, FP_A)
 
 
 def test_handled_round_trips_and_rejects_replay():
@@ -180,9 +181,10 @@ def test_handled_round_trips_and_rejects_replay():
     h = Handled.new("service", "gateway", FP_B, 100, SEED)
     read_back = Handled.from_json(HandledJson.loads(h.to_json().dumps()))
     assert read_back == h
-    read_back.verify(pk, FP_B)
+    assert read_back.announcer() == "gateway"
+    read_back.verify("service", pk, FP_B)
     with pytest.raises(nettls.TlsError, match="a different rotation"):
-        read_back.verify(pk, FP_A)
+        read_back.verify("service", pk, FP_A)
 
 
 # --------------------------------------------------------------------------- #
@@ -198,17 +200,18 @@ def registry(key_id: str) -> bytes | None:
 
 def test_approval_verifies_and_rejects_tampering():
     g = Approval.new("gateway", FP_A, "operator", 100, "portal", SEED)
-    g.verify(registry)
+    assert g.timestamp() == 100
+    g.verify("gateway", registry)
     j = g.to_json()
     j.approved_by = "someone-else"
     with pytest.raises(nettls.ProofInvalidError):
-        Approval.from_json(j).verify(registry)
+        Approval.from_json(j).verify("gateway", registry)
 
 
 def test_unknown_key_id_says_anchor_cannot_be_verified():
     g = Approval.new("gateway", FP_A, "operator", 100, "op:operator", SEED)
     with pytest.raises(nettls.TlsError, match="is not an anchor"):
-        g.verify(lambda key_id: None)
+        g.verify("gateway", lambda key_id: None)
 
 
 def test_an_exception_in_the_lookup_is_raised_not_swallowed():
@@ -218,13 +221,13 @@ def test_an_exception_in_the_lookup_is_raised_not_swallowed():
         raise LookupError("the registry is down")
 
     with pytest.raises(LookupError, match="the registry is down"):
-        g.verify(broken)
+        g.verify("gateway", broken)
 
 
 def test_recognition_verifies_both_kinds():
     ap = nettls.approval
     g = Approval.new("gateway", FP_A, "operator", 100, "portal", SEED)
-    ctx = ap.Context(registry, None, None)
+    ctx = ap.Context("gateway", registry, None, None)
     op = ap.Recognition.Operator(g)
     op.verify(ctx)
     assert op.is_anchor() and op.fingerprint() == FP_A
@@ -233,8 +236,51 @@ def test_recognition_verifies_both_kinds():
     c1, _, fp1, _ = material("c1")
     k = Announcement.new("gateway", None, (fp0, k0), c1, 1)
     sched = ap.Recognition.Schedule(k)
-    sched.verify(ap.Context(registry, None, der0))
+    sched.verify(ap.Context("gateway", registry, None, der0))
     assert not sched.is_anchor() and sched.fingerprint() == fp1
+    assert [op.peer(), sched.peer()] == ["gateway", "gateway"]
+
+
+def test_every_verify_refuses_a_message_about_another_peer():
+    # 0.12.0: the binding's calls take the expected name first, and refuse another.
+    pk = ed25519_public(SEED)
+    _, k0, fp0, der0 = material("c0")
+    c1, _, _, _ = material("c1")
+
+    g = Approval.new("gateway", FP_A, "operator", 100, "portal", SEED)
+    k = Announcement.new("gateway", None, (fp0, k0), c1, 1)
+    r = Receipt.new("service", "gateway", FP_B, 100, SEED)
+    h = Handled.new("service", "gateway", FP_B, 100, SEED)
+    st = nettls.capability.SupportStatement.signed("gateway", [nettls.Alg.Aes256Gcm], 1, k0)
+
+    def recognition(name):
+        ap = nettls.approval
+        ap.Recognition.Operator(g).verify(ap.Context(name, registry, None, None))
+
+    for call, own, other in [
+        (lambda name: g.verify(name, registry), "gateway", "service"),
+        (recognition, "gateway", "service"),
+        (lambda name: k.verify(name, None, der0), "gateway", "service"),
+        (lambda name: r.verify(name, pk, FP_B), "service", "gateway"),
+        (lambda name: h.verify(name, pk, FP_B), "service", "gateway"),
+        (lambda name: st.verify(name, der0), "gateway", "service"),
+    ]:
+        with pytest.raises(nettls.ProofInvalidError, match="was expected"):
+            call(other)
+        call(own)
+
+    t = G.Trust.from_approval(G.Generation.from_der(der0))
+    with pytest.raises(nettls.ProofInvalidError, match="was expected"):
+        t.receive(k, "service")
+    assert t.state().next() is None
+    assert t.receive(k, "gateway") == G.Received.Stored
+
+    # An operator key signs only approvals by its own operator; `portal` is not affected.
+    keys = {"portal": pk, "op:bob": pk}.get
+    with pytest.raises(nettls.ProofInvalidError, match="may sign only approvals by"):
+        Approval.new("gateway", FP_A, "alice", 100, "op:bob", SEED).verify("gateway", keys)
+    Approval.new("gateway", FP_A, "bob", 100, "op:bob", SEED).verify("gateway", keys)
+    Approval.new("gateway", FP_A, "alice", 100, "portal", SEED).verify("gateway", keys)
 
 
 # --------------------------------------------------------------------------- #
@@ -249,9 +295,9 @@ def test_the_two_roles_are_not_the_same():
     c1, k1, fp1, _ = material("c1")
     c2, _, fp2, _ = material("c2")
     g = G.Generations.from_approval(G.Generation.from_der(der0))
-    g.receive(Announcement.new("gateway", None, (fp0, k0), c1, 1))
+    g.receive(Announcement.new("gateway", None, (fp0, k0), c1, 1), "gateway")
     assert g.observed(fp1)
-    g.receive(Announcement.new("gateway", (fp0, k0), (fp1, k1), c2, 2))
+    g.receive(Announcement.new("gateway", (fp0, k0), (fp1, k1), c2, 2), "gateway")
     in_handshake = [x.fingerprint() for x in g.accepted_in_handshake()]
     assert fp1 in in_handshake and fp2 in in_handshake
     assert fp0 not in in_handshake, "previous must NOT be accepted in a handshake"
@@ -263,8 +309,8 @@ def test_receive_is_idempotent():
     c1, _, _, _ = material("c1")
     g = G.Generations.from_approval(G.Generation.from_der(der0))
     k = Announcement.new("gateway", None, (fp0, k0), c1, 1)
-    assert g.receive(k) == G.Received.Stored
-    assert g.receive(k) == G.Received.Known
+    assert g.receive(k, "gateway") == G.Received.Stored
+    assert g.receive(k, "gateway") == G.Received.Known
 
 
 def test_restored_state_accepts_double_signed_announcement():
@@ -274,8 +320,8 @@ def test_restored_state_accepts_double_signed_announcement():
     g0, g1 = G.Generation.from_pem(p0), G.Generation.from_pem(p1)
     k = Announcement.new("gateway", (fp0, k0), (fp1, k1), p2, 1_700_000_000)
     # A8: an anchor-only receiver accepts what it can verify.
-    assert G.Generations.from_approval(g1).receive(k) == G.Received.Stored
-    assert G.Generations.restore(g0, g1, None).receive(k) == G.Received.Stored
+    assert G.Generations.from_approval(g1).receive(k, "gateway") == G.Received.Stored
+    assert G.Generations.restore(g0, g1, None).receive(k, "gateway") == G.Received.Stored
 
 
 def test_restored_next_accepted_in_handshake_and_promoted():
@@ -298,7 +344,8 @@ def test_trust_shares_its_state():
     _, k0, fp0, der0 = material("c0")
     c1, _, fp1, _ = material("c1")
     t = G.Trust.from_approval(G.Generation.from_der(der0))
-    assert t.receive(Announcement.new("gateway", None, (fp0, k0), c1, 1)) == G.Received.Stored
+    k = Announcement.new("gateway", None, (fp0, k0), c1, 1)
+    assert t.receive(k, "gateway") == G.Received.Stored
     assert t.state().next().fingerprint() == fp1
 
 
@@ -521,12 +568,12 @@ def test_support_statement_roundtrip_and_fallback_rule():
     cap = nettls.capability
     _, key, _, der = material("service")
     st = cap.SupportStatement.signed("service", [nettls.Alg.Aes256Gcm], 1_700_000_000, key)
-    assert st.verify(der) == [nettls.Alg.Aes256Gcm]
-    assert cap.SupportStatement.loads(st.dumps()).verify(der) == [nettls.Alg.Aes256Gcm]
+    assert st.verify("service", der) == [nettls.Alg.Aes256Gcm]
+    assert cap.SupportStatement.loads(st.dumps()).verify("service", der) == [nettls.Alg.Aes256Gcm]
 
     st.supported = ["aegis256", "aes256gcm"]
     with pytest.raises(nettls.TlsError):
-        st.verify(der)
+        st.verify("service", der)
 
     a, x, g = nettls.Alg.Aegis256, nettls.Alg.XChaCha20Poly1305, nettls.Alg.Aes256Gcm
     assert cap.choose(a, None) == a

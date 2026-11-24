@@ -195,6 +195,10 @@ impl Generations {
     /// `previous` that decides whether a single signature is accepted is the
     /// whole point (`Announcement::verify`).
     ///
+    /// `expected_announcer` is the peer this state belongs to, and goes on to
+    /// `Announcement::verify`: an announcement from another peer is refused,
+    /// and nothing is stored *(0.12.0)*.
+    ///
     /// The announcement is verified first, also when it names the certificate
     /// already stored as `next`: [`Received::Known`] is given only to one that
     /// verifies *(0.12.0)*. The one who receives acknowledges every time: on
@@ -202,8 +206,16 @@ impl Generations {
     /// [`Receipt`](crate::announcement::Receipt); on [`Received::Known`] it
     /// sends the receipt first, unchanged, and then a
     /// [`Handled`](crate::announcement::Handled) *(0.12.0)*.
-    pub fn receive(&mut self, k: &Announcement) -> Result<Received, TlsError> {
-        k.verify(self.previous.as_ref().map(|g| g.der()), self.current.der())?;
+    pub fn receive(
+        &mut self,
+        k: &Announcement,
+        expected_announcer: &str,
+    ) -> Result<Received, TlsError> {
+        k.verify(
+            expected_announcer,
+            self.previous.as_ref().map(|g| g.der()),
+            self.current.der(),
+        )?;
         if let Some(n) = &self.next
             && same_fingerprint(n.fingerprint(), k.new_fingerprint())
         {
@@ -336,10 +348,11 @@ mod tests {
         let c2 = new_gen("c2");
 
         let mut g = Generations::from_approval(c0.g.clone());
-        g.receive(&announce("gateway", None, &c0, &c1, 1)).unwrap();
+        g.receive(&announce("gateway", None, &c0, &c1, 1), "gateway")
+            .unwrap();
         assert!(g.observed(c1.g.fingerprint()));
         // Now: previous=c0, current=c1, next=None
-        g.receive(&announce("gateway", Some(&c0), &c1, &c2, 2))
+        g.receive(&announce("gateway", Some(&c0), &c1, &c2, 2), "gateway")
             .unwrap();
 
         let hs: Vec<_> = g
@@ -365,7 +378,8 @@ mod tests {
         let c1 = new_gen("c1");
         let foreign = new_gen("foreign");
         let mut g = Generations::from_approval(c0.g.clone());
-        g.receive(&announce("gateway", None, &c0, &c1, 1)).unwrap();
+        g.receive(&announce("gateway", None, &c0, &c1, 1), "gateway")
+            .unwrap();
 
         assert!(!g.observed(foreign.g.fingerprint()));
         assert!(!g.observed(c0.g.fingerprint()));
@@ -381,7 +395,8 @@ mod tests {
         let c1 = new_gen("c1");
         let foreign = new_gen("foreign");
         let mut g = Generations::from_approval(c0.g.clone());
-        g.receive(&announce("gateway", None, &c0, &c1, 1)).unwrap();
+        g.receive(&announce("gateway", None, &c0, &c1, 1), "gateway")
+            .unwrap();
 
         // Names c1, which is pending, but is signed with a foreign key.
         let forged = Announcement::new(
@@ -392,7 +407,7 @@ mod tests {
             2,
         )
         .unwrap();
-        assert!(g.receive(&forged).is_err());
+        assert!(g.receive(&forged, "gateway").is_err());
     }
 
     #[test]
@@ -401,9 +416,22 @@ mod tests {
         let c1 = new_gen("c1");
         let mut g = Generations::from_approval(c0.g.clone());
         let k = announce("gateway", None, &c0, &c1, 1);
-        assert_eq!(g.receive(&k).unwrap(), Received::Stored);
+        assert_eq!(g.receive(&k, "gateway").unwrap(), Received::Stored);
         let before = g.clone();
-        assert_eq!(g.receive(&k).unwrap(), Received::Known);
+        assert_eq!(g.receive(&k, "gateway").unwrap(), Received::Known);
+        assert_eq!(g, before);
+    }
+
+    #[test]
+    fn an_announcement_from_another_announcer_is_refused_and_changes_nothing() {
+        // 0.12.0: the state belongs to one peer; another's announcement stores nothing.
+        let c0 = new_gen("c0");
+        let c1 = new_gen("c1");
+        let mut g = Generations::from_approval(c0.g.clone());
+        let k = announce("gateway", None, &c0, &c1, 1);
+        let before = g.clone();
+        let err = g.receive(&k, "service").unwrap_err();
+        assert!(format!("{err}").contains("was expected"), "{err}");
         assert_eq!(g, before);
     }
 
@@ -413,12 +441,13 @@ mod tests {
         let c1 = new_gen("c1");
         let c2 = new_gen("c2");
         let mut g = Generations::from_approval(c0.g.clone());
-        g.receive(&announce("gateway", None, &c0, &c1, 1)).unwrap();
+        g.receive(&announce("gateway", None, &c0, &c1, 1), "gateway")
+            .unwrap();
         g.observed(c1.g.fingerprint());
 
         // A single-signed announcement now that we HAVE a previous → rejected.
         let k = announce("gateway", None, &c1, &c2, 2);
-        assert!(g.receive(&k).is_err());
+        assert!(g.receive(&k, "gateway").is_err());
         assert!(g.next().is_none(), "nothing must be stored");
     }
 
@@ -430,16 +459,22 @@ mod tests {
         let c: Vec<Gen> = (0..4).map(|i| new_gen(&format!("c{i}"))).collect();
         let mut g = Generations::from_approval(c[0].g.clone());
 
-        g.receive(&announce("gateway", None, &c[0], &c[1], 1))
+        g.receive(&announce("gateway", None, &c[0], &c[1], 1), "gateway")
             .unwrap();
         g.observed(c[1].g.fingerprint());
 
-        g.receive(&announce("gateway", Some(&c[0]), &c[1], &c[2], 2))
-            .unwrap();
+        g.receive(
+            &announce("gateway", Some(&c[0]), &c[1], &c[2], 2),
+            "gateway",
+        )
+        .unwrap();
         g.observed(c[2].g.fingerprint());
 
-        g.receive(&announce("gateway", Some(&c[1]), &c[2], &c[3], 3))
-            .unwrap();
+        g.receive(
+            &announce("gateway", Some(&c[1]), &c[2], &c[3], 3),
+            "gateway",
+        )
+        .unwrap();
         g.observed(c[3].g.fingerprint());
 
         assert_eq!(g.current().fingerprint(), c[3].g.fingerprint());
@@ -503,17 +538,22 @@ impl Trust {
 
     /// Receive an announcement. Takes effect on a live config.
     ///
-    /// As [`Generations::receive`]: verified first, also when it names the
+    /// As [`Generations::receive`]: refused when it is from another peer than
+    /// `expected_announcer` *(0.12.0)*, verified first, also when it names the
     /// pending certificate, and acknowledged every time — the
     /// [`Receipt`](crate::announcement::Receipt) on [`Received::Stored`], the
     /// receipt and then a [`Handled`](crate::announcement::Handled) on
     /// [`Received::Known`] *(0.12.0)*.
-    pub fn receive(&self, k: &Announcement) -> Result<Received, TlsError> {
+    pub fn receive(
+        &self,
+        k: &Announcement,
+        expected_announcer: &str,
+    ) -> Result<Received, TlsError> {
         let mut g = self
             .state
             .write()
             .map_err(|_| TlsError::poisoned("the trust lock"))?;
-        g.receive(k)
+        g.receive(k, expected_announcer)
     }
 
     /// A snapshot of the state — for storage and status.
@@ -698,7 +738,7 @@ mod restore_tests {
         // anchor the operator approved.
         let mut forgotten = Generations::from_approval(c1.g.clone());
         assert!(
-            forgotten.receive(&k).is_ok(),
+            forgotten.receive(&k, "gateway").is_ok(),
             "a receiver with only an anchor must accept a double-signed \
              announcement whose curr matches the anchor (A8: numbering is \
              local to the receiver)"
@@ -708,7 +748,7 @@ mod restore_tests {
         let mut remembered =
             Generations::restore(Some(c0.g.clone()), c1.g.clone(), None).expect("legal state");
         assert!(
-            remembered.receive(&k).is_ok(),
+            remembered.receive(&k, "gateway").is_ok(),
             "a receiver that HAS remembered its previous must accept exactly \
              the same announcement — otherwise every restart requires an operator"
         );

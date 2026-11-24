@@ -86,8 +86,12 @@ impl SupportStatement {
             .map_err(err)
     }
 
-    fn verify(&self, signer_cert_der: &[u8]) -> PyResult<Vec<Alg>> {
-        let algs = self.to_rust().verify(signer_cert_der).map_err(err)?;
+    /// `expected_component` is the component the statement must be from (0.12.0).
+    fn verify(&self, expected_component: &str, signer_cert_der: &[u8]) -> PyResult<Vec<Alg>> {
+        let algs = self
+            .to_rust()
+            .verify(expected_component, signer_cert_der)
+            .map_err(err)?;
         algs.into_iter().map(Alg::from_rust).collect()
     }
 

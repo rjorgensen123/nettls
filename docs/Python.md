@@ -157,18 +157,20 @@ and promotes `next` by itself once a handshake proves the key (§6.7):
 from nettls_py.generations import Generation, Trust
 
 trust = Trust.from_approval(Generation.from_pem(approved_cert_pem))   # generation 0
-trust.receive(announcement)            # the peer's announcement, verified, stored as `next`
+trust.receive(announcement, "gw")      # the peer's announcement, verified as from "gw" (0.12.0),
+                                       # stored as `next`
 with Stream.connect(sock, trust.client_config(), "localhost") as tls:
     ...
 state = trust.state()                  # previous, current and next, to store and restore
 ```
 
-`trust.receive` verifies the announcement first, also when it names the `next` already stored, and
-answers `Received.Stored` or `Received.Known` *(0.12.0)*. Acknowledge every time: on `Stored`, send
-a `Receipt`; on `Known`, send the `Receipt` first, unchanged, and then a `Handled`, made the same
-way, with `Handled.new(acker, announcer, new_fp, sent_at, ed25519_seed)`. A peer on an older nettls
-accepts the receipt and refuses the `Handled` with "unknown message version", changing nothing:
-that is why the receipt goes first *(0.12.0)*.
+`trust.receive` takes the name of the peer the trust is for, and refuses an announcement from
+another *(0.12.0)*. It verifies the announcement first, also when it names the `next` already
+stored, and answers `Received.Stored` or `Received.Known` *(0.12.0)*. Acknowledge every time: on
+`Stored`, send a `Receipt`; on `Known`, send the `Receipt` first, unchanged, and then a `Handled`,
+made the same way, with `Handled.new(acker, announcer, new_fp, sent_at, ed25519_seed)`. A peer on
+an older nettls accepts the receipt and refuses the `Handled` with "unknown message version",
+changing nothing: that is why the receipt goes first *(0.12.0)*.
 
 **The side that rotates** binds a `RotatingResolver` once and lets the `Announcer` drive it. The
 announcer keeps its own keys on disk, locked with the password, and picks up where it was after a
@@ -192,10 +194,18 @@ announcer.acked("peer")                           # a receipt came in, and it ve
 old = announcer.roll_if_ready(now)                # switches only when everyone has acked
 ```
 
-The rhythm is yours, as in Rust: nothing happens unless you call it. A receipt is verified against
-the peer's pinned Ed25519 key, which comes from krypto, as in Rust — `krypto_py.sign` in Python.
-A `Handled` from the peer is verified the same way, with `Handled.verify`, and then counts as a
-receipt: `announcer.acked("peer")`, as for a receipt *(0.12.0)*.
+The rhythm is yours, as in Rust: nothing happens unless you call it. A receipt is verified with
+`receipt.verify("peer", pinned_pubkey, new_fp)`: for the peer it must come from *(0.12.0)*, against
+that peer's pinned Ed25519 key, which comes from krypto, as in Rust — `krypto_py.sign` in Python —
+and against the fingerprint announced. A `Handled` from the peer is verified the same way, with
+`Handled.verify`, and then counts as a receipt: `announcer.acked("peer")`, as for a receipt
+*(0.12.0)*.
+
+> **Every `verify` takes the name of the peer you expect, first, and refuses a message about
+> another** *(0.12.0)*: a genuine message for one peer says nothing about another. A recognition
+> takes it as `peer` in `approval.Context(peer, keys, previous_der, current_der)`, and
+> `trust.receive` after the announcement. An operator key `op:<name>` may sign only approvals that
+> name `<name>` as approver.
 
 ## Errors
 

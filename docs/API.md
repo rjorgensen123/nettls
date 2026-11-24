@@ -366,7 +366,8 @@ impl Generations {
     pub fn from_approval(current: Generation) -> Self;
     pub fn restore(previous: Option<Generation>, current: Generation, next: Option<Generation>)
         -> Result<Self, TlsError>;   // your own storage back in; shape-checked, trust not verifiable (0.12.0)
-    pub fn receive(&mut self, k: &Announcement) -> Result<Received, TlsError>;
+    pub fn receive(&mut self, k: &Announcement, expected_announcer: &str)
+        -> Result<Received, TlsError>;   // another announcer is refused, nothing stored (0.12.0)
     pub fn observed(&mut self, fp: &str) -> bool;                    // promotion ON OBSERVATION
     pub fn accepted_in_handshake(&self) -> Vec<&Generation>;         // current + next — NEVER previous
     pub fn for_signing(&self) -> (Option<&Generation>, &Generation); // (previous, current)
@@ -379,6 +380,10 @@ impl Generations {
 
 The two roles do not overlap: `previous` verifies announcements but lets no one into a
 handshake.
+
+`receive` takes the name of the peer the state belongs to, and passes it on to
+`Announcement::verify`: an announcement from another announcer is refused, and nothing is stored
+*(0.12.0)*.
 
 `receive` verifies the announcement first, also when it names the certificate already stored as
 `next`: `Stored` and `Known` are given only to an announcement that verifies, and one that does not
@@ -393,7 +398,8 @@ is an error *(0.12.0)*. The one who receives acknowledges every time. On `Stored
 impl Trust {
     pub fn from_approval(current: Generation) -> Self;
     pub fn from_state(g: Generations) -> Self;
-    pub fn receive(&self, k: &Announcement) -> Result<Received, TlsError>;   // &self, not &mut
+    pub fn receive(&self, k: &Announcement, expected_announcer: &str)
+        -> Result<Received, TlsError>;   // &self, not &mut; expected_announcer (0.12.0)
     pub fn state(&self) -> Result<Generations, TlsError>;                    // snapshot for storage
     pub fn client_config(&self) -> Result<Arc<ClientConfig>, TlsError>;      // LIVE — build once
     pub fn client_config_with_alpn(&self, alpn: &[Vec<u8>]) -> Result<Arc<ClientConfig>, TlsError>;
@@ -435,7 +441,8 @@ impl Announcement {
     ) -> Result<Self, TlsError>;
 
     pub fn canonical(&self) -> Result<Vec<u8>, TlsError>;
-    pub fn verify(&self, prev_cert_der: Option<&[u8]>, curr_cert_der: &[u8]) -> Result<(), TlsError>;
+    pub fn verify(&self, expected_announcer: &str, prev_cert_der: Option<&[u8]>, curr_cert_der: &[u8])
+        -> Result<(), TlsError>;   // expected_announcer (0.12.0)
     pub fn to_json(&self) -> Result<AnnouncementJson, TlsError>;
     pub fn from_json(j: &AnnouncementJson) -> Result<Self, TlsError>;   // fail-closed
 
@@ -455,9 +462,12 @@ impl Announcement {
 > double-signed announcement whose `curr` matches the anchor: generation numbering is local to
 > the receiver.
 
+`verify` checks the announcer first: an announcement from another peer than `expected_announcer`
+is refused before anything else *(0.12.0)*.
+
 `verify` requires `new_cert_pem` to be an X.509 certificate with a P-256 key, right after the
-fingerprint check and before anything else: it is the key the next announcement is signed with
-*(0.12.0)*.
+fingerprint check and before the rest is checked: it is the key the next announcement is signed
+with *(0.12.0)*.
 
 `AnnouncementJson` (serialized form; the field names are contract): `v` · `announcer` ·
 `prev_fingerprint` · `curr_fingerprint` · `new_fingerprint` · `new_cert_pem` · `sent_at` ·
@@ -472,10 +482,12 @@ impl Receipt {
     pub fn new(acker: &str, announcer: &str, new_fp: &str, sent_at: i64, ed25519_seed: &krypto::SecretBuf)
         -> Result<Self, TlsError>;
     pub fn canonical(&self) -> Result<Vec<u8>, TlsError>;
-    pub fn verify(&self, pinned_pubkey: &[u8], expected_new_fp: &str) -> Result<(), TlsError>;
+    pub fn verify(&self, expected_acker: &str, pinned_pubkey: &[u8], expected_new_fp: &str)
+        -> Result<(), TlsError>;   // expected_acker (0.12.0)
     pub fn to_json(&self) -> Result<ReceiptJson, TlsError>;
     pub fn from_json(j: &ReceiptJson) -> Result<Self, TlsError>;
     pub fn acker(&self) -> &str;
+    pub fn announcer(&self) -> &str;   // (0.12.0)
     pub fn new_fingerprint(&self) -> &str;
     pub fn sent_at(&self) -> i64;
 }
@@ -485,7 +497,8 @@ impl Receipt {
 
 `to_json` fails with `TlsError::Encode` when the signature cannot be encoded as hex *(0.12.0)*.
 
-`verify` requires **both** the pinned key and the expected fingerprint: a genuine receipt for a
+`verify` requires the expected acker, the pinned key and the expected fingerprint: a genuine
+receipt from another peer is refused before anything else *(0.12.0)*, and a genuine receipt for a
 *different* rotation is a replay and must not make you roll.
 
 ### `Handled` — the acknowledgement once more *(0.12.0)*
@@ -495,10 +508,12 @@ impl Handled {
     pub fn new(acker: &str, announcer: &str, new_fp: &str, sent_at: i64, ed25519_seed: &krypto::SecretBuf)
         -> Result<Self, TlsError>;
     pub fn canonical(&self) -> Result<Vec<u8>, TlsError>;
-    pub fn verify(&self, pinned_pubkey: &[u8], expected_new_fp: &str) -> Result<(), TlsError>;
+    pub fn verify(&self, expected_acker: &str, pinned_pubkey: &[u8], expected_new_fp: &str)
+        -> Result<(), TlsError>;   // expected_acker (0.12.0)
     pub fn to_json(&self) -> Result<HandledJson, TlsError>;
     pub fn from_json(j: &HandledJson) -> Result<Self, TlsError>;
     pub fn acker(&self) -> &str;
+    pub fn announcer(&self) -> &str;   // (0.12.0)
     pub fn new_fingerprint(&self) -> &str;
     pub fn sent_at(&self) -> i64;
 }
@@ -510,8 +525,8 @@ impl Handled {
 and gets `Received::Known` sends the `Receipt` first, unchanged, and then this. It carries the
 receipt's fields under its own first line, `nettls-rotate-handled/v1`, signed once with the acker's
 Ed25519 key, so a receipt's signature never holds for it, nor the other way round. `verify`
-requires **both** the pinned key and the expected fingerprint, as for a receipt. `to_json` fails
-with `TlsError::Encode` when the signature cannot be encoded as hex.
+requires the expected acker *(0.12.0)*, the pinned key and the expected fingerprint, as for a
+receipt. `to_json` fails with `TlsError::Encode` when the signature cannot be encoded as hex.
 
 For the one who announces, a `Handled` that verifies counts as a receipt: an earlier receipt may
 have been lost, but the peer is ready. Call `Announcer::acked` for that peer, exactly as for a
@@ -553,16 +568,19 @@ impl Approval {
     pub fn new(peer: &str, fingerprint: &str, approved_by: &str, timestamp: i64,
                key_id: &str, ed25519_seed: &krypto::SecretBuf) -> Result<Self, TlsError>;
     pub fn canonical(&self) -> Result<Vec<u8>, TlsError>;
-    pub fn verify(&self, look_up_key: &dyn Fn(&str) -> Option<Vec<u8>>) -> Result<(), TlsError>;
+    pub fn verify(&self, expected_peer: &str, look_up_key: &dyn Fn(&str) -> Option<Vec<u8>>)
+        -> Result<(), TlsError>;   // expected_peer (0.12.0)
     pub fn fingerprint(&self) -> &str;
     pub fn peer(&self) -> &str;
     pub fn approved_by(&self) -> &str;
     pub fn key_id(&self) -> &str;
+    pub fn timestamp(&self) -> i64;   // (0.12.0)
     pub fn to_json(&self) -> Result<ApprovalJson, TlsError>;
     pub fn from_json(j: &ApprovalJson) -> Result<Self, TlsError>;
 }
 
 pub struct Context<'a> {
+    pub peer: &'a str,                                  // the counterpart expected (0.12.0)
     pub keys: &'a dyn Fn(&str) -> Option<Vec<u8>>,      // key_id → Ed25519 pubkey
     pub previous_der: Option<&'a [u8]>,                 // the receiver's previous generation
     pub current_der: Option<&'a [u8]>,                  // the receiver's current generation
@@ -571,10 +589,14 @@ pub struct Context<'a> {
 pub enum Recognition { Operator(Approval), Schedule(Box<Announcement>) }
 impl Recognition {
     pub fn verify(&self, k: &Context<'_>) -> Result<(), TlsError>;   // ONE code path for gen 0 and n
+    pub fn peer(&self) -> &str;         // the approval's peer or the announcement's announcer (0.12.0)
     pub fn fingerprint(&self) -> &str;
     pub fn is_anchor(&self) -> bool;    // operator approval = the root
 }
 ```
+
+`Approval::verify` checks the peer first, then the operator key, before the key is looked up;
+**Names** under [`canonical`](#canonical--what-actually-gets-signed) has the rule *(0.12.0)*.
 
 `ApprovalJson`: `v` · `peer` · `fingerprint` · `approved_by` · `timestamp` · `key_id` · `sig`
 *(field names ARE the wire names — see the transition table in CHANGELOG)*
@@ -755,7 +777,8 @@ pub fn alg_from_token(token: &str) -> Result<Alg, TlsError>;   // fail-closed
 pub struct SupportStatement { pub component: String, pub supported: Vec<String>, pub timestamp: i64, pub signature: String }
 impl SupportStatement {
     pub fn signed(component: &str, supported: &[Alg], timestamp: i64, anchor_pkcs8: &krypto::SecretBuf) -> Result<Self, TlsError>;
-    pub fn verify(&self, signer_cert_der: &[u8]) -> Result<Vec<Alg>, TlsError>;
+    pub fn verify(&self, expected_component: &str, signer_cert_der: &[u8]) -> Result<Vec<Alg>, TlsError>;
+        // expected_component (0.12.0)
 }
 
 pub fn choose(requested: Alg, verified_supported: Option<&[Alg]>) -> Result<Alg, TlsError>;
@@ -767,7 +790,8 @@ pub fn choose(requested: Alg, verified_supported: Option<&[Alg]>) -> Result<Alg,
 - **`choose` is the rule:** no statement → the requested stands; a verified statement without
   it → the best the peer declared, by the fixed preference order (aegis256 · xchacha20 ·
   aes256gcm); nothing acceptable → `TlsError::Negotiation` — **the connection fails, never
-  silently weaker**. An unverifiable statement authorizes nothing.
+  silently weaker**. An unverifiable statement authorizes nothing, nor does one from another
+  component than `expected_component` *(0.12.0)*.
 - From Python it is the same module, `nettls_py.capability` *(0.11.0)*. The `algsupport-01`
   vector fixes the canonical bytes.
 
@@ -883,6 +907,15 @@ that wants a rule about freshness reads the field and applies its own.
 An announcement and a receipt are bound to state instead: the announcement must fit the certificates
 the receiver holds, and the receipt must name the fingerprint that was announced. A handled message
 is bound as the receipt is *(0.12.0)*.
+
+**Names** *(0.12.0)*. Every `verify` takes the name of the counterpart the caller expects, as its
+first argument (`Recognition::verify` in `Context::peer`), and refuses a message about another:
+the approval's `peer`, the announcement's `announcer`, the receipt's and the handled message's
+`acker`, the support statement's `component`. A genuine message for one peer says nothing about
+another. The names are compared exactly as they are, and the refusal is `TlsError::ProofInvalid`,
+naming both. `Generations::receive` and `Trust::receive` take the name after the announcement and
+pass it on. An operator key, a `key_id` of the form `op:<name>`, may sign only approvals that name
+`<name>` as approver (`approved_by`); other key ids, such as `portal`, are not affected.
 
 ## `envelope` — seal to one recipient
 

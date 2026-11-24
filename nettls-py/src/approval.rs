@@ -168,9 +168,10 @@ impl Approval {
         self.inner.canonical().map(bytes).map_err(err)
     }
 
+    /// `expected_peer` is the peer the approval must be for (0.12.0).
     /// `look_up_key(key_id)` gives the Ed25519 public key as `bytes`, or `None`.
-    fn verify(&self, look_up_key: &Bound<'_, PyAny>) -> PyResult<()> {
-        with_lookup(look_up_key, |f| self.inner.verify(f))
+    fn verify(&self, expected_peer: &str, look_up_key: &Bound<'_, PyAny>) -> PyResult<()> {
+        with_lookup(look_up_key, |f| self.inner.verify(expected_peer, f))
     }
 
     fn fingerprint(&self) -> String {
@@ -187,6 +188,10 @@ impl Approval {
 
     fn key_id(&self) -> String {
         self.inner.key_id().to_string()
+    }
+
+    fn timestamp(&self) -> i64 {
+        self.inner.timestamp()
     }
 
     fn to_json(&self) -> PyResult<ApprovalJson> {
@@ -209,9 +214,12 @@ impl Approval {
 }
 
 /// `nettls::approval::Context`: what it takes to verify a recognition.
-/// `keys(key_id)` gives the Ed25519 public key as `bytes`, or `None`.
+/// `peer` is the counterpart the caller expects (0.12.0). `keys(key_id)` gives
+/// the Ed25519 public key as `bytes`, or `None`.
 #[pyclass(module = "nettls_py.approval", name = "Context")]
 pub(crate) struct Context {
+    #[pyo3(get, set)]
+    peer: String,
     #[pyo3(get, set)]
     keys: Py<PyAny>,
     previous_der: Option<Vec<u8>>,
@@ -222,11 +230,13 @@ pub(crate) struct Context {
 impl Context {
     #[new]
     fn py_new(
+        peer: String,
         keys: Py<PyAny>,
         previous_der: Option<Vec<u8>>,
         current_der: Option<Vec<u8>>,
     ) -> Self {
         Self {
+            peer,
             keys,
             previous_der,
             current_der,
@@ -284,11 +294,16 @@ impl Recognition {
         let keys = k.keys.bind(py);
         with_lookup(keys, |f| {
             r.verify(&ap::Context {
+                peer: &k.peer,
                 keys: f,
                 previous_der: k.previous_der.as_deref(),
                 current_der: k.current_der.as_deref(),
             })
         })
+    }
+
+    fn peer(&self) -> String {
+        self.to_rust().peer().to_string()
     }
 
     fn fingerprint(&self) -> String {
