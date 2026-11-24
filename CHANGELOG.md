@@ -104,6 +104,16 @@ Both files are written before either is put in place, and an interrupted
 save is finished or cleaned up at the next save or load. The errors for a
 failed directory sync and for a key that does not belong say what happened.
 
+### Fixed — a key in SEC1 form is repacked in locked memory *(2026-11-24)*
+
+The scalar of an `EC PRIVATE KEY` could be left unwiped when repacking
+failed. It now goes straight into krypto's locked memory.
+
+### Fixed — two error texts lose a run of stray spaces *(2026-11-24)*
+
+The errors for an oversized `new_cert_pem` and for a character outside a
+component name had a long gap in the middle of the sentence.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

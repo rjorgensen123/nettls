@@ -20,8 +20,11 @@
 //!   rcgen's `KeyPair` before it becomes ours.
 //!
 //! Anything short-lived we cannot put in a `SecretBuf` (PEM handed in by the
-//! consumer, DER intermediates while building PKCS#8) is a `Zeroizing<Vec<u8>>`
-//! — guaranteed wipe, no lock. `pem::wipe`, the best-effort loop this crate
+//! consumer) is a `Zeroizing<Vec<u8>>` — guaranteed wipe, no lock. The PKCS#8
+//! built from a SEC1 key has no such intermediate *(0.12.0)*: the scalar goes
+//! straight into a `SecretBuf`, and the key is assembled in one buffer of its
+//! final size, which `SecretBuf::from_vec` wipes as it takes it over.
+//! `pem::wipe`, the best-effort loop this crate
 //! carried under `forbid(unsafe_code)`, is gone: `zeroize` does the same job
 //! with a guarantee, and without `unsafe` in this crate.
 //!

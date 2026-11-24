@@ -7,7 +7,6 @@
 
 use krypto::SecretBuf;
 use rustls::pki_types::PrivateKeyDer;
-use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::TlsError;
 use crate::secret;
@@ -24,6 +23,10 @@ use crate::signature::p256_public_key as ec_p256_public_key;
 ///   ordinary operator-supplied EC key could not rotate, and the failure would
 ///   have been incomprehensible.
 /// - Everything else (RSA) → an explanatory error.
+///
+/// On the `Sec1` path the scalar is in locked memory from the moment it is
+/// read out, and the PKCS#8 is assembled in one buffer that is moved into
+/// locked memory and wiped *(0.12.0)*.
 pub(crate) fn pkcs8_p256(
     key: &PrivateKeyDer<'static>,
     cert_der: &[u8],
@@ -31,11 +34,20 @@ pub(crate) fn pkcs8_p256(
     match key {
         PrivateKeyDer::Pkcs8(k) => secret::hold(k.secret_pkcs8_der().to_vec()),
         PrivateKeyDer::Sec1(k) => {
-            let mut scalar = sec1_private_scalar(k.secret_sec1_der())?;
+            // The point first: reading it from the certificate is the step
+            // that can fail, and no secret has been copied yet.
             let point = ec_p256_public_key(cert_der)?;
-            let out = pkcs8_from_parts(&scalar, &point);
-            scalar.zeroize();
-            secret::hold(out)
+            let point: &[u8; POINT_LEN] = point.as_slice().try_into().map_err(|_| {
+                TlsError::Sign(
+                    "the public key in the certificate is not an uncompressed P-256 point"
+                        .to_string(),
+                )
+            })?;
+            let scalar = sec1_private_scalar(k.secret_sec1_der())?;
+            scalar.expose(|s| {
+                let s: &[u8; SCALAR_LEN] = s.try_into().map_err(|_| sec1_form_error())?;
+                secret::hold(pkcs8_from_parts(s, point))
+            })
         }
         _ => Err(TlsError::Sign(
             "the private key is not an EC key (probably RSA) — signing requires ECDSA \
@@ -46,7 +58,21 @@ pub(crate) fn pkcs8_p256(
     }
 }
 
-/// Extracts the private scalar from a SEC1 `ECPrivateKey`.
+/// The private scalar of a P-256 key, in bytes.
+const SCALAR_LEN: usize = 32;
+/// An uncompressed P-256 point: `0x04`, X, Y.
+const POINT_LEN: usize = 65;
+
+fn sec1_form_error() -> TlsError {
+    TlsError::Sign(
+        "the EC private key (SEC1) does not have the expected form SEQUENCE { INTEGER 1, \
+         OCTET STRING (32 bytes), … } for P-256"
+            .to_string(),
+    )
+}
+
+/// Extracts the private scalar from a SEC1 `ECPrivateKey`, straight into
+/// locked memory *(0.12.0)*.
 ///
 /// ```text
 /// ECPrivateKey ::= SEQUENCE {
@@ -58,14 +84,8 @@ pub(crate) fn pkcs8_p256(
 ///
 /// We read only the first two fields, and we read them **strictly**: anything
 /// that deviates from the form above is an error, not something to guess past.
-fn sec1_private_scalar(der: &[u8]) -> Result<[u8; 32], TlsError> {
-    let err = || {
-        TlsError::Sign(
-            "the EC private key (SEC1) does not have the expected form SEQUENCE { INTEGER 1, \
-             OCTET STRING (32 bytes), … } for P-256"
-                .to_string(),
-        )
-    };
+fn sec1_private_scalar(der: &[u8]) -> Result<SecretBuf, TlsError> {
+    let err = sec1_form_error;
     // SEQUENCE header: tag 0x30, then short or long length form.
     let mut i = 0usize;
     if der.first() != Some(&0x30) {
@@ -91,60 +111,90 @@ fn sec1_private_scalar(der: &[u8]) -> Result<[u8; 32], TlsError> {
         return Err(err());
     }
     i += 2;
-    let raw = der.get(i..i + 32).ok_or_else(err)?;
-    let mut out = [0u8; 32];
-    out.copy_from_slice(raw);
-    Ok(out)
+    let raw = der.get(i..i + SCALAR_LEN).ok_or_else(err)?;
+    secret::hold(raw.to_vec())
 }
 
 /// Builds a PKCS#8 v1 key (version 0, `id-ecPublicKey` / `prime256v1`) around
 /// scalar + point; the point goes in the inner `ECPrivateKey`, not at the
 /// PKCS#8 level.
 ///
-/// The inner lengths are written in the one-byte short form, which holds
-/// because the scalar is a fixed 32 bytes and the point is checked to be 65
-/// bytes by `p256_public_key`, so every inner length is below 128.
-///
-/// Every intermediate that carries the scalar is `Zeroizing`: wiped when it
-/// goes out of scope, whichever path returns.
-fn pkcs8_from_parts(scalar: &[u8; 32], point: &[u8]) -> Vec<u8> {
-    // ECPrivateKey with publicKey [1]:
-    //   SEQUENCE { INTEGER 1, OCTET STRING (32), [1] { BIT STRING (0x04||X||Y) } }
-    let mut ec = Zeroizing::new(Vec::new());
-    ec.extend_from_slice(&[0x02, 0x01, 0x01]); // version 1
-    ec.push(0x04);
-    ec.push(0x20);
-    ec.extend_from_slice(scalar);
-    // [1] EXPLICIT BIT STRING
-    let mut bit = vec![0x03, (point.len() + 1) as u8, 0x00];
-    bit.extend_from_slice(point);
-    ec.push(0xa1);
-    ec.push(bit.len() as u8);
-    ec.extend_from_slice(&bit);
-    let mut ec_seq = Zeroizing::new(vec![0x30, ec.len() as u8]);
-    ec_seq.extend_from_slice(&ec);
-
+/// The scalar is 32 bytes and the point 65, so every length is known before
+/// anything is written. The key is assembled in one buffer of its final size,
+/// which is therefore never moved, and the caller moves it straight into locked
+/// memory, which wipes the buffer *(0.12.0)*.
+fn pkcs8_from_parts(scalar: &[u8; SCALAR_LEN], point: &[u8; POINT_LEN]) -> Vec<u8> {
     // AlgorithmIdentifier { id-ecPublicKey, prime256v1 }
     const ALG: [u8; 21] = [
         0x30, 0x13, // SEQUENCE
         0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, // 1.2.840.10045.2.1
         0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, // 1.2.840.10045.3.1.7
     ];
+    // The lengths, from the inside out:
+    //   BIT STRING content: the unused-bits byte and the point
+    const BIT: u8 = 1 + POINT_LEN as u8;
+    //   [1] content: the BIT STRING with its header
+    const TAGGED: u8 = 2 + BIT;
+    //   ECPrivateKey content: version, the scalar's OCTET STRING, [1]
+    const EC: u8 = 3 + 2 + SCALAR_LEN as u8 + 2 + TAGGED;
+    //   privateKey OCTET STRING content: the ECPrivateKey with its header
+    const EC_SEQ: u8 = 2 + EC;
+    //   PKCS#8 content: version, AlgorithmIdentifier, privateKey
+    const INNER: u8 = 3 + ALG.len() as u8 + 2 + EC_SEQ;
+    //   the whole key: SEQUENCE in the long length form, since INNER is over 127
+    const TOTAL: usize = 3 + INNER as usize;
 
-    let mut inner = Zeroizing::new(Vec::new());
-    inner.extend_from_slice(&[0x02, 0x01, 0x00]); // version 0
-    inner.extend_from_slice(&ALG);
-    inner.push(0x04); // privateKey OCTET STRING
-    inner.push(ec_seq.len() as u8);
-    inner.extend_from_slice(&ec_seq);
-
-    let mut out = vec![0x30];
-    if inner.len() < 128 {
-        out.push(inner.len() as u8);
-    } else {
-        out.push(0x81);
-        out.push(inner.len() as u8);
-    }
-    out.extend_from_slice(&inner);
+    let mut out = Vec::with_capacity(TOTAL);
+    out.extend_from_slice(&[0x30, 0x81, INNER]);
+    out.extend_from_slice(&[0x02, 0x01, 0x00]); // version 0
+    out.extend_from_slice(&ALG);
+    out.extend_from_slice(&[0x04, EC_SEQ]); // privateKey OCTET STRING
+    // ECPrivateKey with publicKey [1]:
+    //   SEQUENCE { INTEGER 1, OCTET STRING (32), [1] { BIT STRING (0x04||X||Y) } }
+    out.extend_from_slice(&[0x30, EC]);
+    out.extend_from_slice(&[0x02, 0x01, 0x01]); // version 1
+    out.extend_from_slice(&[0x04, SCALAR_LEN as u8]);
+    out.extend_from_slice(scalar);
+    out.extend_from_slice(&[0xa1, TAGGED, 0x03, BIT, 0x00]); // [1] EXPLICIT BIT STRING
+    out.extend_from_slice(point);
+    debug_assert_eq!(out.len(), TOTAL);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::material::TlsMaterial;
+    use crate::{CertSource, SelfSignedParams};
+
+    #[test]
+    fn a_sec1_key_becomes_the_pkcs8_of_its_certificate() {
+        let m = TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::new(
+            "gateway",
+            ["gateway"],
+        )))
+        .unwrap();
+        let cert = m.cert_chain()[0].as_ref().to_vec();
+        // The same key in the SEC1 form an operator may hand in: the scalar
+        // from the generated PKCS#8, in a bare `ECPrivateKey`.
+        let PrivateKeyDer::Pkcs8(generated) = m.key_der() else {
+            panic!("a generated key is PKCS#8");
+        };
+        let der = generated.secret_pkcs8_der();
+        let at = der
+            .windows(5)
+            .position(|w| w == [0x02, 0x01, 0x01, 0x04, 0x20])
+            .unwrap()
+            + 5;
+        let mut sec1 = vec![0x30, 0x25, 0x02, 0x01, 0x01, 0x04, 0x20];
+        sec1.extend_from_slice(&der[at..at + SCALAR_LEN]);
+        let key = PrivateKeyDer::Sec1(sec1.into());
+
+        let pkcs8 = pkcs8_p256(&key, &cert).unwrap();
+        let signature = crate::signature::sign_p256(&pkcs8, b"message").unwrap();
+        crate::signature::verify_p256(&cert, b"message", &signature).unwrap();
+
+        // A certificate that cannot be read is an error, before the key is touched.
+        assert!(pkcs8_p256(&key, b"not a certificate").is_err());
+    }
 }

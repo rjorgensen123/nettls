@@ -285,7 +285,8 @@ impl Announcement {
         // and anything beyond it is not a certificate.
         if j.new_cert_pem.len() > MAX_CERT_PEM_LEN {
             return Err(TlsError::Params(format!(
-                "new_cert_pem is {} bytes — above the cap of {MAX_CERT_PEM_LEN};                  that is not a certificate",
+                "new_cert_pem is {} bytes — above the cap of {MAX_CERT_PEM_LEN}; \
+                 that is not a certificate",
                 j.new_cert_pem.len()
             )));
         }

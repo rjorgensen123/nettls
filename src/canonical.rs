@@ -80,7 +80,8 @@ pub fn require_component_name(v: &str, field: &str) -> Result<(), TlsError> {
         .find(|c| !matches!(c, 'a'..='z' | '0'..='9' | '-'))
     {
         return Err(TlsError::Params(format!(
-            "{field}: the character {c:?} is outside [a-z0-9-] — component names are              lowercase ASCII, digits and hyphens (§6.5)"
+            "{field}: the character {c:?} is outside [a-z0-9-] — component names are \
+             lowercase ASCII, digits and hyphens (§6.5)"
         )));
     }
     Ok(())
