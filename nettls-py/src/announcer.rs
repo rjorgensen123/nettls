@@ -12,7 +12,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
-use crate::announcement::Announcement;
+use crate::announcement::{Announcement, Handled, Receipt};
 use crate::material::SelfSignedParams;
 use crate::resolver::RotatingResolver;
 use crate::{Bytes, err, hold, hold_str, lock, reveal};
@@ -106,8 +106,30 @@ impl Schedule {
         lock(&self.inner).announced(now);
     }
 
-    fn acked(&self, peer: &str) {
-        lock(&self.inner).acked(peer);
+    /// Verifies `receipt` before anything is struck (0.12.0).
+    fn acked(
+        &self,
+        peer: &str,
+        receipt: &Receipt,
+        pinned_pubkey: &[u8],
+        expected_new_fp: &str,
+    ) -> PyResult<()> {
+        lock(&self.inner)
+            .acked(peer, &receipt.inner, pinned_pubkey, expected_new_fp)
+            .map_err(err)
+    }
+
+    /// Verifies `handled` before anything is struck (0.12.0).
+    fn acked_handled(
+        &self,
+        peer: &str,
+        handled: &Handled,
+        pinned_pubkey: &[u8],
+        expected_new_fp: &str,
+    ) -> PyResult<()> {
+        lock(&self.inner)
+            .acked_handled(peer, &handled.inner, pinned_pubkey, expected_new_fp)
+            .map_err(err)
     }
 
     fn waiting_for(&self) -> Vec<String> {
@@ -425,8 +447,32 @@ impl Announcer {
             .map_err(err)
     }
 
-    fn acked(&self, py: Python<'_>, peer: &str) -> PyResult<()> {
-        py.detach(|| self.inner.acked(peer)).map_err(err)
+    /// Verifies `receipt` before anything is struck, and saves the promise
+    /// without the GIL (0.12.0).
+    fn acked(
+        &self,
+        py: Python<'_>,
+        peer: &str,
+        receipt: &Receipt,
+        pinned_pubkey: &[u8],
+    ) -> PyResult<()> {
+        let receipt = &receipt.inner;
+        py.detach(|| self.inner.acked(peer, receipt, pinned_pubkey))
+            .map_err(err)
+    }
+
+    /// Verifies `handled` before anything is struck, and saves the promise
+    /// without the GIL (0.12.0).
+    fn acked_handled(
+        &self,
+        py: Python<'_>,
+        peer: &str,
+        handled: &Handled,
+        pinned_pubkey: &[u8],
+    ) -> PyResult<()> {
+        let handled = &handled.inner;
+        py.detach(|| self.inner.acked_handled(peer, handled, pinned_pubkey))
+            .map_err(err)
     }
 
     fn add_peer(&self, py: Python<'_>, name: String) -> PyResult<()> {

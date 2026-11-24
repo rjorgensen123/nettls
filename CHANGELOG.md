@@ -132,6 +132,12 @@ A genuine message for one peer verified when presented for another. Each
 `verify`, and `receive`, now takes the expected name and refuses another.
 An operator key `op:<name>` may sign only approvals by `<name>`.
 
+### ⚠ Changed — `acked` takes the receipt and verifies it *(2026-11-24)*
+
+`acked` took a name and trusted the caller to have verified the receipt.
+It now takes the receipt and the peer's key and verifies before the peer
+is struck; `acked_handled` does the same for a `Handled`.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

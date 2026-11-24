@@ -35,7 +35,7 @@
 use std::collections::BTreeSet;
 use zeroize::Zeroize;
 
-use crate::announcement::Announcement;
+use crate::announcement::{Announcement, Handled, Receipt};
 use crate::error::{TlsError, to_hex};
 use crate::fingerprint::same_fingerprint;
 
@@ -143,6 +143,9 @@ impl Schedule {
     /// **Not an exceptional case.** If a module is decommissioned but stays in
     /// the registry, we wait forever for an acknowledgement from something that
     /// does not exist — and then the instance can never rotate again (§6.3b, M-34).
+    ///
+    /// It takes no proof: it is the operator's named way out, not an
+    /// acknowledgement *(0.12.0)*.
     pub fn remove_peer(&mut self, name: &str) {
         self.peers.remove(name);
         if let ChainState::Announced { waiting_for, .. } = &mut self.state {
@@ -165,8 +168,69 @@ impl Schedule {
         }
     }
 
-    /// A peer has acked.
-    pub fn acked(&mut self, peer: &str) {
+    /// A peer has acknowledged with a receipt. The receipt is verified before
+    /// anything is struck from the waiting list *(0.12.0)*.
+    ///
+    /// Something must be announced, `peer` must be one of the peers, and the
+    /// receipt must verify with [`Receipt::verify`]: from `peer`, against
+    /// `pinned_pubkey`, the key pinned for `peer`, and `expected_new_fp`. The
+    /// state machine does not know the announcement, so the caller gives the
+    /// fingerprint it announced.
+    ///
+    /// A peer that has already acknowledged and acknowledges again with a valid
+    /// message gets `Ok`, and nothing changes: a receipt and a handled message
+    /// can arrive one after the other. On an error nothing changes.
+    pub fn acked(
+        &mut self,
+        peer: &str,
+        receipt: &Receipt,
+        pinned_pubkey: &[u8],
+        expected_new_fp: &str,
+    ) -> Result<(), TlsError> {
+        self.check_acknowledgement(peer, "receipt")?;
+        receipt.verify(peer, pinned_pubkey, expected_new_fp)?;
+        self.strike(peer);
+        Ok(())
+    }
+
+    /// A peer has acknowledged with a handled message: it had handled the
+    /// announcement before, and its first receipt may have been lost. Checked
+    /// and verified as [`Schedule::acked`] does a receipt, with
+    /// [`Handled::verify`] *(0.12.0)*.
+    pub fn acked_handled(
+        &mut self,
+        peer: &str,
+        handled: &Handled,
+        pinned_pubkey: &[u8],
+        expected_new_fp: &str,
+    ) -> Result<(), TlsError> {
+        self.check_acknowledgement(peer, "handled message")?;
+        handled.verify(peer, pinned_pubkey, expected_new_fp)?;
+        self.strike(peer);
+        Ok(())
+    }
+
+    /// Refuses an acknowledgement (`what`) when nothing is announced, or when
+    /// `peer` is not one of the peers.
+    fn check_acknowledgement(&self, peer: &str, what: &str) -> Result<(), TlsError> {
+        if !matches!(self.state, ChainState::Announced { .. }) {
+            return Err(TlsError::ProofInvalid(format!(
+                "a {what} from {peer:?} arrived, but nothing is announced — it came late or \
+                 without cause; nothing was changed"
+            )));
+        }
+        if !self.peers.contains(peer) {
+            return Err(TlsError::ProofInvalid(format!(
+                "a {what} from {peer:?} arrived, but {peer:?} is not one of the peers that must \
+                 acknowledge; nothing was changed"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Strikes `peer` from the waiting list. Private: only a verified
+    /// acknowledgement leads here.
+    fn strike(&mut self, peer: &str) {
         if let ChainState::Announced { waiting_for, .. } = &mut self.state {
             waiting_for.remove(peer);
         }
@@ -619,6 +683,17 @@ mod tests {
         vec!["service".into(), "portal".into()]
     }
 
+    /// The fingerprint the tests announce.
+    pub(super) const FP: &str = "aa00112233445566778899aabbccddeeff00112233445566778899aabbccddee";
+
+    /// A receipt from `peer` to "gateway" for [`FP`], and the key pinned for
+    /// `peer` that it verifies against.
+    pub(super) fn receipt(peer: &str) -> (Receipt, Vec<u8>) {
+        let seed = krypto::SecretBuf::from_vec(vec![3u8; 32]).unwrap();
+        let key = krypto::sign::ed25519_public(&seed).unwrap().to_vec();
+        (Receipt::new(peer, "gateway", FP, 100, &seed).unwrap(), key)
+    }
+
     // --- the draw ------------------------------------------------------------ //
 
     #[test]
@@ -659,13 +734,42 @@ mod tests {
         assert!(!r.can_roll(200));
         assert_eq!(r.waiting_for(), vec!["portal", "service"]);
 
-        r.acked("service");
+        let (rc, key) = receipt("service");
+        r.acked("service", &rc, &key, FP).unwrap();
         assert!(!r.can_roll(200), "one left");
         assert_eq!(r.waiting_for(), vec!["portal"]);
 
-        r.acked("portal");
+        let (rc, key) = receipt("portal");
+        r.acked("portal", &rc, &key, FP).unwrap();
         assert!(r.can_roll(200));
         assert!(r.waiting_for().is_empty());
+    }
+
+    #[test]
+    fn a_valid_receipt_strikes_the_name_and_an_invalid_one_does_not() {
+        // 0.12.0: the state machine verifies the receipt before it strikes.
+        let mut r = Schedule::new(peers(), 0);
+        let (rc, key) = receipt("service");
+        // Before anything is announced a receipt has nothing to acknowledge.
+        assert!(r.acked("service", &rc, &key, FP).is_err());
+        r.announced(0);
+        let other_key =
+            krypto::sign::ed25519_public(&krypto::SecretBuf::from_vec(vec![9u8; 32]).unwrap())
+                .unwrap();
+
+        let err = r.acked("service", &rc, &other_key, FP).unwrap_err();
+        assert!(matches!(err, TlsError::ProofInvalid(_)), "{err:?}");
+        // A handled message is verified the same way.
+        let seed = krypto::SecretBuf::from_vec(vec![3u8; 32]).unwrap();
+        let handled = Handled::new("service", "gateway", FP, 100, &seed).unwrap();
+        assert!(
+            r.acked_handled("service", &handled, &other_key, FP)
+                .is_err()
+        );
+        assert_eq!(r.waiting_for(), vec!["portal", "service"]);
+
+        r.acked("service", &rc, &key, FP).unwrap();
+        assert_eq!(r.waiting_for(), vec!["portal"]);
     }
 
     // --- rate limit ------------------------------------------------------------ //
@@ -675,7 +779,8 @@ mod tests {
         // M-22. Caps the vector that amounts to forcing rotations.
         let mut r = Schedule::new(vec!["service".to_string()], 0);
         r.announced(0);
-        r.acked("service");
+        let (rc, key) = receipt("service");
+        r.acked("service", &rc, &key, FP).unwrap();
         assert!(r.can_roll(0));
         r.rolled(0).unwrap();
 
@@ -694,7 +799,8 @@ mod tests {
     fn rolling_schedules_the_next_round() {
         let mut r = Schedule::new(vec!["service".to_string()], 0);
         r.announced(0);
-        r.acked("service");
+        let (rc, key) = receipt("service");
+        r.acked("service", &rc, &key, FP).unwrap();
         r.rolled(1_000).unwrap();
 
         match r.state() {
@@ -712,7 +818,8 @@ mod tests {
         // and that must not reset who has already answered.
         let mut r = Schedule::new(peers(), 0);
         r.announced(0);
-        r.acked("service");
+        let (rc, key) = receipt("service");
+        r.acked("service", &rc, &key, FP).unwrap();
         r.announced(500);
         assert_eq!(
             r.waiting_for(),
@@ -836,6 +943,7 @@ impl Schedule {
 
 #[cfg(test)]
 mod retry_tests {
+    use super::tests::{FP, receipt};
     use super::*;
 
     fn r() -> Schedule {
@@ -880,8 +988,10 @@ mod retry_tests {
         // M-7e, second half.
         let mut r = r();
         assert!(r.alarm(ALARM_AFTER_S));
-        r.acked("service");
-        r.acked("portal");
+        let (rc, key) = receipt("service");
+        r.acked("service", &rc, &key, FP).unwrap();
+        let (rc, key) = receipt("portal");
+        r.acked("portal", &rc, &key, FP).unwrap();
         assert!(!r.alarm(ALARM_AFTER_S), "the alarm must clear on its own");
         assert!(r.next_retry(ALARM_AFTER_S).is_none());
         assert!(r.can_roll(ALARM_AFTER_S));
@@ -905,7 +1015,8 @@ mod retry_tests {
     fn message_always_names_who_is_blocking() {
         // M-33.
         let mut r = r();
-        r.acked("service");
+        let (rc, key) = receipt("service");
+        r.acked("service", &rc, &key, FP).unwrap();
         let m = r
             .status(ALARM_AFTER_S, 30 * DAY_S)
             .message("gateway")
@@ -914,7 +1025,8 @@ mod retry_tests {
         assert!(m.contains("gateway"), "{m}");
         assert!(m.starts_with("ERROR"), "{m}");
 
-        r.acked("portal");
+        let (rc, key) = receipt("portal");
+        r.acked("portal", &rc, &key, FP).unwrap();
         assert!(
             r.status(ALARM_AFTER_S, 30 * DAY_S)
                 .message("gateway")
@@ -1321,13 +1433,90 @@ impl Announcer {
         Ok(k)
     }
 
-    /// A peer has acked. The promise is saved again with the shorter waiting
-    /// list *(0.10.0)*.
-    pub fn acked(&self, peer: &str) -> Result<(), TlsError> {
-        self.schedule
-            .write()
-            .map_err(|_| TlsError::poisoned("the rotation lock"))?
-            .acked(peer);
+    /// A peer has acknowledged the pending announcement with a receipt. The
+    /// call verifies it before anything is struck from the waiting list
+    /// *(0.12.0)*.
+    ///
+    /// An announcement must be pending, the receipt must be to this announcer,
+    /// `peer` must be one of the peers, and the receipt must verify with
+    /// [`Receipt::verify`]: from `peer`, against `pinned_pubkey`, the key
+    /// pinned for `peer`, and the fingerprint announced. The promise is then
+    /// saved again with the shorter waiting list *(0.10.0)*.
+    ///
+    /// A peer that has already acknowledged and acknowledges again with a valid
+    /// message gets `Ok`, and nothing changes. When the call refuses, neither
+    /// the waiting list nor the saved promise changes.
+    pub fn acked(
+        &self,
+        peer: &str,
+        receipt: &Receipt,
+        pinned_pubkey: &[u8],
+    ) -> Result<(), TlsError> {
+        self.acknowledge(peer, "receipt", receipt.announcer(), |s, announced| {
+            s.acked(peer, receipt, pinned_pubkey, announced)
+        })
+    }
+
+    /// A peer has acknowledged the pending announcement with a handled
+    /// message: it had handled the announcement before, and its first receipt
+    /// may have been lost. Checked, verified with [`Handled::verify`] and saved
+    /// as [`Announcer::acked`] does a receipt *(0.12.0)*.
+    pub fn acked_handled(
+        &self,
+        peer: &str,
+        handled: &Handled,
+        pinned_pubkey: &[u8],
+    ) -> Result<(), TlsError> {
+        self.acknowledge(
+            peer,
+            "handled message",
+            handled.announcer(),
+            |s, announced| s.acked_handled(peer, handled, pinned_pubkey, announced),
+        )
+    }
+
+    /// What [`Announcer::acked`] and [`Announcer::acked_handled`] share. An
+    /// acknowledgement (`what`) addressed to `addressee` is refused unless an
+    /// announcement is pending and `addressee` is this announcer; `ack` then
+    /// checks and verifies it against the announced fingerprint in the
+    /// schedule, and only after that is the promise saved.
+    ///
+    /// The pending lock is held until the schedule has answered, so the
+    /// announcement cannot change between reading its fingerprint and
+    /// striking the name. It is taken before the rotation lock, in the order
+    /// [`Announcer::save_pending`] takes the two.
+    fn acknowledge(
+        &self,
+        peer: &str,
+        what: &str,
+        addressee: &str,
+        ack: impl FnOnce(&mut Schedule, &str) -> Result<(), TlsError>,
+    ) -> Result<(), TlsError> {
+        {
+            let pending = self
+                .pending
+                .read()
+                .map_err(|_| TlsError::poisoned("the pending lock"))?;
+            let Some(p) = pending.as_ref() else {
+                return Err(TlsError::ProofInvalid(format!(
+                    "a {what} from {peer:?} arrived, but no announcement is pending — it came \
+                     late or without cause; nothing was changed"
+                )));
+            };
+            if addressee != self.name {
+                return Err(TlsError::ProofInvalid(format!(
+                    "the {what} from {peer:?} is to the announcer {addressee:?}, but this \
+                     announcer is {:?} — this is a {what} for another announcer; nothing was \
+                     changed",
+                    self.name
+                )));
+            }
+            let mut schedule = self
+                .schedule
+                .write()
+                .map_err(|_| TlsError::poisoned("the rotation lock"))?;
+            ack(&mut schedule, p.announcement.new_fingerprint())?;
+        }
         self.save_pending()
     }
 
@@ -1350,6 +1539,9 @@ impl Announcer {
     /// rotation already announced stops waiting for it, and the promise is
     /// saved at once. As with [`Announcer::add_peer`], the consumer's own list
     /// must change too.
+    ///
+    /// It takes no proof: it is the operator's named way out, not an
+    /// acknowledgement *(0.12.0)*.
     pub fn remove_peer(&self, name: &str) -> Result<(), TlsError> {
         self.schedule
             .write()
@@ -1768,10 +1960,11 @@ struct PendingOnDisk {
 impl Announcer {
     /// Write the pending announcement to disk.
     ///
-    /// `prepare` and `acked` call this themselves *(0.10.0)*; calling it again
-    /// does no harm. **The private key is not included.** It already lives in
-    /// `new/` from `prepare`, and writing it a second time would have given us
-    /// two places to protect and one to forget.
+    /// `prepare` and `acked` call this themselves *(0.10.0)*, and so does
+    /// `acked_handled` *(0.12.0)*; calling it again does no harm. **The
+    /// private key is not included.** It already lives in `new/` from
+    /// `prepare`, and writing it a second time would have given us two places
+    /// to protect and one to forget.
     pub fn save_pending(&self) -> Result<(), TlsError> {
         let path = self.dir.join(PENDING_FILE);
         let v = self

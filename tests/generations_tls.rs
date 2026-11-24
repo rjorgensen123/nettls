@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use nettls::announcement::Announcement;
+use nettls::announcement::{Announcement, Handled, Receipt};
 use nettls::generations::{Generation, Trust};
 use nettls::{CertSource, SelfSignedParams, TlsMaterial};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -347,7 +347,8 @@ async fn announcer_rolls_only_when_receipt_is_in() {
     trust
         .receive(&k, "gateway")
         .expect("the client stores the new one");
-    announcer.acked("service").unwrap();
+    let (receipt, key) = receipt_for(&announcer, "service");
+    announcer.acked("service", &receipt, &key).unwrap();
 
     // Now we roll.
     let old = announcer
@@ -408,7 +409,8 @@ async fn the_promise_survives_a_restart() {
         )
         .unwrap();
         let k = announcer.prepare(100).unwrap();
-        announcer.acked("service").unwrap();
+        let (receipt, key) = receipt_for(&announcer, "service");
+        announcer.acked("service", &receipt, &key).unwrap();
         announcer.save_pending().unwrap();
         k
     }; // announcer is dropped — the process "dies"
@@ -546,7 +548,8 @@ async fn keys_are_locked_when_password_is_set() {
 
     // And the material can be read back — locking that cannot be unlocked is
     // not locking, it is loss.
-    announcer.acked("service").unwrap();
+    let (receipt, key) = receipt_for(&announcer, "service");
+    announcer.acked("service", &receipt, &key).unwrap();
     assert!(
         announcer.roll_if_ready(200).unwrap().is_some(),
         "could not roll"
@@ -623,7 +626,8 @@ async fn previous_key_survives_restart_after_two_rotations() {
         let announcer = build(gen0()).unwrap();
         for t in [t1, t2] {
             announcer.prepare(t).unwrap();
-            announcer.acked("service").unwrap();
+            let (receipt, key) = receipt_for(&announcer, "service");
+            announcer.acked("service", &receipt, &key).unwrap();
             announcer
                 .roll_if_ready(t)
                 .unwrap()
@@ -681,7 +685,8 @@ async fn the_gate_postpones_the_switch_without_side_effects() {
     .unwrap();
 
     announcer.prepare(100).unwrap();
-    announcer.acked("service").unwrap();
+    let (receipt, key) = receipt_for(&announcer, "service");
+    announcer.acked("service", &receipt, &key).unwrap();
 
     // Everything is ready — but the consumer says "not now".
     let before = resolver.fingerprint_sha256();
@@ -820,6 +825,120 @@ fn announcer_in(
     .unwrap()
 }
 
+/// The Ed25519 seed the peers in these tests sign with.
+const PEER_SEED: [u8; 32] = [7; 32];
+
+/// A receipt from `peer` for `a`'s pending announcement, and the key pinned for
+/// `peer` that it verifies against.
+fn receipt_for(a: &nettls::announcer::Announcer, peer: &str) -> (Receipt, Vec<u8>) {
+    let k = a.pending().expect("an announcement is pending");
+    let seed = krypto::SecretBuf::from_vec(PEER_SEED.to_vec()).expect("mlock");
+    let key = krypto::sign::ed25519_public(&seed).unwrap().to_vec();
+    let receipt = Receipt::new(peer, k.announcer(), k.new_fingerprint(), 100, &seed).unwrap();
+    (receipt, key)
+}
+
+#[test]
+fn an_acknowledgement_is_verified_before_the_name_is_struck() {
+    // 0.12.0: `acked` and `acked_handled` take the message and verify it. A
+    // refusal changes neither the waiting list nor the saved promise.
+    nettls::install_crypto_provider();
+    let c0 = generation();
+    let dir = dir_with("acked-verifies", &c0);
+    let resolver = Arc::new(nettls::RotatingResolver::new(&c0.material).unwrap());
+    let a = announcer_in(&dir, &c0, &resolver);
+    let k = a.prepare(100).unwrap();
+    let fp = k.new_fingerprint();
+    let (valid, key) = receipt_for(&a, "service");
+    let seed = krypto::SecretBuf::from_vec(PEER_SEED.to_vec()).unwrap();
+    let other_key =
+        krypto::sign::ed25519_public(&krypto::SecretBuf::from_vec(vec![9; 32]).unwrap()).unwrap();
+    let other_fp = "bb".repeat(32);
+    let promise = dir.join(nettls::announcer::PENDING_FILE);
+    let waiting = || a.status(0, 0).unwrap().waiting_for;
+    let saved = std::fs::read(&promise).unwrap();
+
+    let refused = [
+        (
+            "service",
+            valid.clone(),
+            other_key.as_slice(),
+            "does not hold",
+        ),
+        (
+            "service",
+            Receipt::new("service", "gateway", &other_fp, 100, &seed).unwrap(),
+            key.as_slice(),
+            "a different rotation",
+        ),
+        (
+            "service",
+            Receipt::new("service", "portal", fp, 100, &seed).unwrap(),
+            key.as_slice(),
+            "for another announcer",
+        ),
+        (
+            "stranger",
+            Receipt::new("stranger", "gateway", fp, 100, &seed).unwrap(),
+            key.as_slice(),
+            "not one of the peers",
+        ),
+    ];
+    for (peer, receipt, pinned, why) in refused {
+        let err = a.acked(peer, &receipt, pinned).unwrap_err();
+        assert!(matches!(err, nettls::TlsError::ProofInvalid(_)), "{err:?}");
+        assert!(err.to_string().contains(why), "{err}");
+        assert_eq!(waiting(), ["service"]);
+        assert_eq!(std::fs::read(&promise).unwrap(), saved);
+    }
+
+    // A handled message is verified the same way.
+    let handled = Handled::new("service", "gateway", fp, 100, &seed).unwrap();
+    let err = a
+        .acked_handled("service", &handled, &other_key)
+        .unwrap_err();
+    assert!(err.to_string().contains("does not hold"), "{err}");
+    assert_eq!(waiting(), ["service"]);
+    assert_eq!(std::fs::read(&promise).unwrap(), saved);
+
+    a.acked("service", &valid, &key).unwrap();
+    assert!(waiting().is_empty());
+    // Having acknowledged does not let an invalid message through.
+    assert!(a.acked("service", &valid, &other_key).is_err());
+
+    // The receipt again, and then a handled message: both `Ok`, and nothing changes.
+    let saved = std::fs::read(&promise).unwrap();
+    a.acked("service", &valid, &key).unwrap();
+    a.acked_handled("service", &handled, &key).unwrap();
+    assert!(waiting().is_empty());
+    assert_eq!(std::fs::read(&promise).unwrap(), saved);
+
+    // After the switch nothing is announced, and the same receipt came late.
+    assert!(a.roll_if_ready(200).unwrap().is_some());
+    let err = a.acked("service", &valid, &key).unwrap_err();
+    assert!(err.to_string().contains("came late"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_handled_message_alone_lets_the_switch_happen() {
+    // 0.12.0: the receipt is lost on the way; the handled message that
+    // follows it counts as the acknowledgement.
+    nettls::install_crypto_provider();
+    let c0 = generation();
+    let dir = dir_with("handled-alone", &c0);
+    let resolver = Arc::new(nettls::RotatingResolver::new(&c0.material).unwrap());
+    let a = announcer_in(&dir, &c0, &resolver);
+    let k = a.prepare(100).unwrap();
+    let (_lost, key) = receipt_for(&a, "service");
+    let seed = krypto::SecretBuf::from_vec(PEER_SEED.to_vec()).unwrap();
+    let handled = Handled::new("service", "gateway", k.new_fingerprint(), 100, &seed).unwrap();
+
+    a.acked_handled("service", &handled, &key).unwrap();
+    assert!(a.roll_if_ready(200).unwrap().is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn the_promise_and_the_switch_survive_restarts_without_save_pending() {
     nettls::install_crypto_provider();
@@ -829,7 +948,8 @@ fn the_promise_and_the_switch_survive_restarts_without_save_pending() {
 
     let a = announcer_in(&dir, &c0, &resolver);
     let k = a.prepare(100).unwrap();
-    a.acked("service").unwrap();
+    let (receipt, key) = receipt_for(&a, "service");
+    a.acked("service", &receipt, &key).unwrap();
     drop(a);
 
     let b = announcer_in(&dir, &c0, &resolver);
@@ -858,7 +978,8 @@ fn a_failed_write_changes_nothing_and_the_next_call_switches() {
     let resolver = Arc::new(nettls::RotatingResolver::new(&c0.material).unwrap());
     let a = announcer_in(&dir, &c0, &resolver);
     let k = a.prepare(100).unwrap();
-    a.acked("service").unwrap();
+    let (receipt, key) = receipt_for(&a, "service");
+    a.acked("service", &receipt, &key).unwrap();
 
     // A directory where the previous key is to be written makes that write fail.
     let blocker = dir.join("previous-key.json");
@@ -891,7 +1012,8 @@ fn the_switch_refuses_material_that_is_not_what_was_announced() {
     let resolver = Arc::new(nettls::RotatingResolver::new(&c0.material).unwrap());
     let a = announcer_in(&dir, &c0, &resolver);
     let k = a.prepare(100).unwrap();
-    a.acked("service").unwrap();
+    let (receipt, key) = receipt_for(&a, "service");
+    a.acked("service", &receipt, &key).unwrap();
 
     // Something else now lies where the announced certificate was put.
     let other = generation();
@@ -920,7 +1042,8 @@ fn after_a_restart_the_resolver_serves_the_restored_certificate() {
 
     let (_, first) = start();
     first.prepare(100).unwrap();
-    first.acked("service").unwrap();
+    let (receipt, key) = receipt_for(&first, "service");
+    first.acked("service", &receipt, &key).unwrap();
     assert!(first.roll_if_ready(200).unwrap().is_some());
     let rolled = first.own_trio().unwrap().current_fingerprint;
     assert_ne!(rolled, c0.fp_bar());
@@ -944,13 +1067,15 @@ fn the_daily_cap_holds_across_a_restart() {
     let resolver = Arc::new(nettls::RotatingResolver::new(&c0.material).unwrap());
     let a = announcer_in(&dir, &c0, &resolver);
     a.prepare(100).unwrap();
-    a.acked("service").unwrap();
+    let (receipt, key) = receipt_for(&a, "service");
+    a.acked("service", &receipt, &key).unwrap();
     assert!(a.roll_if_ready(200).unwrap().is_some());
     drop(a);
 
     let b = announcer_in(&dir, &c0, &resolver);
     b.prepare(300).unwrap();
-    b.acked("service").unwrap();
+    let (receipt, key) = receipt_for(&b, "service");
+    b.acked("service", &receipt, &key).unwrap();
     assert!(
         b.roll_if_ready(400).unwrap().is_none(),
         "a restart must not reset the 24-hour cap"
@@ -1051,7 +1176,8 @@ fn saving_with_a_password_writes_nothing_in_cleartext_first() {
     assert!(dir.join("new").join("material.locked").is_file());
 
     // And what was locked in memory reads back.
-    announcer.acked("service").unwrap();
+    let (receipt, key) = receipt_for(&announcer, "service");
+    announcer.acked("service", &receipt, &key).unwrap();
     assert!(
         announcer.roll_if_ready(200).unwrap().is_some(),
         "could not roll"
@@ -1123,7 +1249,8 @@ fn a_peer_removed_while_waiting_no_longer_blocks_the_rotation() {
     let announcer = announcer_for(&dir, &generation(), &["service", "portal"]);
 
     announcer.prepare(100).unwrap();
-    announcer.acked("service").unwrap();
+    let (receipt, key) = receipt_for(&announcer, "service");
+    announcer.acked("service", &receipt, &key).unwrap();
     assert!(
         announcer.roll_if_ready(200).unwrap().is_none(),
         "rolled without portal"
@@ -1146,12 +1273,14 @@ fn a_peer_added_while_waiting_must_ack_too() {
 
     announcer.prepare(100).unwrap();
     announcer.add_peer("portal").unwrap();
-    announcer.acked("service").unwrap();
+    let (receipt, key) = receipt_for(&announcer, "service");
+    announcer.acked("service", &receipt, &key).unwrap();
     assert!(
         announcer.roll_if_ready(200).unwrap().is_none(),
         "rolled without portal"
     );
-    announcer.acked("portal").unwrap();
+    let (receipt, key) = receipt_for(&announcer, "portal");
+    announcer.acked("portal", &receipt, &key).unwrap();
     assert!(
         announcer.roll_if_ready(200).unwrap().is_some(),
         "could not roll"
@@ -1171,7 +1300,8 @@ fn after_a_restart_a_peer_taken_out_of_the_list_is_not_waited_for() {
     {
         let announcer = announcer_for(&dir, &c0, &["service", "portal"]);
         announcer.prepare(100).unwrap();
-        announcer.acked("service").unwrap();
+        let (receipt, key) = receipt_for(&announcer, "service");
+        announcer.acked("service", &receipt, &key).unwrap();
     } // the process "dies"
 
     let announcer = announcer_for(&dir, &c0, &["service"]);
@@ -1197,7 +1327,8 @@ fn restart_after_editing_previous_key(
     let resolver = Arc::new(nettls::RotatingResolver::new(&c0.material).unwrap());
     let a = announcer_in(&dir, &c0, &resolver);
     a.prepare(100).unwrap();
-    a.acked("service").unwrap();
+    let (receipt, key) = receipt_for(&a, "service");
+    a.acked("service", &receipt, &key).unwrap();
     assert!(a.roll_if_ready(200).unwrap().is_some(), "could not roll");
     drop(a);
 

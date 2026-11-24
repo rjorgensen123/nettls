@@ -418,6 +418,15 @@ def test_a_broken_pin_is_an_error():
 # The schedule: alarm, retries and the countdown (M-7c, M-7d, M-7e)
 # --------------------------------------------------------------------------- #
 
+# The key pinned for every peer in these tests; their receipts are signed with SEED.
+PEER_KEY = ed25519_public(SEED)
+
+
+def receipt_for(peer, new_fp):
+    """A receipt from `peer` to "gw" for the announcement of `new_fp`, which
+    verifies against PEER_KEY."""
+    return Receipt.new(peer, "gw", new_fp, 100, SEED)
+
 
 def test_alarm_fires_after_twelve_hours_not_before():
     r = A.Schedule(["service"], 0)
@@ -430,7 +439,7 @@ def test_alarm_fires_after_twelve_hours_not_before():
 def test_receipt_stops_the_alarm():
     r = A.Schedule(["service"], 0)
     r.announced(1000)
-    r.acked("service")
+    r.acked("service", receipt_for("service", FP_A), PEER_KEY, FP_A)
     assert not r.alarm(1000 + A.ALARM_AFTER_S)
     assert isinstance(r.state(), A.ChainState.Announced)
     assert r.state().waiting_for == []
@@ -606,21 +615,34 @@ def announcer_in(path, anchor, peers=("peer",)):
 def test_peers_can_be_added_and_removed_while_running(tmp_path):
     anchor = anchor_material()
     a = announcer_in(tmp_path, anchor, ["peer", "gone"])
-    a.prepare(100)
-    a.acked("peer")
+    fp = a.prepare(100).new_fingerprint()
+    a.acked("peer", receipt_for("peer", fp), PEER_KEY)
     assert a.roll_if_ready(200) is None, "waits for gone"
     a.remove_peer("gone")
     a.add_peer("new")
     assert a.roll_if_ready(200) is None, "waits for new"
-    a.acked("new")
+    a.acked("new", receipt_for("new", fp), PEER_KEY)
     assert a.roll_if_ready(200) == anchor.fingerprint_sha256()
+
+
+def test_acked_verifies_the_message_before_it_strikes(tmp_path):
+    # 0.12.0: the acknowledgement calls take the message and the pinned key.
+    a = announcer_in(tmp_path, anchor_material(), ["peer", "other"])
+    fp = a.prepare(100).new_fingerprint()
+    receipt = receipt_for("peer", fp)
+    with pytest.raises(nettls.ProofInvalidError, match="does not hold"):
+        a.acked("peer", receipt, ed25519_public(bytes(32)))
+    assert a.status(0, 0).waiting_for == ["other", "peer"]
+    a.acked("peer", receipt, PEER_KEY)
+    a.acked_handled("peer", Handled.new("peer", "gw", fp, 100, SEED), PEER_KEY)
+    assert a.status(0, 0).waiting_for == ["other"]
 
 
 def test_a_restart_does_not_wait_for_a_peer_taken_out_of_the_list(tmp_path):
     anchor = anchor_material()
     a = announcer_in(tmp_path, anchor, ["peer", "gone"])
-    a.prepare(100)
-    a.acked("peer")
+    fp = a.prepare(100).new_fingerprint()
+    a.acked("peer", receipt_for("peer", fp), PEER_KEY)
     b = announcer_in(tmp_path, anchor, ["peer"])
     assert b.roll_if_ready(200) == anchor.fingerprint_sha256()
 
@@ -636,15 +658,15 @@ def test_the_announcer_survives_a_restart(tmp_path):
     b = announcer_in(tmp_path, anchor)
     assert b.pending() == k
     assert b.roll_if_ready(200) is None, "no receipt yet"
-    b.acked("peer")
+    b.acked("peer", receipt_for("peer", k.new_fingerprint()), PEER_KEY)
     assert b.roll_if_ready(200) == fp
     assert b.own_trio().current_fingerprint == k.new_fingerprint()
 
     # Another restart: the switch is kept, and so is the 24-hour cap.
     c = announcer_in(tmp_path, anchor)
     assert c.own_trio().current_fingerprint == k.new_fingerprint()
-    c.prepare(300)
-    c.acked("peer")
+    next_fp = c.prepare(300).new_fingerprint()
+    c.acked("peer", receipt_for("peer", next_fp), PEER_KEY)
     assert c.roll_if_ready(300) is None
     assert c.roll_if_ready(200 + A.MIN_BETWEEN_ROLLS_S) is not None
 
@@ -666,8 +688,8 @@ def test_a_raising_gate_switches_nothing(tmp_path):
     anchor = anchor_material()
     fp = anchor.fingerprint_sha256()
     a = announcer_in(tmp_path, anchor)
-    a.prepare(100)
-    a.acked("peer")
+    new_fp = a.prepare(100).new_fingerprint()
+    a.acked("peer", receipt_for("peer", new_fp), PEER_KEY)
 
     def gate():
         raise RuntimeError("cannot tell")

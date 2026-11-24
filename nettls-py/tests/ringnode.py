@@ -12,8 +12,6 @@ deliberate. What this node leaves out, and the strict node does:
 - `approve` pins the first certificate it sees; the `fp` field is ignored;
 - `fetch_and_ack` signs and sends a receipt for a name it has not pinned,
   and does not look at the neighbour's reply;
-- a receipt that arrives with no announcement pending is accepted if its
-  signature holds, since its fingerprint is compared with itself;
 - a neighbour that is not pinned is reached over an unverified connection;
   after `import` so is a pinned one when the marker is passed on, because
   `import` does not restore the neighbour's name;
@@ -159,10 +157,9 @@ class Node:
             with self.lock:
                 expected = self.pending[0].new_fingerprint() if self.pending else r.new_fingerprint()
             try:
-                r.verify(r.acker(), pk, expected)
+                self.schedule.acked(r.acker(), r, pk, expected)
             except nettls.TlsError as e:
                 return {"error": str(e)}
-            self.schedule.acked(r.acker())
             return {"ok": True}
         if op == "marker":
             skip = int(m["skip"])

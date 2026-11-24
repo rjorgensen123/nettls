@@ -311,7 +311,7 @@ impl ReceiptJson {
 )]
 #[derive(Clone, PartialEq)]
 pub(crate) struct Receipt {
-    inner: a::Receipt,
+    pub(crate) inner: a::Receipt,
 }
 
 #[pymethods]
@@ -475,7 +475,7 @@ impl HandledJson {
 )]
 #[derive(Clone, PartialEq)]
 pub(crate) struct Handled {
-    inner: a::Handled,
+    pub(crate) inner: a::Handled,
 }
 
 #[pymethods]

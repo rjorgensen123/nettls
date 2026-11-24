@@ -10,8 +10,12 @@
 //! - `approve` compares the fingerprint of the certificate it is shown with
 //!   `fp`, the one the operator expects, and pins nothing on a mismatch;
 //! - `fetch_and_ack` signs a receipt only for a pinned peer whose announcement
-//!   verified, and requires `{"ok": true}` in reply;
-//! - a receipt that arrives with no announcement pending is refused;
+//!   verified, and requires `{"ok": true}` in reply. For an announcement it
+//!   has handled before it then sends a `Handled` the same way, and lets be a
+//!   reply that it is an unknown message version, which is what a node that
+//!   does not know the message answers;
+//! - a receipt or a `Handled` that arrives with no announcement pending is
+//!   refused;
 //! - only `approve` connects unverified: a neighbour that is not pinned is an
 //!   error, and `export` and `import` carry the neighbour's name;
 //! - malformed input never stops the node: a request with a wrong field gets
@@ -42,9 +46,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use nettls::announcement::{Announcement, Receipt};
+use nettls::announcement::{Announcement, Handled, HandledJson, Receipt};
 use nettls::announcer::{Mode, Schedule};
-use nettls::generations::{Generation, Trust};
+use nettls::generations::{Generation, Received, Trust};
 use nettls::{CertSource, SelfSignedParams, TlsMaterial};
 use serde_json::{Value, json};
 
@@ -151,6 +155,22 @@ impl Node {
                 out
             }
             "ack" => {
+                // A `Handled` comes in the receipt's place, with the same
+                // fields under its own `v` (0.12.0); a node that does not know
+                // it reads it as a receipt and refuses it by that `v`.
+                if m["receipt"]["v"] == nettls::canonical::ROTATE_HANDLED_V1 {
+                    let handled = match serde_json::from_value::<HandledJson>(m["receipt"].clone())
+                    {
+                        Ok(j) => match Handled::from_json(&j) {
+                            Ok(h) => h,
+                            Err(e) => return json!({"error": e.to_string()}),
+                        },
+                        Err(e) => return json!({"error": format!("invalid handled message: {e}")}),
+                    };
+                    return self.acknowledge("handled message", handled.acker(), |s, pk, fp| {
+                        s.acked_handled(handled.acker(), &handled, pk, fp)
+                    });
+                }
                 let ack_json: nettls::announcement::ReceiptJson =
                     match serde_json::from_value(m["receipt"].clone()) {
                         Ok(v) => v,
@@ -160,34 +180,9 @@ impl Node {
                     Ok(v) => v,
                     Err(e) => return json!({"error": e.to_string()}),
                 };
-                // `.get`, not indexing: a receipt from an unknown acker is a
-                // NORMAL hostile/misrouted message and must be an error reply,
-                // not a panic (as the Python node does).
-                let Some(pk) = self.peer_keys.lock().unwrap().get(ack.acker()).cloned() else {
-                    return json!({"error": format!(
-                        "receipt from unknown acker {:?} — no pinned Ed25519 key", ack.acker()
-                    )});
-                };
-                // A receipt only means something for an announcement we have
-                // made and not yet rolled; without one there is nothing to compare.
-                let Some(expected) = self
-                    .pending
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .map(|(k, _, _)| k.new_fingerprint().to_string())
-                else {
-                    return json!({"error": format!(
-                        "receipt from {:?}, but no announcement is pending", ack.acker()
-                    )});
-                };
-                match ack.verify(ack.acker(), &pk, &expected) {
-                    Ok(()) => {
-                        self.schedule.lock().unwrap().acked(ack.acker());
-                        json!({"ok": true})
-                    }
-                    Err(e) => json!({"error": e.to_string()}),
-                }
+                self.acknowledge("receipt", ack.acker(), |s, pk, fp| {
+                    s.acked(ack.acker(), &ack, pk, fp)
+                })
             }
             "marker" => {
                 let skip = m["skip"].as_i64().unwrap_or(0);
@@ -214,6 +209,42 @@ impl Node {
                 }
             }
             op => json!({"error": format!("unknown op: {op}")}),
+        }
+    }
+
+    /// Takes an acknowledgement (`what`) from `acker`: `ack` is
+    /// `Schedule::acked` or `Schedule::acked_handled` with the message, and
+    /// verifies it before the name is struck.
+    fn acknowledge(
+        &self,
+        what: &str,
+        acker: &str,
+        ack: impl FnOnce(&mut Schedule, &[u8], &str) -> Result<(), nettls::TlsError>,
+    ) -> Value {
+        // `.get`, not indexing: a receipt from an unknown acker is a
+        // NORMAL hostile/misrouted message and must be an error reply,
+        // not a panic (as the Python node does).
+        let Some(pk) = self.peer_keys.lock().unwrap().get(acker).cloned() else {
+            return json!({"error": format!(
+                "{what} from unknown acker {acker:?} — no pinned Ed25519 key"
+            )});
+        };
+        // A receipt only means something for an announcement we have
+        // made and not yet rolled; without one there is nothing to compare.
+        let Some(expected) = self
+            .pending
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|(k, _, _)| k.new_fingerprint().to_string())
+        else {
+            return json!({"error": format!(
+                "{what} from {acker:?}, but no announcement is pending"
+            )});
+        };
+        match ack(&mut self.schedule.lock().unwrap(), &pk, &expected) {
+            Ok(()) => json!({"ok": true}),
+            Err(e) => json!({"error": e.to_string()}),
         }
     }
 
@@ -430,9 +461,10 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
                 Ok(v) => v,
                 Err(e) => return json!({"error": e.to_string()}),
             };
-            if let Err(e) = t.receive(&k, name) {
-                return json!({"error": e.to_string()});
-            }
+            let received = match t.receive(&k, name) {
+                Ok(r) => r,
+                Err(e) => return json!({"error": e.to_string()}),
+            };
             let ack = match Receipt::new(&node.name, name, k.new_fingerprint(), now, &node.seed) {
                 Ok(a) => a,
                 Err(e) => return json!({"error": format!("fetch_and_ack: {e}")}),
@@ -451,7 +483,42 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
                 }
                 Err(e) => return json!({"error": format!("the neighbour did not answer: {e}")}),
             }
-            json!({"ok": true, "acked_on": k.new_fingerprint()})
+            // An announcement handled before is acknowledged once more with a
+            // `Handled` (0.12.0). A neighbour that does not know the message
+            // answers that it is an unknown message version, as an older node
+            // does, and that answer is let be.
+            let mut reply = json!({"ok": true, "acked_on": k.new_fingerprint()});
+            if received == Received::Known {
+                let handled =
+                    match Handled::new(&node.name, name, k.new_fingerprint(), now, &node.seed)
+                        .and_then(|h| h.to_json())
+                    {
+                        Ok(j) => j,
+                        Err(e) => return json!({"error": format!("fetch_and_ack: {e}")}),
+                    };
+                // The reply says what became of it: `accepted`, or `unknown`.
+                reply["handled"] = match node.talk(
+                    port,
+                    &json!({"op":"ack","receipt": handled}),
+                    Some(name),
+                ) {
+                    Ok(r) if r == json!({"ok": true}) => json!("accepted"),
+                    Ok(r)
+                        if r["error"]
+                            .as_str()
+                            .is_some_and(|e| e.contains("unknown message version")) =>
+                    {
+                        json!("unknown")
+                    }
+                    Ok(_) => {
+                        return json!({"error": format!(
+                            "fetch_and_ack: {name:?} did not accept the handled message (its reply is not {{\"ok\": true}})"
+                        )});
+                    }
+                    Err(e) => return json!({"error": format!("the neighbour did not answer: {e}")}),
+                };
+            }
+            reply
         }
         "roll" => {
             let Some(now) = m["now"].as_i64() else {

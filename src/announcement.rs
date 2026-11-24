@@ -857,8 +857,11 @@ pub struct HandledJson {
 /// The one who receives an announcement it has already handled
 /// ([`Received::Known`](crate::generations::Received::Known)) sends the
 /// ordinary [`Receipt`] first, unchanged, and then this. Verified, it counts as
-/// a receipt: an earlier receipt may have been lost, but the peer is ready, and the
-/// announcer calls `acked` for that peer as it does for a receipt.
+/// a receipt: an earlier receipt may have been lost, but the peer is ready. The
+/// announcer hands it to
+/// [`Announcer::acked_handled`](crate::announcer::Announcer::acked_handled),
+/// which verifies it before it strikes the peer from the waiting list
+/// *(0.12.0)*.
 ///
 /// A node that does not know this message and reads it as a receipt refuses
 /// it with "unknown message version", and changes nothing. That is why the

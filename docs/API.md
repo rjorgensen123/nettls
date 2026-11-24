@@ -529,8 +529,8 @@ requires the expected acker *(0.12.0)*, the pinned key and the expected fingerpr
 receipt. `to_json` fails with `TlsError::Encode` when the signature cannot be encoded as hex.
 
 For the one who announces, a `Handled` that verifies counts as a receipt: an earlier receipt may
-have been lost, but the peer is ready. Call `Announcer::acked` for that peer, exactly as for a
-receipt.
+have been lost, but the peer is ready. Hand it to `Announcer::acked_handled`, which verifies it
+before it strikes the peer, as `Announcer::acked` does a receipt *(0.12.0)*.
 
 An older node that does not know this message accepts the receipt. When it reads the handled
 message, it refuses it with "unknown message version" (`Receipt::from_json` checks `v`) and changes
@@ -641,10 +641,13 @@ pub enum ChainState { Idle { attempt_at: i64 }, Announced { waiting_for: BTreeSe
 impl Schedule {
     pub fn new(peers: impl IntoIterator<Item = String>, attempt_at: i64) -> Self;
     pub fn add_peer(&mut self, name: impl Into<String>);
-    pub fn remove_peer(&mut self, name: &str);
+    pub fn remove_peer(&mut self, name: &str);   // no proof: the operator's named way out (0.12.0)
     pub fn should_announce(&self, now: i64) -> bool;
     pub fn announced(&mut self, now: i64);
-    pub fn acked(&mut self, peer: &str);
+    pub fn acked(&mut self, peer: &str, receipt: &Receipt, pinned_pubkey: &[u8], expected_new_fp: &str)
+        -> Result<(), TlsError>;                 // verifies before it strikes (0.12.0)
+    pub fn acked_handled(&mut self, peer: &str, handled: &Handled, pinned_pubkey: &[u8],
+                         expected_new_fp: &str) -> Result<(), TlsError>;   // the same, for a Handled (0.12.0)
     pub fn waiting_for(&self) -> Vec<&str>;      // empty = ready to roll
     pub fn can_roll(&self, now: i64) -> bool;
     pub fn rate_limit_ok(&self, now: i64) -> bool;
@@ -661,6 +664,14 @@ impl Schedule {
 pub fn draw_roll_time(issued: i64) -> Result<i64, TlsError>;   // issued + 7 d ± 2 d (CSPRNG)
 pub fn interval_after(elapsed_s: i64) -> i64;                  // retry cadence: tight, then sparser
 ```
+
+`acked` and `acked_handled` take the peer's message and verify it before anything is struck from
+the waiting list *(0.12.0)*: something must be announced, `peer` must be one of the peers, and the
+message must verify (`Receipt::verify`, `Handled::verify`) as from `peer`, against `pinned_pubkey`
+and `expected_new_fp`. The state machine does not know the announcement, so the caller gives the
+fingerprint. A peer that has already acknowledged and acknowledges again with a valid message gets
+`Ok`, and nothing changes. A refusal is `TlsError::ProofInvalid` and changes nothing. `remove_peer`
+takes no proof: it is the operator's named way out, not an acknowledgement.
 
 ### `Status` — for alerting
 
@@ -699,10 +710,13 @@ impl Announcer {
 
     pub fn own_trio(&self) -> Result<OwnTrio, TlsError>;
     pub fn prepare(&self, now: i64) -> Result<Announcement, TlsError>;   // create + persist + announce; idempotent
-    pub fn acked(&self, peer: &str) -> Result<(), TlsError>;             // the caller verifies first (Receipt::verify); persists
-        // a Handled that verifies (Handled::verify) is followed by the same call (0.12.0)
+    pub fn acked(&self, peer: &str, receipt: &Receipt, pinned_pubkey: &[u8])
+        -> Result<(), TlsError>;   // verifies before it strikes; persists (0.12.0)
+    pub fn acked_handled(&self, peer: &str, handled: &Handled, pinned_pubkey: &[u8])
+        -> Result<(), TlsError>;   // the same, for a Handled (0.12.0)
     pub fn add_peer(&self, name: impl Into<String>) -> Result<(), TlsError>;   // persists (0.11.0)
     pub fn remove_peer(&self, name: &str) -> Result<(), TlsError>;             // persists (0.11.0)
+        // no proof: the operator's named way out (0.12.0)
     pub fn roll_if_ready(&self, now: i64) -> Result<Option<String>, TlsError>;
     pub fn roll_if_ready_gated(&self, now: i64, safe_now: impl FnOnce() -> bool)
         -> Result<Option<String>, TlsError>;   // the consumer's last word; chain+serving switch together
@@ -711,8 +725,19 @@ impl Announcer {
     pub fn status(&self, now: i64, expires: i64) -> Result<Status, TlsError>;
     pub fn pending(&self) -> Option<Announcement>;        // None if the lock is poisoned
     pub fn save_pending(&self) -> Result<(), TlsError>;   // prepare/acked call it (0.10.0); NOT the key
+        // acked_handled calls it too (0.12.0)
 }
 ```
+
+`acked` and `acked_handled` take the peer's message and the key pinned for that peer, and verify
+before anything is struck from the waiting list *(0.12.0)*: an announcement must be pending, the
+message must be to this announcer (its `announcer` is this announcer's name), `peer` must be one of
+the peers, and the message must verify as from `peer`, against the key and the fingerprint
+announced. A peer that has already acknowledged and acknowledges again with a valid message gets
+`Ok`, and nothing changes: a receipt and a handled message can arrive one after the other. A
+refusal is `TlsError::ProofInvalid`, and neither the waiting list nor the saved promise changes.
+`acked_handled` saves the promise as `acked` does. `remove_peer` takes no proof: it is the
+operator's named way out, not an acknowledgement.
 
 `prepare` and `acked` save the promise themselves, so a restart resumes it *(0.10.0)*. A switch
 writes the new pair and reads it back before anything in memory moves: a failed write changes
@@ -1279,7 +1304,7 @@ client uses (`recv`, `send`, `sendall`, `settimeout`, `close`); it has no `makef
 | Locked memory | Counted against `RLIMIT_MEMLOCK` of the process | The same, in the Python process |
 | `fork` | The child's copies of locked pages are not locked | The same |
 | TLS | rustls, with the configs above | The same rustls, through `stream` and `sslcontext`; OpenSSL never carries a connection |
-| Long calls | — | These release the GIL: `TlsMaterial.load` and `save_pem`; `lockbox.lock`, `lock_with` and `unlock`; `announcement.archive` and `read_archive`; the `Announcer`'s constructor, `prepare`, `acked`, `add_peer`, `remove_peer`, `roll_if_ready` and `save_pending`; and `Stream`'s handshake, `read`, `write`, `flush` and `close`. Every other call holds it, `roll_if_ready_gated` and `RecipientKey.generate()` included |
+| Long calls | — | These release the GIL: `TlsMaterial.load` and `save_pem`; `lockbox.lock`, `lock_with` and `unlock`; `announcement.archive` and `read_archive`; the `Announcer`'s constructor, `prepare`, `acked`, `acked_handled` *(0.12.0)*, `add_peer`, `remove_peer`, `roll_if_ready` and `save_pending`; and `Stream`'s handshake, `read`, `write`, `flush` and `close`. Every other call holds it, `roll_if_ready_gated` and `RecipientKey.generate()` included |
 | A panic inside nettls | Unwinds to the caller | Becomes `pyo3_runtime.PanicException` |
 | `unsafe` | None in `nettls` (`forbid(unsafe_code)`) | One block in the binding: taking over the socket's descriptor |
 

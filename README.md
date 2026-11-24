@@ -141,7 +141,7 @@ let announcer = nettls::announcer::Announcer::new(
 
 // The rhythm is yours — the crate never acts on its own:
 let ann = announcer.prepare(now)?;                        // create + persist + announce
-announcer.acked("peer")?;                                 // a receipt came in (verified!)
+announcer.acked("peer", &receipt, &pinned_key)?;          // verifies, then strikes "peer" (0.12.0)
 announcer.roll_if_ready_gated(now, || device_idle())?;    // switch — chain and serving together
 ```
 

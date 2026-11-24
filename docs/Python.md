@@ -190,16 +190,17 @@ announcer = an.Announcer.new(
 )
 
 announcement = announcer.prepare(now)             # make, store, announce
-announcer.acked("peer")                           # a receipt came in, and it verified
+announcer.acked("peer", receipt, pinned_pubkey)   # verifies, then strikes "peer" (0.12.0)
 old = announcer.roll_if_ready(now)                # switches only when everyone has acked
 ```
 
-The rhythm is yours, as in Rust: nothing happens unless you call it. A receipt is verified with
-`receipt.verify("peer", pinned_pubkey, new_fp)`: for the peer it must come from *(0.12.0)*, against
-that peer's pinned Ed25519 key, which comes from krypto, as in Rust — `krypto_py.sign` in Python —
-and against the fingerprint announced. A `Handled` from the peer is verified the same way, with
-`Handled.verify`, and then counts as a receipt: `announcer.acked("peer")`, as for a receipt
-*(0.12.0)*.
+The rhythm is yours, as in Rust: nothing happens unless you call it. `announcer.acked` verifies the
+receipt before it strikes the peer *(0.12.0)*: it must be to this announcer, from `"peer"`, which
+must be one of the peers, signed with that peer's pinned Ed25519 key, which comes from krypto, as
+in Rust — `krypto_py.sign` in Python — and for the fingerprint announced. A refused receipt raises
+`ProofInvalidError` and changes nothing. A `Handled` from the peer counts as a receipt:
+`announcer.acked_handled("peer", handled, pinned_pubkey)` checks it the same way *(0.12.0)*.
+`Schedule.acked` and `Schedule.acked_handled` take the announced fingerprint as well, last.
 
 > **Every `verify` takes the name of the peer you expect, first, and refuses a message about
 > another** *(0.12.0)*: a genuine message for one peer says nothing about another. A recognition

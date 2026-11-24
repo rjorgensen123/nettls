@@ -252,6 +252,32 @@ def _roll_simultaneously(nodes: list[NodeProcess], indices: list[int], now: int)
         assert r["rolled"], f"{nd.name} did not roll — did the receipt not arrive?"
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize("lang", [["rust", "rust"], ["python", "rust"]], ids=["rust", "python"])
+def test_an_announcement_fetched_again_is_acknowledged_again(lang):
+    """The announcer asks twice, as it does when a receipt was lost.
+
+    Node `b` is a Rust node and pins `a`. The second time it meets the same
+    announcement it has handled it already, so it sends the receipt once more
+    and then a handled message. A Rust `a` takes both. A Python `a` does not
+    know the handled message and says so, which `b` lets be. Either way `a`
+    rolls.
+    """
+    nodes = _build_ring(lang)
+    a, b = nodes
+    try:
+        _approve_all(nodes)
+        a.control(op="prepare", now=2 * 86_400)
+        first = b.control(op="fetch_and_ack", name=a.name, port=a.port, now=2 * 86_400)
+        again = b.control(op="fetch_and_ack", name=a.name, port=a.port, now=2 * 86_400)
+        assert "handled" not in first, "the first answer is the receipt alone"
+        assert again["handled"] == ("accepted" if lang[0] == "rust" else "unknown")
+        assert a.control(op="roll", now=2 * 86_400)["rolled"]
+    finally:
+        for nd in nodes:
+            nd.kill()
+
+
 def _is_skewed(nodes: list[NodeProcess]) -> bool:
     """Are the nodes on **different** generations right now?
 

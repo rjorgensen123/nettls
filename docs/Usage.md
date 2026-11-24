@@ -136,13 +136,16 @@ This is the part that asks the most of you, so here is the whole flow in broad s
    service runs — no restart, no broken connections.
 
 In practice `Announcer` keeps track of this for you: call `prepare()` when you want to announce,
-`acked()` when a peer has answered (after **verifying** the receipt with `Receipt::verify` —
-against the peer it must come from *(0.12.0)*, its pinned key and the fingerprint you announced),
+`acked()` with the peer's name, its receipt and the key you pinned for it when a peer has answered,
 and `roll_if_ready()` regularly. The last one does nothing until everyone has acknowledged.
+`acked()` **verifies** the receipt before it strikes the peer from the list *(0.12.0)*: the receipt
+must be to you, from that peer, which must be one of your peers, signed with its pinned key, and for
+the fingerprint you announced. A refused receipt changes nothing.
 
-A `Handled` from a peer counts as a receipt once it verifies, with `Handled::verify` and the same
-three checks: an earlier receipt may have been lost, but the peer is ready. Call `acked()` for it
-the same way *(0.12.0)*.
+A `Handled` from a peer counts as a receipt once it verifies: an earlier receipt may have been
+lost, but the peer is ready. Hand it to `acked_handled()`, which checks it the same way. A peer
+that has already acknowledged and sends a valid message again gets `Ok`, and nothing changes
+*(0.12.0)*.
 
 **On the receiving side,** `Trust::receive` verifies the announcement, given the name of the peer
 it must come from *(0.12.0)*, and answers `Stored` or `Known`. It verifies first, also when the
