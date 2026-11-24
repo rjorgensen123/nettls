@@ -132,29 +132,56 @@ fn nonce32(iv: &Iv, seq: u64) -> [u8; 32] {
     out
 }
 
-fn key32(key: AeadKey) -> Zeroizing<[u8; KEY_LEN]> {
+/// The record key, taken only when it is exactly [`KEY_LEN`] bytes. rustls
+/// promises `key_len()` bytes, but the length is checked here and not taken
+/// on trust *(0.12.0)*: nothing is copied from a key of another length, and
+/// the caller gets the object that refuses every record instead.
+fn key32(key: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>, Refuser> {
+    if key.len() != KEY_LEN {
+        return Err(Refuser { given: key.len() });
+    }
     let mut k = Zeroizing::new([0u8; KEY_LEN]);
-    // rustls guarantees `key_len()` bytes; anything else is a rustls bug, and
-    // a panic here is the honest response (ring's provider unwraps the same way).
-    k.copy_from_slice(key.as_ref());
-    k
+    k.copy_from_slice(key);
+    Ok(k)
+}
+
+/// What rustls gets when the key is not [`KEY_LEN`] bytes *(0.12.0)*.
+/// `encrypter` and `decrypter` cannot return an error, so this stands in for
+/// the real object: it holds the length that came and nothing of the key, and
+/// it refuses every record with an error that says what was wrong. What
+/// becomes of that error is up to rustls. On the receiving side it reaches
+/// the caller as it is. On the sending side rustls 0.23 unwraps the result of
+/// `encrypt`, so there the refusal ends in a panic inside rustls, which
+/// carries this text.
+struct Refuser {
+    given: usize,
+}
+
+impl Refuser {
+    fn refusal(&self) -> Error {
+        Error::General(format!(
+            "the AEGIS-256 suite needs a {KEY_LEN}-byte key and was given {} bytes; the record is \
+             refused",
+            self.given
+        ))
+    }
 }
 
 struct Aegis256Aead;
 
 impl Tls13AeadAlgorithm for Aegis256Aead {
     fn encrypter(&self, key: AeadKey, iv: Iv) -> Box<dyn MessageEncrypter> {
-        Box::new(Encrypter {
-            key: key32(key),
-            iv,
-        })
+        match key32(key.as_ref()) {
+            Ok(key) => Box::new(Encrypter { key, iv }),
+            Err(refuser) => Box::new(refuser),
+        }
     }
 
     fn decrypter(&self, key: AeadKey, iv: Iv) -> Box<dyn MessageDecrypter> {
-        Box::new(Decrypter {
-            key: key32(key),
-            iv,
-        })
+        match key32(key.as_ref()) {
+            Ok(key) => Box::new(Decrypter { key, iv }),
+            Err(refuser) => Box::new(refuser),
+        }
     }
 
     fn key_len(&self) -> usize {
@@ -239,6 +266,30 @@ impl MessageDecrypter for Decrypter {
     }
 }
 
+impl MessageEncrypter for Refuser {
+    fn encrypt(
+        &mut self,
+        _msg: OutboundPlainMessage<'_>,
+        _seq: u64,
+    ) -> Result<OutboundOpaqueMessage, Error> {
+        Err(self.refusal())
+    }
+
+    fn encrypted_payload_len(&self, payload_len: usize) -> usize {
+        payload_len + 1 + TAG_LEN
+    }
+}
+
+impl MessageDecrypter for Refuser {
+    fn decrypt<'a>(
+        &mut self,
+        _msg: InboundOpaqueMessage<'a>,
+        _seq: u64,
+    ) -> Result<InboundPlainMessage<'a>, Error> {
+        Err(self.refusal())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,6 +336,33 @@ mod tests {
         // Too short to even carry a tag.
         let mut short = vec![0u8; TAG_LEN - 1];
         assert!(decrypt(&mut *dec, &mut short, 5).is_err());
+    }
+
+    /// rustls gives `key_len()` bytes, and no stable call makes an `AeadKey`
+    /// of another length, so the check is tried directly.
+    #[test]
+    fn a_key_of_another_length_is_refused_and_every_record_gets_the_reason() {
+        for given in [0usize, 16, 31, 33] {
+            let Err(mut refuser) = key32(&vec![7u8; given]) else {
+                panic!("a key of {given} bytes was accepted");
+            };
+            let reason = Error::General(format!(
+                "the AEGIS-256 suite needs a 32-byte key and was given {given} bytes; the record is \
+                 refused"
+            ));
+
+            let chunks = [&b"payload"[..]];
+            let msg = OutboundPlainMessage {
+                typ: ContentType::ApplicationData,
+                version: ProtocolVersion::TLSv1_3,
+                payload: OutboundChunks::new(&chunks),
+            };
+            assert_eq!(refuser.encrypt(msg, 0).err(), Some(reason.clone()));
+
+            let mut body = vec![0u8; 2 * TAG_LEN];
+            assert_eq!(decrypt(&mut refuser, &mut body, 0), Err(reason));
+        }
+        assert!(key32(&[7u8; KEY_LEN]).is_ok());
     }
 
     #[test]

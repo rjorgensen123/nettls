@@ -145,6 +145,12 @@ dropped it unwiped; `bytes` is now made straight from the locked memory.
 A key loaded with its certificate is now wiped also when the pair is
 refused.
 
+### Fixed — the AEGIS suite checks the length of its key *(2026-11-24)*
+
+A record key that was not 32 bytes made the suite panic. Every record is
+now refused with an error that says which length came. rustls gives 32
+bytes; if it did not, its sending side would unwrap the error and panic.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python
