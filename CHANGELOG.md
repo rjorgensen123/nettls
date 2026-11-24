@@ -120,6 +120,12 @@ A name for a generated certificate may have a wildcard only as in
 `*.example.no`. `*`, `*.` and `*.no` were accepted and are now refused;
 `is_valid_san` answers by the same rule.
 
+### ⚠ Changed — an announcement is verified before it is answered, and a repeat gets a second message *(2026-11-24)*
+
+`receive` answered `Known` without verifying. It now verifies first. On
+`Known` the receiver sends the receipt and then the new `Handled` message,
+which the announcer takes as a receipt.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

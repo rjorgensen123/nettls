@@ -130,6 +130,11 @@ fn build() -> BTreeMap<String, Vector> {
         "receipt",
         canonical::rotate_ack_v2("service", "gateway", FP_C, 1_700_000_000).unwrap(),
     );
+    add(
+        "handled-01-plain",
+        "handled message — the receipt's fields under its own first line (0.12.0)",
+        canonical::rotate_handled_v1("service", "gateway", FP_C, 1_700_000_000).unwrap(),
+    );
 
     add(
         "pairsecret-01-plain",

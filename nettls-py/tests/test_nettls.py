@@ -43,6 +43,7 @@ def build_vectors() -> dict[str, bytes]:
         "rotate-01-double-signed": c.rotate_v2("gateway", FP_A, FP_B, FP_C, 1_700_000_000),
         "rotate-02-bootstrap": c.rotate_v2("gateway", None, FP_B, FP_C, 1_700_000_000),
         "ack-01-plain": c.rotate_ack_v2("service", "gateway", FP_C, 1_700_000_000),
+        "handled-01-plain": c.rotate_handled_v1("service", "gateway", FP_C, 1_700_000_000),
         "pairsecret-01-plain": c.pairsecret_v1("service", "gateway", FP_A, FP_B, 1_700_000_000),
         "algsupport-01-python-bridge": c.algsupport_v1("service", "aes256gcm", 1_700_000_000),
     }
@@ -107,6 +108,8 @@ def test_hex_rejects_uppercase_and_garbage():
 Announcement = nettls.announcement.Announcement
 AnnouncementJson = nettls.announcement.AnnouncementJson
 Receipt = nettls.announcement.Receipt
+Handled = nettls.announcement.Handled
+HandledJson = nettls.announcement.HandledJson
 
 
 def test_bootstrap_accepted_without_previous():
@@ -170,6 +173,16 @@ def test_receipt_rejects_replay():
     r.verify(pk, FP_B)
     with pytest.raises(nettls.TlsError, match="a different rotation"):
         r.verify(pk, FP_A)
+
+
+def test_handled_round_trips_and_rejects_replay():
+    pk = ed25519_public(SEED)
+    h = Handled.new("service", "gateway", FP_B, 100, SEED)
+    read_back = Handled.from_json(HandledJson.loads(h.to_json().dumps()))
+    assert read_back == h
+    read_back.verify(pk, FP_B)
+    with pytest.raises(nettls.TlsError, match="a different rotation"):
+        read_back.verify(pk, FP_A)
 
 
 # --------------------------------------------------------------------------- #

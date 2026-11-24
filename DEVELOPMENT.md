@@ -9,7 +9,7 @@ the [README](README.md) and under [`docs/`](docs/Home.md).
 
 | Path | What it is |
 |---|---|
-| `src/` | The crate. `lib.rs` is the public root; each module is one area: `provider` (the crypto provider), `material` (certificate and key, and what can be said about them), `pin` (fingerprint pinning on the client side), `resolver` (swapping the served certificate without a restart), `announcement` (the announcement, the receipt and the archive), `approval` (recognitions), `generations` (the generation pair), `announcer` (the rotation), `canonical` (what gets signed), `signature` (signing and verification), `lockbox` (local state locked with a password), `envelope` (sealed envelopes), `capability` (the signed AEAD support statement), `transport` (the TLS channel's cipher), `aegis` (the AEGIS-256 TLS suite), `status` (the status report), `pem` (PEM out, and writing files), `error`; private: `fingerprint`, `pkcs8`, `secret` (private keys in memory) |
+| `src/` | The crate. `lib.rs` is the public root; each module is one area: `provider` (the crypto provider), `material` (certificate and key, and what can be said about them), `pin` (fingerprint pinning on the client side), `resolver` (swapping the served certificate without a restart), `announcement` (the announcement, the receipt, the handled message and the archive), `approval` (recognitions), `generations` (the generation pair), `announcer` (the rotation), `canonical` (what gets signed), `signature` (signing and verification), `lockbox` (local state locked with a password), `envelope` (sealed envelopes), `capability` (the signed AEAD support statement), `transport` (the TLS channel's cipher), `aegis` (the AEGIS-256 TLS suite), `status` (the status report), `pem` (PEM out, and writing files), `error`; private: `fingerprint`, `pkcs8`, `secret` (private keys in memory) |
 | `nettls-py/` | The Python binding, built from the same code. `src/` has one file per public nettls module, and `stream.rs`, which only Python has; `python/nettls_py/` is the Python package, with `sslcontext.py`; `tests/` holds the binding's tests |
 | `tests/` | Integration tests, one file per area |
 | `testvectors/` | `canonical.json`, the normative vectors, and `errors.json`, the error corpus |
@@ -62,8 +62,9 @@ Not every existing input has a bound. Among those without one: files are read wh
 are checked, and a certificate given directly as PEM or DER, the number of names in a certificate
 and the names of peers have no limit.
 
-**No input makes the crate panic.** Guard, for the three incoming message types and the cases in
-the corpus: the error corpus `testvectors/errors.json`, run by `incoming_announcement_is_rejected`,
+**No input makes the crate panic.** Guard, for the announcement, the receipt and the approval, and
+the cases in the corpus (the handled message *(0.12.0)* is not in it): the error corpus
+`testvectors/errors.json`, run by `incoming_announcement_is_rejected`,
 `incoming_receipt_is_rejected` and `incoming_approval_is_rejected` in `tests/errors.rs`, and by
 the same tests with a `test_` prefix in `nettls-py/tests/test_errors.py`. A panic fails them.
 
@@ -86,9 +87,14 @@ against the code.
 ## Formats
 
 **What is on the wire and on disk is frozen:** the table at the top of `docs/API.md` (canonical
-prefixes and form, JSON field names, mode values, file names on disk, blob magics and KDF labels).
-A new need gets a new version beside the old one. Section numbers such as `§6.5` in comments and
-docs refer to the specification the crate was built from; it is not in this repository.
+prefixes and form, JSON field names, mode values, file names on disk, blob magics and KDF labels). A
+new need gets a new version beside the old one. The handled message *(0.12.0)* is one:
+`nettls-rotate-handled/v1` beside the receipt, `nettls-rotate-ack/v2`. The one who receives an
+announcement it has already handled sends the receipt first and then the handled message, so an
+older node accepts the receipt and refuses the handled message with "unknown message version",
+changing nothing; the one who announces treats a verified handled message as a receipt. Section
+numbers such as `§6.5` in comments and docs refer to the specification the crate was built from; it
+is not in this repository.
 
 **The canonical bytes are held by normative vectors** in `testvectors/canonical.json`. Guard:
 `vectors_match_byte_for_byte` in `tests/testvectors.rs`; from Python,

@@ -99,7 +99,7 @@ The complete, machine-verified contract is [`docs/API.md`](docs/API.md). The sha
 | `material` | `CertSource` (files/pem/self_signed/auto) → `TlsMaterial` → `server_config()` + facts (`fingerprint_sha256`, `origin`, `days_until_expiry`, …) |
 | `pin` | `pinned_client_config()` — static fingerprint pinning, full handshake-signature verification |
 | `resolver` | `RotatingResolver` — swap the served certificate without a restart |
-| `announcement` | `Announcement` (two-signature "here is my next certificate"), `Receipt` (signed ack), `IdentityJson`, append-only archive |
+| `announcement` | `Announcement` (two-signature "here is my next certificate"), `Receipt` (signed ack), `Handled` (the ack once more, for an announcement already handled), `IdentityJson`, append-only archive |
 | `approval` | `Approval` (the operator's approval as an Ed25519 signature), `Recognition` — one verification path for generation 0 and n |
 | `generations` | `Generations` (previous/current/next — two non-overlapping roles), `Trust` (live client config) |
 | `announcer` | `Schedule` (state machine), `Announcer` (binds it all: prepare → acked → `roll_if_ready_gated`), `Mode`/`check_mode`, `Status`, `ClockDrift`, `FallToMode1` |

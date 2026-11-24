@@ -36,7 +36,7 @@ it is breaking regardless of semver:**
 
 | What | Value |
 |---|---|
-| Canonical prefixes | `nettls-approve/v1` · `nettls-rotate/v2` · `nettls-rotate-ack/v2` · `nettls-pairsecret/v1` · `nettls-algsupport/v1` *(additive, 0.8.2)* |
+| Canonical prefixes | `nettls-approve/v1` · `nettls-rotate/v2` · `nettls-rotate-ack/v2` · `nettls-pairsecret/v1` · `nettls-algsupport/v1` *(additive, 0.8.2)* · `nettls-rotate-handled/v1` *(additive, 0.12.0)* |
 | Canonical form | UTF-8, LF between lines, **no** trailing LF; `prev` serializes as `-` when absent |
 | JSON field names | all English: `approved_by`, `timestamp`, `mode`, `announcement`, … |
 | Mode values | `"pinning"` and `"rolling"` |
@@ -380,6 +380,13 @@ impl Generations {
 The two roles do not overlap: `previous` verifies announcements but lets no one into a
 handshake.
 
+`receive` verifies the announcement first, also when it names the certificate already stored as
+`next`: `Stored` and `Known` are given only to an announcement that verifies, and one that does not
+is an error *(0.12.0)*. The one who receives acknowledges every time. On `Stored` it sends the
+[`Receipt`](#receipt--the-gate). On `Known` it has handled this announcement before: it sends the
+`Receipt` first, unchanged, and then a [`Handled`](#handled--the-acknowledgement-once-more-0120)
+*(0.12.0)*. `Trust::receive` verifies and answers the same way.
+
 ### `Trust` — the thread-safe wrapper, wired to TLS
 
 ```rust
@@ -480,6 +487,39 @@ impl Receipt {
 
 `verify` requires **both** the pinned key and the expected fingerprint: a genuine receipt for a
 *different* rotation is a replay and must not make you roll.
+
+### `Handled` — the acknowledgement once more *(0.12.0)*
+
+```rust
+impl Handled {
+    pub fn new(acker: &str, announcer: &str, new_fp: &str, sent_at: i64, ed25519_seed: &krypto::SecretBuf)
+        -> Result<Self, TlsError>;
+    pub fn canonical(&self) -> Result<Vec<u8>, TlsError>;
+    pub fn verify(&self, pinned_pubkey: &[u8], expected_new_fp: &str) -> Result<(), TlsError>;
+    pub fn to_json(&self) -> Result<HandledJson, TlsError>;
+    pub fn from_json(j: &HandledJson) -> Result<Self, TlsError>;
+    pub fn acker(&self) -> &str;
+    pub fn new_fingerprint(&self) -> &str;
+    pub fn sent_at(&self) -> i64;
+}
+```
+
+`HandledJson`: `v` · `acker` · `announcer` · `new_fingerprint` · `sent_at` · `sig`
+
+"This I have handled; here is the acknowledgement once more." The one who receives an announcement
+and gets `Received::Known` sends the `Receipt` first, unchanged, and then this. It carries the
+receipt's fields under its own first line, `nettls-rotate-handled/v1`, signed once with the acker's
+Ed25519 key, so a receipt's signature never holds for it, nor the other way round. `verify`
+requires **both** the pinned key and the expected fingerprint, as for a receipt. `to_json` fails
+with `TlsError::Encode` when the signature cannot be encoded as hex.
+
+For the one who announces, a `Handled` that verifies counts as a receipt: an earlier receipt may
+have been lost, but the peer is ready. Call `Announcer::acked` for that peer, exactly as for a
+receipt.
+
+An older node that does not know this message accepts the receipt. When it reads the handled
+message, it refuses it with "unknown message version" (`Receipt::from_json` checks `v`) and changes
+nothing. That is why the receipt goes first.
 
 ### `IdentityJson` — what a service publishes
 
@@ -638,6 +678,7 @@ impl Announcer {
     pub fn own_trio(&self) -> Result<OwnTrio, TlsError>;
     pub fn prepare(&self, now: i64) -> Result<Announcement, TlsError>;   // create + persist + announce; idempotent
     pub fn acked(&self, peer: &str) -> Result<(), TlsError>;             // the caller verifies first (Receipt::verify); persists
+        // a Handled that verifies (Handled::verify) is followed by the same call (0.12.0)
     pub fn add_peer(&self, name: impl Into<String>) -> Result<(), TlsError>;   // persists (0.11.0)
     pub fn remove_peer(&self, name: &str) -> Result<(), TlsError>;             // persists (0.11.0)
     pub fn roll_if_ready(&self, now: i64) -> Result<Option<String>, TlsError>;
@@ -813,13 +854,16 @@ name the curve P-256 (OID 1.2.840.10045.3.1.7) *(0.12.0)*.
 
 ## `canonical` — what actually gets signed
 
-Domain separators: `APPROVE_V1` · `ROTATE_V2` · `ROTATE_ACK_V2` · `PAIRSECRET_V1`
+Domain separators: `APPROVE_V1` · `ROTATE_V2` · `ROTATE_ACK_V2` · `PAIRSECRET_V1` ·
+`ROTATE_HANDLED_V1` *(0.12.0)*
 
 ```rust
 pub fn approve_v1(peer: &str, fingerprint: &str, approved_by: &str, timestamp: i64) -> Result<Vec<u8>, TlsError>;
 pub fn rotate_v2(announcer: &str, prev_fp: Option<&str>, curr_fp: &str, new_fp: &str, sent_at: i64)
     -> Result<Vec<u8>, TlsError>;
 pub fn rotate_ack_v2(acker: &str, announcer: &str, new_fp: &str, sent_at: i64) -> Result<Vec<u8>, TlsError>;
+pub fn rotate_handled_v1(acker: &str, announcer: &str, new_fp: &str, sent_at: i64)
+    -> Result<Vec<u8>, TlsError>;   // the receipt's fields under its own first line (0.12.0)
 pub fn pairsecret_v1(a: &str, b: &str, sealed_a_sha256: &str, sealed_b_sha256: &str, sent_at: i64)
     -> Result<Vec<u8>, TlsError>;
 
@@ -837,7 +881,8 @@ with a clock, so a signed approval or support statement does not grow too old by
 that wants a rule about freshness reads the field and applies its own.
 
 An announcement and a receipt are bound to state instead: the announcement must fit the certificates
-the receiver holds, and the receipt must name the fingerprint that was announced.
+the receiver holds, and the receipt must name the fingerprint that was announced. A handled message
+is bound as the receipt is *(0.12.0)*.
 
 ## `envelope` — seal to one recipient
 
@@ -1047,7 +1092,7 @@ How the Rust forms read in Python:
 | `Mode::Rolling`, `ChainState::Idle { attempt_at }`, … | `Mode.Rolling`, `ChainState.Idle(attempt_at=…)`, … — enums with data too |
 | A set (`ChainState::Announced`'s `waiting_for`) | A sorted `list` |
 | A struct's `pub` fields | Attributes. `SelfSignedParams::valid_days` is both a field and a builder in Rust; in Python it is the field. Read-only: `OwnMaterial.previous` and `.current` (copies of the private keys, as `bytes`), `Report.version`, `Summary.version` |
-| `X::new(…)` | `X.new(…)`. `X(…)` too for `AnnouncementJson`, `ReceiptJson`, `ApprovalJson`, `Context`, `SupportStatement`, `Status`, `OwnMaterial`, `Schedule`, `Announcer`, `ClockDrift` and `RotatingResolver`; `SelfSignedParams()` and `TransportPolicy()` give the `Default` |
+| `X::new(…)` | `X.new(…)`. `X(…)` too for `AnnouncementJson`, `ReceiptJson`, `HandledJson` *(0.12.0)*, `ApprovalJson`, `Context`, `SupportStatement`, `Status`, `OwnMaterial`, `Schedule`, `Announcer`, `ClockDrift` and `RotatingResolver`; `SelfSignedParams()` and `TransportPolicy()` give the `Default` |
 | `&krypto::SecretBuf`, `krypto::SecretString` taken in | `bytes`, `str`, copied straight into locked memory |
 | `krypto::SecretBuf` handed out (`unlock`, `open`, `anchor_pkcs8`) | `bytes` |
 | `krypto::Alg` | `nettls_py.Alg`: `Aegis256`, `XChaCha20Poly1305`, `Aes256Gcm` |

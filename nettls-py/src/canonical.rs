@@ -58,6 +58,13 @@ fn rotate_ack_v2(acker: &str, announcer: &str, new_fp: &str, sent_at: i64) -> Py
 }
 
 #[pyfunction]
+fn rotate_handled_v1(acker: &str, announcer: &str, new_fp: &str, sent_at: i64) -> PyResult<Bytes> {
+    c::rotate_handled_v1(acker, announcer, new_fp, sent_at)
+        .map(bytes)
+        .map_err(err)
+}
+
+#[pyfunction]
 fn pairsecret_v1(
     a: &str,
     b: &str,
@@ -74,6 +81,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("APPROVE_V1", c::APPROVE_V1)?;
     m.add("ROTATE_V2", c::ROTATE_V2)?;
     m.add("ROTATE_ACK_V2", c::ROTATE_ACK_V2)?;
+    m.add("ROTATE_HANDLED_V1", c::ROTATE_HANDLED_V1)?;
     m.add("PAIRSECRET_V1", c::PAIRSECRET_V1)?;
     m.add("ALGSUPPORT_V1", c::ALGSUPPORT_V1)?;
     m.add_function(wrap_pyfunction!(require_fingerprint, m)?)?;
@@ -83,6 +91,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(approve_v1, m)?)?;
     m.add_function(wrap_pyfunction!(rotate_v2, m)?)?;
     m.add_function(wrap_pyfunction!(rotate_ack_v2, m)?)?;
+    m.add_function(wrap_pyfunction!(rotate_handled_v1, m)?)?;
     m.add_function(wrap_pyfunction!(pairsecret_v1, m)?)?;
     Ok(())
 }

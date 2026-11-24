@@ -163,6 +163,13 @@ with Stream.connect(sock, trust.client_config(), "localhost") as tls:
 state = trust.state()                  # previous, current and next, to store and restore
 ```
 
+`trust.receive` verifies the announcement first, also when it names the `next` already stored, and
+answers `Received.Stored` or `Received.Known` *(0.12.0)*. Acknowledge every time: on `Stored`, send
+a `Receipt`; on `Known`, send the `Receipt` first, unchanged, and then a `Handled`, made the same
+way, with `Handled.new(acker, announcer, new_fp, sent_at, ed25519_seed)`. A peer on an older nettls
+accepts the receipt and refuses the `Handled` with "unknown message version", changing nothing:
+that is why the receipt goes first *(0.12.0)*.
+
 **The side that rotates** binds a `RotatingResolver` once and lets the `Announcer` drive it. The
 announcer keeps its own keys on disk, locked with the password, and picks up where it was after a
 restart:
@@ -187,6 +194,8 @@ old = announcer.roll_if_ready(now)                # switches only when everyone 
 
 The rhythm is yours, as in Rust: nothing happens unless you call it. A receipt is verified against
 the peer's pinned Ed25519 key, which comes from krypto, as in Rust — `krypto_py.sign` in Python.
+A `Handled` from the peer is verified the same way, with `Handled.verify`, and then counts as a
+receipt: `announcer.acked("peer")`, as for a receipt *(0.12.0)*.
 
 ## Errors
 

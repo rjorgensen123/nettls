@@ -112,6 +112,8 @@ const PYTHON_ONLY: &[(&str, &str)] = &[
     ("announcement.AnnouncementJson.loads", SERDE),
     ("announcement.ReceiptJson.dumps", SERDE),
     ("announcement.ReceiptJson.loads", SERDE),
+    ("announcement.HandledJson.dumps", SERDE),
+    ("announcement.HandledJson.loads", SERDE),
     ("announcement.IdentityJson.dumps", SERDE),
     ("announcement.IdentityJson.loads", SERDE),
     ("approval.ApprovalJson.dumps", SERDE),

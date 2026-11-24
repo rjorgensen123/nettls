@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Canonical strings — what actually gets signed (SPEC-nettls §6).
 //!
-//! Four message forms, one function each. No I/O, no state, no keys: just
+//! One function for each message form. No I/O, no state, no keys: just
 //! fields in and **bytes** out.
 //!
 //! ## Why this is its own module
@@ -31,6 +31,9 @@ pub const APPROVE_V1: &str = "nettls-approve/v1";
 pub const ROTATE_V2: &str = "nettls-rotate/v2";
 /// `nettls-rotate-ack/v2` — receipt confirming the announcement is stored (§6.6).
 pub const ROTATE_ACK_V2: &str = "nettls-rotate-ack/v2";
+/// `nettls-rotate-handled/v1` — the acknowledgement once more, for an
+/// announcement already handled *(0.12.0)*.
+pub const ROTATE_HANDLED_V1: &str = "nettls-rotate-handled/v1";
 /// `nettls-pairsecret/v1` — rotation of the pair secret (§8.5b).
 pub const PAIRSECRET_V1: &str = "nettls-pairsecret/v1";
 
@@ -267,6 +270,34 @@ pub fn rotate_ack_v2(
     require_fingerprint(new_fp, "new_fp")?;
     let t = sent_at.to_string();
     Ok(assemble(&[ROTATE_ACK_V2, acker, announcer, new_fp, &t]))
+}
+
+/// The handled message: "this I have handled; here is the acknowledgement
+/// once more" *(0.12.0)*.
+///
+/// ```text
+/// nettls-rotate-handled/v1
+/// <acker>
+/// <announcer>
+/// <new_fp>
+/// <sent_at>
+/// ```
+///
+/// The fields of [`rotate_ack_v2`], validated the same way, under a first
+/// line of its own: a receipt's signature never holds for a handled message,
+/// nor the other way round. Signed **once**, with the acker's Ed25519 service
+/// key, as the receipt.
+pub fn rotate_handled_v1(
+    acker: &str,
+    announcer: &str,
+    new_fp: &str,
+    sent_at: i64,
+) -> Result<Vec<u8>, TlsError> {
+    require_component_name(acker, "acker")?;
+    require_component_name(announcer, "announcer")?;
+    require_fingerprint(new_fp, "new_fp")?;
+    let t = sent_at.to_string();
+    Ok(assemble(&[ROTATE_HANDLED_V1, acker, announcer, new_fp, &t]))
 }
 
 /// **§8.5b** — rotation of the pair secret.

@@ -128,7 +128,10 @@ This is the part that asks the most of you, so here is the whole flow in broad s
 2. **The peers fetch and verify.** They check the signatures against what they have stored.
    If they hold, they store the new certificate as accepted — *next to* the old one.
 3. **The peers acknowledge.** The receipt is signed too, and it is the gate. Without it, nothing
-   more happens.
+   more happens. A peer acknowledges every announcement that verifies, also one it has already
+   stored: then it sends the receipt again, followed by a *handled* message — "this I have
+   handled; here is the acknowledgement once more" — since its first receipt may have been lost
+   *(0.12.0)*.
 4. **You roll.** When everyone has acknowledged, you switch certificates. It happens while the
    service runs — no restart, no broken connections.
 
@@ -136,6 +139,17 @@ In practice `Announcer` keeps track of this for you: call `prepare()` when you w
 `acked()` when a peer has answered (after **verifying** the receipt with `Receipt::verify` —
 against both the pinned key and the fingerprint you announced), and `roll_if_ready()` regularly.
 The last one does nothing until everyone has acknowledged.
+
+A `Handled` from a peer counts as a receipt once it verifies, with `Handled::verify` and the same
+two checks: an earlier receipt may have been lost, but the peer is ready. Call `acked()` for it the
+same way *(0.12.0)*.
+
+**On the receiving side,** `Trust::receive` verifies the announcement and answers `Stored` or
+`Known`. It verifies first, also when the announcement names the certificate already stored as
+next *(0.12.0)*. Acknowledge every time: on `Stored`, send the `Receipt`; on `Known`, send the
+`Receipt` first, unchanged, and then a `Handled`. A peer on an older nettls accepts the receipt and
+refuses the handled message as an unknown message version, changing nothing — which is why the
+receipt goes first *(0.12.0)*.
 
 > `Announcer::new` restores the chain and any pending switch itself, fail-closed: state on disk
 > is used; state that exists but cannot be read fails construction loudly; nothing on disk means

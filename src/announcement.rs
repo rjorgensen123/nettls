@@ -769,6 +769,221 @@ mod receipt_tests {
 }
 
 // --------------------------------------------------------------------------- //
+// The handled message (0.12.0)
+// --------------------------------------------------------------------------- //
+
+/// Serialized handled message *(0.12.0)*.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HandledJson {
+    /// Always `"nettls-rotate-handled/v1"`.
+    pub v: String,
+    /// The one who acks.
+    pub acker: String,
+    /// The one who announced.
+    pub announcer: String,
+    /// The fingerprint being acked.
+    pub new_fingerprint: String,
+    /// The acker's own clock (§6.7b). Signed; no `verify` compares it with a
+    /// clock.
+    pub sent_at: i64,
+    /// Ed25519 signature, hex.
+    pub sig: String,
+}
+
+/// "This I have handled; here is the acknowledgement once more" *(0.12.0)*.
+///
+/// The one who receives an announcement it has already handled
+/// ([`Received::Known`](crate::generations::Received::Known)) sends the
+/// ordinary [`Receipt`] first, unchanged, and then this. Verified, it counts as
+/// a receipt: an earlier receipt may have been lost, but the peer is ready, and the
+/// announcer calls `acked` for that peer as it does for a receipt.
+///
+/// A node that does not know this message and reads it as a receipt refuses
+/// it with "unknown message version", and changes nothing. That is why the
+/// receipt goes first.
+///
+/// **One** signature, with the acker's Ed25519 key, as the receipt, over a
+/// canonical form of its own ([`canonical::rotate_handled_v1`]): a receipt's
+/// signature never holds for it, nor the other way round.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Handled {
+    acker: String,
+    announcer: String,
+    new_fp: String,
+    sent_at: i64,
+    sig: Vec<u8>,
+}
+
+impl Handled {
+    /// Create and sign a handled message with the acker's Ed25519 seed.
+    pub fn new(
+        acker: &str,
+        announcer: &str,
+        new_fp: &str,
+        sent_at: i64,
+        ed25519_seed: &krypto::SecretBuf,
+    ) -> Result<Self, TlsError> {
+        let message = canonical::rotate_handled_v1(acker, announcer, new_fp, sent_at)?;
+        let sig = krypto::sign::ed25519_sign(ed25519_seed, &message)
+            .map_err(|e| TlsError::Sign(format!("Ed25519 signing failed: {e}")))?
+            .to_vec();
+        Ok(Self {
+            acker: acker.to_string(),
+            announcer: announcer.to_string(),
+            new_fp: new_fp.to_string(),
+            sent_at,
+            sig,
+        })
+    }
+
+    /// The canonical string this handled message signs.
+    pub fn canonical(&self) -> Result<Vec<u8>, TlsError> {
+        canonical::rotate_handled_v1(&self.acker, &self.announcer, &self.new_fp, self.sent_at)
+    }
+
+    /// Verify against the acker's **pinned** Ed25519 key, and against the
+    /// fingerprint we actually announced.
+    ///
+    /// Both are required, as for a [`Receipt`]: a handled message that is
+    /// genuine but applies to a *different* rotation is a replay — and it must
+    /// not make us roll.
+    pub fn verify(&self, pinned_pubkey: &[u8], expected_new_fp: &str) -> Result<(), TlsError> {
+        if !same_fingerprint(&self.new_fp, expected_new_fp) {
+            return Err(TlsError::ProofInvalid(format!(
+                "the handled message covers {}, but we announced {expected_new_fp} — \
+                 this is a handled message for a different rotation",
+                self.new_fp
+            )));
+        }
+        let message = self.canonical()?;
+        krypto::sign::ed25519_verify(pinned_pubkey, &message, &self.sig)
+            .map_err(|_| TlsError::ProofInvalid("the Ed25519 signature does not hold".into()))
+    }
+
+    /// To serialized form. Fails with [`TlsError::Encode`] when the signature
+    /// cannot be encoded as hex.
+    pub fn to_json(&self) -> Result<HandledJson, TlsError> {
+        Ok(HandledJson {
+            v: canonical::ROTATE_HANDLED_V1.to_string(),
+            acker: self.acker.clone(),
+            announcer: self.announcer.clone(),
+            new_fingerprint: self.new_fp.clone(),
+            sent_at: self.sent_at,
+            sig: to_hex("the signature", &self.sig)?,
+        })
+    }
+
+    /// From serialized form. Fail-closed.
+    pub fn from_json(j: &HandledJson) -> Result<Self, TlsError> {
+        if j.v != canonical::ROTATE_HANDLED_V1 {
+            return Err(TlsError::Proof(format!(
+                "unknown message version \"{}\", expected \"{}\"",
+                j.v,
+                canonical::ROTATE_HANDLED_V1
+            )));
+        }
+        canonical::require_component_name(&j.acker, "acker")?;
+        canonical::require_component_name(&j.announcer, "announcer")?;
+        canonical::require_fingerprint(&j.new_fingerprint, "new_fingerprint")?;
+        Ok(Self {
+            acker: j.acker.clone(),
+            announcer: j.announcer.clone(),
+            new_fp: j.new_fingerprint.clone(),
+            sent_at: j.sent_at,
+            sig: from_hex(&j.sig)?,
+        })
+    }
+
+    /// Who acked.
+    pub fn acker(&self) -> &str {
+        &self.acker
+    }
+    /// The fingerprint that was acked.
+    pub fn new_fingerprint(&self) -> &str {
+        &self.new_fp
+    }
+    /// The acker's clock.
+    pub fn sent_at(&self) -> i64 {
+        self.sent_at
+    }
+}
+
+#[cfg(test)]
+mod handled_tests {
+    use super::*;
+    use krypto::SecretBuf;
+
+    const FP: &str = "aa00112233445566778899aabbccddeeff00112233445566778899aabbccddee";
+    const OTHER_FP: &str = "bb00112233445566778899aabbccddeeff00112233445566778899aabbccddee";
+
+    fn seed() -> SecretBuf {
+        SecretBuf::from_vec(vec![3u8; 32]).unwrap()
+    }
+
+    fn public(s: &SecretBuf) -> Vec<u8> {
+        krypto::sign::ed25519_public(s).unwrap().to_vec()
+    }
+
+    #[test]
+    fn handled_round_trip_verifies_and_refuses_another_rotation_or_key() {
+        let pk = public(&seed());
+        let h = Handled::new("service", "gateway", FP, 1_700_000_000, &seed()).unwrap();
+        let text = serde_json::to_string(&h.to_json().unwrap()).unwrap();
+        let read_back = Handled::from_json(&serde_json::from_str(&text).unwrap()).unwrap();
+        assert_eq!(read_back, h);
+        read_back.verify(&pk, FP).expect("must hold");
+
+        let other_rotation = Handled::new("service", "gateway", OTHER_FP, 100, &seed()).unwrap();
+        let err = other_rotation.verify(&pk, FP).unwrap_err();
+        assert!(
+            format!("{err}").contains("a different rotation"),
+            "unexpected: {err}"
+        );
+
+        let other_key = public(&SecretBuf::from_vec(vec![9u8; 32]).unwrap());
+        assert!(read_back.verify(&other_key, FP).is_err());
+
+        // A node that does not know the message reads it as a receipt, the
+        // fields being the same, and refuses it by its version.
+        let as_receipt: ReceiptJson = serde_json::from_str(&text).unwrap();
+        let err = Receipt::from_json(&as_receipt).unwrap_err();
+        assert!(
+            format!("{err}").contains("unknown message version"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[test]
+    fn a_receipt_signature_does_not_hold_for_a_handled_message_nor_the_reverse() {
+        let pk = public(&seed());
+        let receipt = Receipt::new("service", "gateway", FP, 100, &seed())
+            .unwrap()
+            .to_json()
+            .unwrap();
+        let handled = Handled::new("service", "gateway", FP, 100, &seed())
+            .unwrap()
+            .to_json()
+            .unwrap();
+
+        let mut handled_with_receipt_sig = handled.clone();
+        handled_with_receipt_sig.sig = receipt.sig.clone();
+        let err = Handled::from_json(&handled_with_receipt_sig)
+            .unwrap()
+            .verify(&pk, FP)
+            .unwrap_err();
+        assert!(format!("{err}").contains("does not hold"), "{err}");
+
+        let mut receipt_with_handled_sig = receipt;
+        receipt_with_handled_sig.sig = handled.sig;
+        let err = Receipt::from_json(&receipt_with_handled_sig)
+            .unwrap()
+            .verify(&pk, FP)
+            .unwrap_err();
+        assert!(format!("{err}").contains("does not hold"), "{err}");
+    }
+}
+
+// --------------------------------------------------------------------------- //
 // The archive (§6.9) — audit trail, not a recovery mechanism
 // --------------------------------------------------------------------------- //
 

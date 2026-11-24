@@ -83,12 +83,19 @@ impl Generation {
 }
 
 /// What happened when an announcement was received.
+///
+/// Both answers are given only to an announcement that verifies, and both are
+/// acknowledged *(0.12.0)*.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Received {
-    /// New announcement stored. The peer's next identity is now known.
+    /// New announcement stored. The peer's next identity is now known. Send
+    /// the [`Receipt`](crate::announcement::Receipt).
     Stored,
     /// We already had it. Idempotent — the peer republishes the same one until
-    /// it gets an acknowledgement (§6.8a), and that must not be an error.
+    /// it gets an acknowledgement (§6.8a), and that must not be an error. Send
+    /// the [`Receipt`](crate::announcement::Receipt) first, unchanged, and then
+    /// a [`Handled`](crate::announcement::Handled): an earlier receipt may have
+    /// been lost *(0.12.0)*.
     Known,
 }
 
@@ -187,13 +194,21 @@ impl Generations {
     /// Verification uses `previous` and `current` — and that it is *our*
     /// `previous` that decides whether a single signature is accepted is the
     /// whole point (`Announcement::verify`).
+    ///
+    /// The announcement is verified first, also when it names the certificate
+    /// already stored as `next`: [`Received::Known`] is given only to one that
+    /// verifies *(0.12.0)*. The one who receives acknowledges every time: on
+    /// [`Received::Stored`] it sends the
+    /// [`Receipt`](crate::announcement::Receipt); on [`Received::Known`] it
+    /// sends the receipt first, unchanged, and then a
+    /// [`Handled`](crate::announcement::Handled) *(0.12.0)*.
     pub fn receive(&mut self, k: &Announcement) -> Result<Received, TlsError> {
+        k.verify(self.previous.as_ref().map(|g| g.der()), self.current.der())?;
         if let Some(n) = &self.next
             && same_fingerprint(n.fingerprint(), k.new_fingerprint())
         {
             return Ok(Received::Known);
         }
-        k.verify(self.previous.as_ref().map(|g| g.der()), self.current.der())?;
         self.next = Some(Generation::from_pem(k.new_cert_pem())?);
         Ok(Received::Stored)
     }
@@ -359,15 +374,37 @@ mod tests {
     }
 
     #[test]
-    fn same_announcement_again_is_idempotent() {
-        // The peer republishes the same one until it gets an acknowledgement
-        // (§6.8a). That must not be an error.
+    fn an_announcement_naming_the_pending_certificate_is_verified_before_known() {
+        // 0.12.0: `Known` is an answer the receiver acknowledges, so it is
+        // given only to an announcement that verifies.
+        let c0 = new_gen("c0");
+        let c1 = new_gen("c1");
+        let foreign = new_gen("foreign");
+        let mut g = Generations::from_approval(c0.g.clone());
+        g.receive(&announce("gateway", None, &c0, &c1, 1)).unwrap();
+
+        // Names c1, which is pending, but is signed with a foreign key.
+        let forged = Announcement::new(
+            "gateway",
+            None,
+            (c0.g.fingerprint(), &foreign.pkcs8),
+            &c1.pem,
+            2,
+        )
+        .unwrap();
+        assert!(g.receive(&forged).is_err());
+    }
+
+    #[test]
+    fn a_valid_announcement_received_again_is_known_and_changes_nothing() {
         let c0 = new_gen("c0");
         let c1 = new_gen("c1");
         let mut g = Generations::from_approval(c0.g.clone());
         let k = announce("gateway", None, &c0, &c1, 1);
         assert_eq!(g.receive(&k).unwrap(), Received::Stored);
+        let before = g.clone();
         assert_eq!(g.receive(&k).unwrap(), Received::Known);
+        assert_eq!(g, before);
     }
 
     #[test]
@@ -465,6 +502,12 @@ impl Trust {
     }
 
     /// Receive an announcement. Takes effect on a live config.
+    ///
+    /// As [`Generations::receive`]: verified first, also when it names the
+    /// pending certificate, and acknowledged every time — the
+    /// [`Receipt`](crate::announcement::Receipt) on [`Received::Stored`], the
+    /// receipt and then a [`Handled`](crate::announcement::Handled) on
+    /// [`Received::Known`] *(0.12.0)*.
     pub fn receive(&self, k: &Announcement) -> Result<Received, TlsError> {
         let mut g = self
             .state

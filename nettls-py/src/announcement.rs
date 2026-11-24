@@ -367,6 +367,160 @@ impl Receipt {
     }
 }
 
+/// `nettls::announcement::HandledJson`. `dumps` and `loads` are what serde
+/// does with it in Rust.
+#[pyclass(
+    get_all,
+    set_all,
+    from_py_object,
+    module = "nettls_py.announcement",
+    name = "HandledJson"
+)]
+#[derive(Clone)]
+pub(crate) struct HandledJson {
+    v: String,
+    acker: String,
+    announcer: String,
+    new_fingerprint: String,
+    sent_at: i64,
+    sig: String,
+}
+
+impl HandledJson {
+    fn from_rust(j: a::HandledJson) -> Self {
+        Self {
+            v: j.v,
+            acker: j.acker,
+            announcer: j.announcer,
+            new_fingerprint: j.new_fingerprint,
+            sent_at: j.sent_at,
+            sig: j.sig,
+        }
+    }
+
+    fn to_rust(&self) -> a::HandledJson {
+        a::HandledJson {
+            v: self.v.clone(),
+            acker: self.acker.clone(),
+            announcer: self.announcer.clone(),
+            new_fingerprint: self.new_fingerprint.clone(),
+            sent_at: self.sent_at,
+            sig: self.sig.clone(),
+        }
+    }
+}
+
+#[pymethods]
+impl HandledJson {
+    #[new]
+    fn py_new(
+        v: String,
+        acker: String,
+        announcer: String,
+        new_fingerprint: String,
+        sent_at: i64,
+        sig: String,
+    ) -> Self {
+        Self {
+            v,
+            acker,
+            announcer,
+            new_fingerprint,
+            sent_at,
+            sig,
+        }
+    }
+
+    /// The JSON serde writes in Rust.
+    fn dumps(&self) -> PyResult<String> {
+        serde_json::to_string(&self.to_rust()).map_err(json_err)
+    }
+
+    /// Reads the JSON serde reads in Rust.
+    #[staticmethod]
+    fn loads(s: &str) -> PyResult<Self> {
+        serde_json::from_str(s)
+            .map(Self::from_rust)
+            .map_err(json_err)
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{:?}", self.to_rust())
+    }
+}
+
+/// `nettls::announcement::Handled`.
+#[pyclass(
+    eq,
+    frozen,
+    from_py_object,
+    module = "nettls_py.announcement",
+    name = "Handled"
+)]
+#[derive(Clone, PartialEq)]
+pub(crate) struct Handled {
+    inner: a::Handled,
+}
+
+#[pymethods]
+impl Handled {
+    /// `ed25519_seed` goes straight into locked memory; the `bytes` stays as
+    /// Python keeps it.
+    #[staticmethod]
+    fn new(
+        acker: &str,
+        announcer: &str,
+        new_fp: &str,
+        sent_at: i64,
+        ed25519_seed: &[u8],
+    ) -> PyResult<Self> {
+        let seed = hold(ed25519_seed, "an Ed25519 seed")?;
+        a::Handled::new(acker, announcer, new_fp, sent_at, &seed)
+            .map(|inner| Self { inner })
+            .map_err(err)
+    }
+
+    fn canonical(&self) -> PyResult<Bytes> {
+        self.inner.canonical().map(bytes).map_err(err)
+    }
+
+    fn verify(&self, pinned_pubkey: &[u8], expected_new_fp: &str) -> PyResult<()> {
+        self.inner
+            .verify(pinned_pubkey, expected_new_fp)
+            .map_err(err)
+    }
+
+    fn to_json(&self) -> PyResult<HandledJson> {
+        self.inner
+            .to_json()
+            .map(HandledJson::from_rust)
+            .map_err(err)
+    }
+
+    #[staticmethod]
+    fn from_json(j: &HandledJson) -> PyResult<Self> {
+        a::Handled::from_json(&j.to_rust())
+            .map(|inner| Self { inner })
+            .map_err(err)
+    }
+
+    fn acker(&self) -> String {
+        self.inner.acker().to_string()
+    }
+
+    fn new_fingerprint(&self) -> String {
+        self.inner.new_fingerprint().to_string()
+    }
+
+    fn sent_at(&self) -> i64 {
+        self.inner.sent_at()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("{:?}", self.inner)
+    }
+}
+
 /// Appends the announcement to the archive file in `dir`.
 #[pyfunction]
 fn archive(py: Python<'_>, dir: PathBuf, k: &Announcement) -> PyResult<()> {
@@ -479,6 +633,8 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Announcement>()?;
     m.add_class::<ReceiptJson>()?;
     m.add_class::<Receipt>()?;
+    m.add_class::<HandledJson>()?;
+    m.add_class::<Handled>()?;
     m.add_function(wrap_pyfunction!(archive, m)?)?;
     m.add_function(wrap_pyfunction!(read_archive, m)?)?;
     m.add_class::<IdentityJson>()?;
