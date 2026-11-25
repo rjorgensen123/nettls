@@ -36,6 +36,8 @@ to change without the recognition breaking.
 
 The cryptography itself is not here: every primitive comes from the `krypto` crate, on purpose,
 so the same algorithms are not written twice in two places that then have to agree about them.
+The one exception is the AEGIS-256 TLS suite, which calls the `aegis` crate directly, the same
+crate krypto uses for AEGIS at rest.
 
 ## What can you use it for?
 
@@ -107,14 +109,15 @@ Just as important as what it can:
 
 Since 0.8.0 **every cryptographic primitive is krypto's**
 (signatures, key agreement, hashing, hex, randomness) — nettls implements none of its own and no
-longer depends directly on `ring` or `x25519-dalek`. What nettls owns is the TLS domain and its
+longer depends directly on `ring` or `x25519-dalek`. The one exception is the AEGIS-256 TLS
+suite, which calls the `aegis` crate directly. What nettls owns is the TLS domain and its
 **formats**: the envelope, the locked state file and the §6 messages — and, since 0.8.3, the
 seam that puts AEGIS-256 into the TLS record layer (`aegis`).
 
 > **⚠ One-time consequence of the migration:** krypto 0.5.0 fixed a key/nonce swap in the
 > AEGIS-256 layer, and lockbox files and envelopes are AEGIS by default — anything written
-> with krypto ≤ 0.4.4 must be re-created (lock/seal the content again). Nothing is in
-> production; AES-256-GCM data is unaffected.
+> with krypto ≤ 0.4.4 must be re-created (lock/seal the content again). AES-256-GCM data is
+> unaffected.
 
 **About the choices:** they were made with reasons and should not be "improved" without reading
 them. ECDSA over RSA is not a tightening — it actually gives *better* backwards compatibility.
