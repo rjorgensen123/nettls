@@ -133,7 +133,7 @@ impl PeerReport {
 impl PeerReport {
     #[staticmethod]
     fn from_generations(name: String, g: &Generations) -> PyResult<Self> {
-        Self::from_rust(st::PeerReport::from_generations(name, &g.get()))
+        Self::from_rust(st::PeerReport::from_generations(name, &g.get()?))
     }
 
     #[staticmethod]

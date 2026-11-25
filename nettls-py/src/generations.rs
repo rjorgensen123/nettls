@@ -92,8 +92,8 @@ impl Generations {
         }
     }
 
-    pub(crate) fn get(&self) -> nettls::generations::Generations {
-        lock(&self.inner).clone()
+    pub(crate) fn get(&self) -> PyResult<nettls::generations::Generations> {
+        Ok(lock(&self.inner)?.clone())
     }
 }
 
@@ -123,63 +123,66 @@ impl Generations {
 
     /// `expected_announcer` is the peer this state belongs to (0.12.0).
     fn receive(&self, k: &Announcement, expected_announcer: &str) -> PyResult<Received> {
-        lock(&self.inner)
+        lock(&self.inner)?
             .receive(&k.inner, expected_announcer)
             .map(Received::from)
             .map_err(err)
     }
 
-    fn observed(&self, fp: &str) -> bool {
-        lock(&self.inner).observed(fp)
+    fn observed(&self, fp: &str) -> PyResult<bool> {
+        Ok(lock(&self.inner)?.observed(fp))
     }
 
-    fn accepted_in_handshake(&self) -> Vec<Generation> {
-        lock(&self.inner)
+    fn accepted_in_handshake(&self) -> PyResult<Vec<Generation>> {
+        Ok(lock(&self.inner)?
             .accepted_in_handshake()
             .into_iter()
             .map(|g| Generation { inner: g.clone() })
-            .collect()
+            .collect())
     }
 
-    fn for_signing(&self) -> (Option<Generation>, Generation) {
-        let g = lock(&self.inner);
+    fn for_signing(&self) -> PyResult<(Option<Generation>, Generation)> {
+        let g = lock(&self.inner)?;
         let (previous, current) = g.for_signing();
-        (
+        Ok((
             previous.map(|p| Generation { inner: p.clone() }),
             Generation {
                 inner: current.clone(),
             },
-        )
+        ))
     }
 
-    fn current(&self) -> Generation {
-        Generation {
-            inner: lock(&self.inner).current().clone(),
-        }
+    fn current(&self) -> PyResult<Generation> {
+        Ok(Generation {
+            inner: lock(&self.inner)?.current().clone(),
+        })
     }
 
-    fn previous(&self) -> Option<Generation> {
-        lock(&self.inner)
+    fn previous(&self) -> PyResult<Option<Generation>> {
+        Ok(lock(&self.inner)?
             .previous()
-            .map(|g| Generation { inner: g.clone() })
+            .map(|g| Generation { inner: g.clone() }))
     }
 
-    fn next(&self) -> Option<Generation> {
-        lock(&self.inner)
+    fn next(&self) -> PyResult<Option<Generation>> {
+        Ok(lock(&self.inner)?
             .next()
-            .map(|g| Generation { inner: g.clone() })
+            .map(|g| Generation { inner: g.clone() }))
     }
 
-    fn is_bootstrap(&self) -> bool {
-        lock(&self.inner).is_bootstrap()
+    fn is_bootstrap(&self) -> PyResult<bool> {
+        Ok(lock(&self.inner)?.is_bootstrap())
     }
 
-    fn __eq__(&self, other: &Self) -> bool {
-        self.get() == other.get()
+    fn __eq__(&self, other: &Self) -> PyResult<bool> {
+        Ok(self.get()? == other.get()?)
     }
 
     fn __repr__(&self) -> String {
-        format!("{:?}", self.get())
+        match self.get() {
+            Ok(generations) => format!("{:?}", generations),
+            Err(_) => "Generations(<poisoned lock>)".to_owned(),
+        }
     }
 }
 
@@ -200,10 +203,10 @@ impl Trust {
     }
 
     #[staticmethod]
-    fn from_state(g: &Generations) -> Self {
-        Self {
-            inner: nettls::generations::Trust::from_state(g.get()),
-        }
+    fn from_state(g: &Generations) -> PyResult<Self> {
+        Ok(Self {
+            inner: nettls::generations::Trust::from_state(g.get()?),
+        })
     }
 
     /// `expected_announcer` is the peer this trust belongs to (0.12.0).

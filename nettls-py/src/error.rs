@@ -112,7 +112,7 @@ pyo3::create_exception!(
     nettls_py,
     LockPoisonedError,
     TlsError,
-    "`TlsError::LockPoisoned`: a thread panicked while holding one of the crate's locks (0.11.0)."
+    "`TlsError::LockPoisoned`: a thread panicked while holding one of the crate's locks (0.11.0), or one of the binding's own locks (0.12.0)."
 );
 pyo3::create_exception!(
     nettls_py,

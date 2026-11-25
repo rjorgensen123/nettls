@@ -29,7 +29,7 @@ use std::collections::VecDeque;
 use std::io::{self, BufRead, Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use nettls::rustls;
@@ -330,7 +330,7 @@ impl Stream {
             )));
         }
         py.detach(|| {
-            let mut guard = lock(&self.inner);
+            let mut guard = lock(&self.inner)?;
             let conn = guard.as_mut().ok_or_else(closed)?;
             let mut buf = vec![0u8; n];
             let got = conn.read(&mut buf).map_err(io_err)?;
@@ -342,7 +342,7 @@ impl Stream {
     /// Writes all of `data` and flushes it; returns how many bytes that was.
     fn write(&self, py: Python<'_>, data: &[u8]) -> PyResult<usize> {
         py.detach(|| {
-            let mut guard = lock(&self.inner);
+            let mut guard = lock(&self.inner)?;
             let conn = guard.as_mut().ok_or_else(closed)?;
             conn.write_all(data).map_err(io_err)?;
             Ok(data.len())
@@ -351,24 +351,38 @@ impl Stream {
 
     fn flush(&self, py: Python<'_>) -> PyResult<()> {
         py.detach(|| {
-            let mut guard = lock(&self.inner);
+            let mut guard = lock(&self.inner)?;
             let conn = guard.as_mut().ok_or_else(closed)?;
             conn.flush().map_err(io_err)
         })
     }
 
-    /// Ends the connection. Closing a closed stream does nothing.
+    /// Ends the connection. Closing a closed stream does nothing. With a
+    /// poisoned lock every `close` raises `LockPoisonedError`; the first one
+    /// drops the connection without a TLS close message, since its state is
+    /// unknown, and that releases the socket (0.12.0).
     fn close(&self, py: Python<'_>) -> PyResult<()> {
-        py.detach(|| match lock(&self.inner).take() {
-            Some(mut conn) => conn.close().map_err(io_err),
-            None => Ok(()),
+        py.detach(|| match lock(&self.inner) {
+            Ok(mut guard) => match guard.take() {
+                Some(mut conn) => conn.close().map_err(io_err),
+                None => Ok(()),
+            },
+            Err(poisoned) => {
+                drop(
+                    self.inner
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .take(),
+                );
+                Err(poisoned)
+            }
         })
     }
 
     /// The SHA-256 fingerprint of the peer's certificate, or `None` when the
     /// peer showed none.
     fn peer_fingerprint(&self) -> PyResult<Option<String>> {
-        let guard = lock(&self.inner);
+        let guard = lock(&self.inner)?;
         let conn = guard.as_ref().ok_or_else(closed)?;
         conn.peer_fingerprint().map_err(err)
     }
@@ -376,14 +390,14 @@ impl Stream {
     /// The peer's certificate as DER, or `None` when the peer showed none
     /// (0.11.0). What enrollment approves: `Generation.from_der(...)`.
     fn peer_certificate(&self) -> PyResult<Option<Bytes>> {
-        let guard = lock(&self.inner);
+        let guard = lock(&self.inner)?;
         let conn = guard.as_ref().ok_or_else(closed)?;
         Ok(conn.peer_certificate().map(bytes))
     }
 
     /// The protocol ALPN agreed on, or `None` when none was offered or agreed.
     fn alpn_protocol(&self) -> PyResult<Option<Bytes>> {
-        let guard = lock(&self.inner);
+        let guard = lock(&self.inner)?;
         let conn = guard.as_ref().ok_or_else(closed)?;
         Ok(conn.alpn_protocol().map(bytes))
     }
@@ -404,10 +418,13 @@ impl Stream {
     }
 
     fn __repr__(&self) -> &'static str {
-        match lock(&self.inner).as_ref() {
-            Some(Conn::Client(_)) => "Stream(client)",
-            Some(Conn::Server(_)) => "Stream(server)",
-            None => "Stream(closed)",
+        match lock(&self.inner) {
+            Ok(guard) => match guard.as_ref() {
+                Some(Conn::Client(_)) => "Stream(client)",
+                Some(Conn::Server(_)) => "Stream(server)",
+                None => "Stream(closed)",
+            },
+            Err(_) => "Stream(<poisoned lock>)",
         }
     }
 }
@@ -532,14 +549,14 @@ impl TlsConnection {
 
     /// Ciphertext from the peer; what rustls cannot take yet waits here.
     fn receive(&self, data: &[u8]) -> PyResult<()> {
-        let mut inner = lock(&self.inner);
+        let mut inner = lock(&self.inner)?;
         inner.queue.extend(data);
         inner.feed_behind_plaintext().map_err(io_err)
     }
 
     /// The transport has ended; applied after the queued ciphertext.
     fn receive_eof(&self) -> PyResult<()> {
-        let mut inner = lock(&self.inner);
+        let mut inner = lock(&self.inner)?;
         inner.ended = true;
         inner.feed_behind_plaintext().map_err(io_err)
     }
@@ -554,7 +571,7 @@ impl TlsConnection {
                 "read takes at most {MAX_READ} bytes at a time, got {n}"
             )));
         }
-        let mut inner = lock(&self.inner);
+        let mut inner = lock(&self.inner)?;
         let mut buf = vec![0u8; n];
         match inner.conn.reader().read(&mut buf) {
             // `Ok(0)` for a non-empty buffer means `close_notify`.
@@ -583,12 +600,12 @@ impl TlsConnection {
     /// Plaintext to send; returns how much rustls took. It holds at most
     /// 64 KiB (its default) not yet taken out with `take_outgoing`.
     fn write(&self, data: &[u8]) -> PyResult<usize> {
-        lock(&self.inner).conn.writer().write(data).map_err(io_err)
+        lock(&self.inner)?.conn.writer().write(data).map_err(io_err)
     }
 
     /// All ciphertext to send, including the alert after a failure.
     fn take_outgoing(&self) -> PyResult<Bytes> {
-        let mut inner = lock(&self.inner);
+        let mut inner = lock(&self.inner)?;
         let mut out = Vec::new();
         while inner.conn.wants_write() {
             inner.conn.write_tls(&mut out).map_err(io_err)?;
@@ -597,23 +614,24 @@ impl TlsConnection {
     }
 
     /// Does nothing after `close_notify` or a fatal alert was queued.
-    fn send_close_notify(&self) {
-        lock(&self.inner).conn.send_close_notify();
+    fn send_close_notify(&self) -> PyResult<()> {
+        lock(&self.inner)?.conn.send_close_notify();
+        Ok(())
     }
 
-    fn is_handshaking(&self) -> bool {
-        lock(&self.inner).conn.is_handshaking()
+    fn is_handshaking(&self) -> PyResult<bool> {
+        Ok(lock(&self.inner)?.conn.is_handshaking())
     }
 
-    fn peer_closed(&self) -> bool {
-        lock(&self.inner).peer_closed
+    fn peer_closed(&self) -> PyResult<bool> {
+        Ok(lock(&self.inner)?.peer_closed)
     }
 
     /// Plaintext rustls holds plus queued ciphertext, which uvloop relies on:
     /// it reads again only while `SSLObject.pending()` or its incoming buffer
     /// is not zero.
     fn pending(&self) -> PyResult<usize> {
-        let mut inner = lock(&self.inner);
+        let mut inner = lock(&self.inner)?;
         let plaintext = match inner.process() {
             Ok(state) => state.plaintext_bytes_to_read(),
             // After a failure rustls gives no total, but plaintext from before
@@ -626,42 +644,42 @@ impl TlsConnection {
         Ok(plaintext + inner.queue.len())
     }
 
-    fn alpn_protocol(&self) -> Option<Bytes> {
-        lock(&self.inner)
+    fn alpn_protocol(&self) -> PyResult<Option<Bytes>> {
+        Ok(lock(&self.inner)?
             .conn
             .alpn_protocol()
-            .map(|p| bytes(p.to_vec()))
+            .map(|p| bytes(p.to_vec())))
     }
 
     /// The leaf as DER.
-    fn peer_certificate(&self) -> Option<Bytes> {
-        lock(&self.inner)
+    fn peer_certificate(&self) -> PyResult<Option<Bytes>> {
+        Ok(lock(&self.inner)?
             .conn
             .peer_certificates()
             .and_then(|chain| chain.first())
-            .map(|leaf| bytes(leaf.as_ref().to_vec()))
+            .map(|leaf| bytes(leaf.as_ref().to_vec())))
     }
 
     /// `"TLSv1.3"` or `"TLSv1.2"`, as Python's `ssl` writes them.
-    fn protocol_version(&self) -> Option<String> {
-        lock(&self.inner).conn.protocol_version().map(|v| match v {
+    fn protocol_version(&self) -> PyResult<Option<String>> {
+        Ok(lock(&self.inner)?.conn.protocol_version().map(|v| match v {
             ProtocolVersion::TLSv1_3 => "TLSv1.3".to_owned(),
             ProtocolVersion::TLSv1_2 => "TLSv1.2".to_owned(),
             other => format!("{other:?}"),
-        })
+        }))
     }
 
     /// rustls's name for the suite; one it has no name for, such as nettls's
     /// AEGIS-256 suite, is its code point (`"0xff06"`).
-    fn cipher_suite(&self) -> Option<String> {
-        lock(&self.inner)
+    fn cipher_suite(&self) -> PyResult<Option<String>> {
+        Ok(lock(&self.inner)?
             .conn
             .negotiated_cipher_suite()
             .map(|suite| {
                 let id = suite.suite();
                 id.as_str()
                     .map_or_else(|| format!("{:#06x}", u16::from(id)), str::to_owned)
-            })
+            }))
     }
 }
 

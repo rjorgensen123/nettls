@@ -90,20 +90,23 @@ impl Schedule {
         Self::wrap(an::Schedule::new(peers, attempt_at))
     }
 
-    fn add_peer(&self, name: String) {
-        lock(&self.inner).add_peer(name);
+    fn add_peer(&self, name: String) -> PyResult<()> {
+        lock(&self.inner)?.add_peer(name);
+        Ok(())
     }
 
-    fn remove_peer(&self, name: &str) {
-        lock(&self.inner).remove_peer(name);
+    fn remove_peer(&self, name: &str) -> PyResult<()> {
+        lock(&self.inner)?.remove_peer(name);
+        Ok(())
     }
 
-    fn should_announce(&self, now: i64) -> bool {
-        lock(&self.inner).should_announce(now)
+    fn should_announce(&self, now: i64) -> PyResult<bool> {
+        Ok(lock(&self.inner)?.should_announce(now))
     }
 
-    fn announced(&self, now: i64) {
-        lock(&self.inner).announced(now);
+    fn announced(&self, now: i64) -> PyResult<()> {
+        lock(&self.inner)?.announced(now);
+        Ok(())
     }
 
     /// Verifies `receipt` before anything is struck (0.12.0).
@@ -114,7 +117,7 @@ impl Schedule {
         pinned_pubkey: &[u8],
         expected_new_fp: &str,
     ) -> PyResult<()> {
-        lock(&self.inner)
+        lock(&self.inner)?
             .acked(peer, &receipt.inner, pinned_pubkey, expected_new_fp)
             .map_err(err)
     }
@@ -127,57 +130,61 @@ impl Schedule {
         pinned_pubkey: &[u8],
         expected_new_fp: &str,
     ) -> PyResult<()> {
-        lock(&self.inner)
+        lock(&self.inner)?
             .acked_handled(peer, &handled.inner, pinned_pubkey, expected_new_fp)
             .map_err(err)
     }
 
-    fn waiting_for(&self) -> Vec<String> {
-        lock(&self.inner)
+    fn waiting_for(&self) -> PyResult<Vec<String>> {
+        Ok(lock(&self.inner)?
             .waiting_for()
             .into_iter()
             .map(String::from)
-            .collect()
+            .collect())
     }
 
-    fn can_roll(&self, now: i64) -> bool {
-        lock(&self.inner).can_roll(now)
+    fn can_roll(&self, now: i64) -> PyResult<bool> {
+        Ok(lock(&self.inner)?.can_roll(now))
     }
 
-    fn rate_limit_ok(&self, now: i64) -> bool {
-        lock(&self.inner).rate_limit_ok(now)
+    fn rate_limit_ok(&self, now: i64) -> PyResult<bool> {
+        Ok(lock(&self.inner)?.rate_limit_ok(now))
     }
 
     fn rolled(&self, now: i64) -> PyResult<()> {
-        lock(&self.inner).rolled(now).map_err(err)
+        lock(&self.inner)?.rolled(now).map_err(err)
     }
 
-    fn state(&self) -> ChainState {
-        ChainState::from(lock(&self.inner).state())
+    fn state(&self) -> PyResult<ChainState> {
+        Ok(ChainState::from(lock(&self.inner)?.state()))
     }
 
-    fn first_announced(&self) -> Option<i64> {
-        lock(&self.inner).first_announced()
+    fn first_announced(&self) -> PyResult<Option<i64>> {
+        Ok(lock(&self.inner)?.first_announced())
     }
 
-    fn next_retry(&self, now: i64) -> Option<i64> {
-        lock(&self.inner).next_retry(now)
+    fn next_retry(&self, now: i64) -> PyResult<Option<i64>> {
+        Ok(lock(&self.inner)?.next_retry(now))
     }
 
-    fn alarm(&self, now: i64) -> bool {
-        lock(&self.inner).alarm(now)
+    fn alarm(&self, now: i64) -> PyResult<bool> {
+        Ok(lock(&self.inner)?.alarm(now))
     }
 
-    fn status(&self, now: i64, expires: i64) -> Status {
-        Status::from_rust(lock(&self.inner).status(now, expires))
+    fn status(&self, now: i64, expires: i64) -> PyResult<Status> {
+        Ok(Status::from_rust(lock(&self.inner)?.status(now, expires)))
     }
 
-    fn restore_announced(&self, waiting_for: Vec<String>, first_announced: i64) {
-        lock(&self.inner).restore_announced(waiting_for, first_announced);
+    fn restore_announced(&self, waiting_for: Vec<String>, first_announced: i64) -> PyResult<()> {
+        lock(&self.inner)?.restore_announced(waiting_for, first_announced);
+        Ok(())
     }
 
     fn __repr__(&self) -> String {
-        format!("{:?}", lock(&self.inner))
+        match lock(&self.inner) {
+            Ok(schedule) => format!("{:?}", schedule),
+            Err(_) => "Schedule(<poisoned lock>)".to_owned(),
+        }
     }
 }
 
@@ -342,7 +349,7 @@ pub(crate) struct OwnMaterial {
 
 impl OwnMaterial {
     fn take(&self) -> PyResult<an::OwnMaterial> {
-        lock(&self.inner)
+        lock(&self.inner)?
             .take()
             .ok_or_else(|| PyValueError::new_err("this OwnMaterial was given to an Announcer"))
     }
@@ -365,7 +372,7 @@ impl OwnMaterial {
     /// A copy: the key is `bytes` Python holds, neither locked nor wiped.
     #[getter]
     fn previous<'py>(&self, py: Python<'py>) -> PyResult<Option<(String, Bound<'py, PyBytes>)>> {
-        match lock(&self.inner).as_ref() {
+        match lock(&self.inner)?.as_ref() {
             Some(m) => Ok(m
                 .previous
                 .as_ref()
@@ -379,7 +386,7 @@ impl OwnMaterial {
     /// A copy: the key is `bytes` Python holds, neither locked nor wiped.
     #[getter]
     fn current<'py>(&self, py: Python<'py>) -> PyResult<(String, Bound<'py, PyBytes>)> {
-        match lock(&self.inner).as_ref() {
+        match lock(&self.inner)?.as_ref() {
             Some(m) => Ok((m.current.0.clone(), reveal(py, &m.current.1))),
             None => Err(PyValueError::new_err(
                 "this OwnMaterial was given to an Announcer",
@@ -430,7 +437,7 @@ impl Announcer {
             Some(p) => Some(hold_str(p, "the password")?),
             None => None,
         };
-        let schedule = lock(&schedule.inner).clone();
+        let schedule = lock(&schedule.inner)?.clone();
         let anchor = anchor.take()?;
         let resolver = resolver.inner.clone();
         let params = params.to_rust();
@@ -584,24 +591,27 @@ impl ClockDrift {
         }
     }
 
-    fn observe(&self, their_sent_at: i64, our_now: i64) -> Drift {
-        lock(&self.inner).observe(their_sent_at, our_now).into()
+    fn observe(&self, their_sent_at: i64, our_now: i64) -> PyResult<Drift> {
+        Ok(lock(&self.inner)?.observe(their_sent_at, our_now).into())
     }
 
-    fn last(&self) -> Option<i64> {
-        lock(&self.inner).last()
+    fn last(&self) -> PyResult<Option<i64>> {
+        Ok(lock(&self.inner)?.last())
     }
 
-    fn max(&self) -> i64 {
-        lock(&self.inner).max()
+    fn max(&self) -> PyResult<i64> {
+        Ok(lock(&self.inner)?.max())
     }
 
-    fn message(&self, peer: &str) -> Option<String> {
-        lock(&self.inner).message(peer)
+    fn message(&self, peer: &str) -> PyResult<Option<String>> {
+        Ok(lock(&self.inner)?.message(peer))
     }
 
     fn __repr__(&self) -> String {
-        format!("{:?}", lock(&self.inner))
+        match lock(&self.inner) {
+            Ok(drift) => format!("{:?}", drift),
+            Err(_) => "ClockDrift(<poisoned lock>)".to_owned(),
+        }
     }
 }
 

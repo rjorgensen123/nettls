@@ -404,6 +404,22 @@ def test_close_wakes_a_thread_blocked_in_sendall():
     assert not closer.is_alive() and not sender.is_alive() and failed
 
 
+def test_close_closes_the_socket_also_when_the_tls_side_raises():
+    client, server = tls_pair()
+
+    class Refusing:
+        """Answers as a connection whose lock is poisoned."""
+
+        def send_close_notify(self):
+            raise nettls.LockPoisonedError("this object's lock is poisoned")
+
+    client._conn = Refusing()
+    with pytest.raises(nettls.LockPoisonedError):
+        client.close()
+    assert client.fileno() == -1
+    server.close()
+
+
 # --------------------------------------------------------------------------- #
 # The socket form and ALPN
 # --------------------------------------------------------------------------- #

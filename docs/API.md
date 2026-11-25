@@ -1307,7 +1307,7 @@ client uses (`recv`, `send`, `sendall`, `settimeout`, `close`); it has no `makef
 | `fork` | The child's copies of locked pages are not locked | The same |
 | TLS | rustls, with the configs above | The same rustls, through `stream` and `sslcontext`; OpenSSL never carries a connection |
 | Long calls | — | These release the GIL: `TlsMaterial.load` and `save_pem`; `lockbox.lock`, `lock_with` and `unlock`; `announcement.archive` and `read_archive`; the `Announcer`'s constructor, `prepare`, `acked`, `acked_handled` *(0.12.0)*, `add_peer`, `remove_peer`, `roll_if_ready` and `save_pending`; and `Stream`'s handshake, `read`, `write`, `flush` and `close`. Every other call holds it, `roll_if_ready_gated` and `RecipientKey.generate()` included |
-| A panic inside nettls | Unwinds to the caller | Becomes `pyo3_runtime.PanicException` |
+| A panic inside nettls | Unwinds to the caller | Becomes `pyo3_runtime.PanicException`. An object whose lock was held when the panic came then raises `LockPoisonedError` from every call that reads or changes its state; `close` on a `Stream` and on the socket from `wrap_socket` releases the socket first, and `repr()` does not raise *(0.12.0)* |
 | `unsafe` | None in `nettls` (`forbid(unsafe_code)`) | One block in the binding: taking over the socket's descriptor |
 
 ---

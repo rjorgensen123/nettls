@@ -379,23 +379,27 @@ class _SSLSocket(_Connected):
     def close(self) -> None:
         """Sends close_notify unless another thread is sending, then shuts the
         socket down and closes it, which wakes a thread blocked on it. Closing
-        twice does nothing, and a peer that is already gone is not an error."""
+        twice does nothing, and a peer that is already gone is not an error.
+        Any other error from the TLS side is raised after the socket is closed
+        (0.12.0)."""
         if self._closed:
             return
         self._closed = True
-        if self._send_lock.acquire(blocking=False):
+        try:
+            if self._send_lock.acquire(blocking=False):
+                try:
+                    self._conn.send_close_notify()
+                    self._send_queued()
+                except OSError:
+                    pass
+                finally:
+                    self._send_lock.release()
+        finally:
             try:
-                self._conn.send_close_notify()
-                self._send_queued()
+                self._sock.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
-            finally:
-                self._send_lock.release()
-        try:
-            self._sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-        self._sock.close()
+            self._sock.close()
 
     def settimeout(self, value: float | None) -> None:
         if value is not None and value == 0:

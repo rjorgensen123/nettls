@@ -94,9 +94,17 @@ pub(crate) fn json_err(e: serde_json::Error) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(format!("invalid JSON: {e}"))
 }
 
-/// A poisoned lock still guards valid state here: every method leaves it whole.
-pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+/// The guard of `m`, or `LockPoisonedError` when `m` is poisoned: a thread
+/// then panicked while holding the lock, so the state behind it may be
+/// half-updated. A poisoned lock is reported, never used (0.12.0).
+pub(crate) fn lock<T>(m: &Mutex<T>) -> PyResult<MutexGuard<'_, T>> {
+    lock_unpoisoned(m).map_err(err)
+}
+
+/// `lock` without Python: a poisoned `m` is `TlsError::LockPoisoned`.
+fn lock_unpoisoned<T>(m: &Mutex<T>) -> Result<MutexGuard<'_, T>, nettls::TlsError> {
+    m.lock()
+        .map_err(|_| nettls::TlsError::LockPoisoned("this object's lock".to_owned()))
 }
 
 /// `krypto::Alg`, which `lockbox`, `envelope` and `capability` take. nettls
@@ -192,4 +200,30 @@ fn nettls_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
     submodule(m, "stream", stream::register)?;
     submodule(m, "transport", transport::register)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::lock_unpoisoned;
+
+    #[test]
+    fn a_poisoned_lock_gives_an_error_and_not_its_state() {
+        let m = Arc::new(Mutex::new(7u8));
+        assert_eq!(*lock_unpoisoned(&m).unwrap(), 7);
+
+        let held = Arc::clone(&m);
+        let _ = std::thread::spawn(move || {
+            let _guard = held.lock().unwrap();
+            panic!("poison the lock");
+        })
+        .join();
+
+        let err = lock_unpoisoned(&m).unwrap_err();
+        assert!(
+            matches!(&err, nettls::TlsError::LockPoisoned(what) if what == "this object's lock"),
+            "{err:?}"
+        );
+    }
 }
