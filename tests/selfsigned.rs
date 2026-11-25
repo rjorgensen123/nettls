@@ -155,7 +155,7 @@ fn debug_never_leaks_the_key() {
 }
 
 // --------------------------------------------------------------------------- #
-// SAN/CN validation (case L2-054)
+// SAN/CN validation
 //
 // The minimum requirement in SPEC-nettls also covers configuration input. The
 // crate previously accepted an empty string, 300 characters, spaces and `..`

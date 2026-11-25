@@ -28,9 +28,9 @@
 //! tighter probe than "does it verify?".
 //!
 //! The vector names, descriptions and JSON field names went English on
-//! 2026-08-15 together with the wire keys (Roger's call: before first
-//! adoption). The canonical BYTES and signatures are unchanged — only
-//! versioned — they are data, not prose.
+//! 2026-08-15 together with the wire keys, before first adoption. The
+//! canonical BYTES and signatures are unchanged — only versioned — they are
+//! data, not prose.
 
 use std::collections::BTreeMap;
 

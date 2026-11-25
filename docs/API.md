@@ -69,7 +69,7 @@ The test helpers `pkcs8_for_test`, `pem_encode_for_test` and `fingerprint_for_te
 *(0.11.0)*; they were made for the cross-test against the Python twin. Use
 `TlsMaterial::anchor_pkcs8()`, `pem::encode` and `cert_fingerprint_sha256`.
 
-**`pem` — building PEM** *(public since 0.8.1, wish #2)*:
+**`pem` — building PEM** *(public since 0.8.1)*:
 
 ```rust
 pub fn encode(label: &str, der: &[u8]) -> Result<Vec<u8>, TlsError>;   // RFC 7468, 64-char lines
@@ -159,7 +159,7 @@ impl TlsMaterial {
     pub fn server_config_with(&self, alpn: &[Vec<u8>], transport: &TransportPolicy)
         -> Result<Arc<ServerConfig>, TlsError>;                           // 0.8.3 — see `transport`
     pub fn save_pem(&self, dir: &Path) -> Result<(), TlsError>;           // atomic; key.pem 0600; both staged first (0.12.0)
-    pub fn anchor_pkcs8(&self) -> Result<krypto::SecretBuf, TlsError>;    // 0.8.1, wish #4 — see below
+    pub fn anchor_pkcs8(&self) -> Result<krypto::SecretBuf, TlsError>;    // 0.8.1 — see below
 }
 ```
 

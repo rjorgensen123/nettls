@@ -29,8 +29,7 @@ members = ["nettls-py"]
 # ADDITIVE, so `features = ["ring"]` WITHOUT `default-features = false` does not
 # mean "ring instead of", it means "ring IN ADDITION TO". And rustls fails
 # CLOSED when zero or more than one provider is compiled in: «no process-level
-# CryptoProvider available». That is why the 2026-07 attempt stranded
-# (case L2-014 ch. 2.1).
+# CryptoProvider available». That is why the 2026-07 attempt stranded.
 #
 # The rules, which apply to the ENTIRE dependency tree of consuming services:
 #   1. `default-features = false` on rustls, tokio-rustls, rcgen — always.
@@ -43,7 +42,7 @@ members = ["nettls-py"]
 # pulls in a second provider. That is the whole reason the crate exists.
 rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 # `tls12` is here ON PURPOSE: without it we lock out everything that is not
-# TLS 1.3. Looks like cleanup, is a compatibility regression (L2-014 ch. 8.2).
+# TLS 1.3. Looks like cleanup, is a compatibility regression.
 
 # Self-signed generation. The ring backend ⇒ ECDSA/Ed25519, NOT RSA
 # (`KeyGenerationUnavailable`). We use ECDSA P-256 — which is also the choice
@@ -86,7 +85,7 @@ krypto = "0.9"
 # seam lives here. Same primitive crate krypto uses at rest (by a co-author of
 # the draft, vector-verified). Consumers opt in via `TransportCipher::Aegis256`;
 # the default transport is AES-256-GCM. Replaced, not extended, when rustls
-# ships the standard suite (L2-076).
+# ships the standard suite.
 aegis = "0.9"
 
 # Guaranteed wiping of the short-lived buffers that cannot be a SecretBuf

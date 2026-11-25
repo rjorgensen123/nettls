@@ -22,7 +22,7 @@ static PROVIDER: OnceLock<Arc<CryptoProvider>> = OnceLock::new();
 /// takes ~2.5 minutes extra) and for fewer C dependencies — not because
 /// aws-lc-rs is impossible. Should we one day need FIPS or post-quantum hybrid
 /// (X25519MLKEM768), aws-lc-rs is the way, and it is verified viable in our
-/// build environment (L2-014 ch. 2.3).
+/// build environment.
 ///
 /// The same `Arc` is returned every time, so repeated calls are free.
 pub fn provider() -> Arc<CryptoProvider> {

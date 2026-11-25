@@ -54,11 +54,9 @@ pub enum CertOrigin {
     /// directory — and deliberately KEPT.** The service comes up and works;
     /// clients will complain about the date.
     ///
-    /// Roger (2026-08-10): "if an operator chooses to run the whole app on our
-    /// dummy certs, approves them, and they expire, then it must be possible
-    /// to override that with a glowing WARNING both here and there — it must
-    /// not be possible to overlook, but the app must work if an operator
-    /// chooses it."
+    /// An operator may choose to run the whole service on these generated
+    /// certificates and approve them. When they expire, the service must still
+    /// work, and the warning must be impossible to overlook.
     ///
     /// We therefore do **not** replace the certificate automatically: a new
     /// certificate has a new fingerprint, and that would silently break every
@@ -466,8 +464,8 @@ impl TlsMaterial {
     /// expiry *(0.11.0; it rounded towards zero, so the first day after expiry
     /// read 0)*.
     ///
-    /// The consumer should `warn!` below 30 days and `error!` below 7 (L2-014
-    /// ch. 4.5) — the crate does not log by itself.
+    /// The consumer should `warn!` below 30 days and `error!` below 7 — the
+    /// crate does not log by itself.
     pub fn days_until_expiry(&self) -> i64 {
         (self.not_after - now_unix()).div_euclid(86_400)
     }
@@ -513,7 +511,7 @@ impl TlsMaterial {
     }
 
     /// The identity anchor as PKCS#8 — for the anchor of
-    /// [`Announcer::new`](crate::announcer::Announcer::new). **Public since 0.8.1 (wish #4).**
+    /// [`Announcer::new`](crate::announcer::Announcer::new). **Public since 0.8.1.**
     ///
     /// This is the ONE documented place the key CROSSES from the TLS domain
     /// into the §6 domain: the announcer signs announcements with the same
@@ -896,7 +894,7 @@ fn generate(
     // not just data from the network. Without this, an empty string, 300 characters,
     // spaces and `..` went straight into the certificate — and the result was a
     // certificate that silently matched nothing, where the operator met a cryptic
-    // browser error instead of a clear startup error (case L2-054).
+    // browser error instead of a clear startup error.
     validate_common_name(&params.common_name)?;
     for san in &params.sans {
         validate_san_name(san, "SAN")?;

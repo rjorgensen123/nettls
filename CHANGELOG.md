@@ -164,6 +164,12 @@ After a panic the binding took the object's lock back into use and went
 on. The object now refuses further use with `LockPoisonedError`; `close`
 on a `Stream` or a socket from `wrap_socket` releases the socket first.
 
+### Changed — comments name no person, old case number or wish number *(2026-11-25)*
+
+Comments and docs said who decided a thing and pointed to old case and
+wish numbers that a reader cannot look up. They now state what holds. The
+AEGIS note keeps its date, with its issue and internal case number.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

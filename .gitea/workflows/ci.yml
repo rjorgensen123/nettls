@@ -3,7 +3,7 @@
 #
 # PREREQUISITE: a Gitea Actions runner must be registered.
 #
-# Why this crate needs CI (case L2-053): `nettls` was for a long time the ONLY published
+# Why this crate needs CI: `nettls` was for a long time the ONLY published
 # crate without it — 0.1.0 and 0.2.0 both went to Gitea without anything verifying them
 # automatically. That is a bad trade for precisely this crate, which owns two things
 # where a silent regression is expensive:

@@ -96,7 +96,7 @@
 //!   wants.
 //! - **No HSTS helpers.** Deliberately: `Strict-Transport-Security` set once
 //!   while we are running self-signed locks the operator out of the app in that
-//!   browser until browser data is cleared (L2-014 ch. 8.2). Do not "improve"
+//!   browser until browser data is cleared. Do not "improve"
 //!   this.
 //! - **No cipher *negotiation* of its own.** The channel's cipher is the
 //!   consumer's choice ([`transport`], 0.8.3): the default is AES-256-GCM
@@ -118,7 +118,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// "Encryption" *(0.12.0)*.
 pub(crate) const KRYPTO_MAX_BLOB_BYTES: usize = krypto::MAX_DATA_BYTES + 86;
 
-pub mod aegis; // 0.8.3: AEGIS-256 in the channel — a deliberate, documented deviation (L2-076)
+pub mod aegis; // 0.8.3: AEGIS-256 in the channel — a deliberate, documented deviation
 pub mod announcement;
 pub mod announcer;
 pub mod approval;
@@ -137,7 +137,7 @@ pub mod status;
 pub mod transport; // 0.8.3: the TLS channel's cipher — the consumer's choice (§6.0b)
 
 mod fingerprint;
-pub mod pem; // pub since 0.8.1 (wish #2): PEM building is TLS domain and lives here
+pub mod pem; // pub since 0.8.1: PEM building is TLS domain and lives here
 mod pkcs8;
 mod secret; // 0.8.3: private keys in memory — SecretBuf, and the honest limit
 

@@ -13,7 +13,7 @@
 //! every other party (OpenSSL, browsers) never sees it offered unless the
 //! consumer asks, and skips it as an unknown suite if it does.
 //!
-//! # Why it deviates (decided 2026-09-04, Roger)
+//! # Why it deviates (decided 2026-09-04)
 //!
 //! rustls 0.23, which this crate builds on, gives every TLS 1.3 AEAD a fixed
 //! **12-byte** IV (`Iv` is `[u8; NONCE_LEN]`, `NONCE_LEN` = 12); its
@@ -62,7 +62,8 @@
 //! development line keeps `NONCE_LEN` at 12 but makes `Iv` a buffer with a
 //! length (up to `Iv::MAX_LEN`), so a rustls whose IV is no longer the fixed
 //! 12-byte array fails the test: the exit is something `cargo test`
-//! tells you. The tracking case is **L2-076**.
+//! tells you. This is followed up in issue #21 and under the internal case
+//! number FS-0121.
 //!
 //! [`TransportCipher::Aegis256`]: crate::transport::TransportCipher::Aegis256
 //! [`TransportPolicy`]: crate::transport::TransportPolicy
@@ -380,7 +381,7 @@ mod tests {
     /// a length and a larger buffer, so the size of `Iv` is checked too. When
     /// this fails, see whether rustls allows a 32-byte IV; that is the signal
     /// to replace this file with the
-    /// standard suite (L2-076), not to fix the test.
+    /// standard suite, not to fix the test.
     #[test]
     fn the_deviation_still_has_its_reason() {
         assert_eq!(
@@ -388,7 +389,7 @@ mod tests {
             (12, 12),
             "rustls has changed its TLS 1.3 IV (NONCE_LEN or the Iv type) — revisit aegis.rs: if a \
              32-byte IV is now possible, the standard TLS_AEGIS_256_SHA512 (0x1306, 32-byte IV, \
-             SHA-512) replaces this deviation (L2-076)"
+             SHA-512) replaces this deviation"
         );
     }
 }

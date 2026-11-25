@@ -20,7 +20,7 @@
 //!
 //! One choice per cipher covers both protocol versions: TLS 1.3's suite and
 //! the TLS 1.2 ECDHE suites with the same AEAD, so keeping TLS 1.2 for older
-//! browsers (L2-014) does not reopen the door to a weaker AEAD.
+//! browsers does not reopen the door to a weaker AEAD.
 
 use std::sync::Arc;
 

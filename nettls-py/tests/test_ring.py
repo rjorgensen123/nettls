@@ -607,8 +607,9 @@ def test_approve_with_wrong_fingerprint_rust_refuses_python_pins():
 
 # ── Restart and resumption (§6.8) ─────────────────────────────────────────── #
 #
-# Roger: "if we introduce a fault, we restart exactly that node — we fix the
-# fault, then communication must pick up again and work correctly."
+# When a fault is introduced in a node, exactly that node is restarted: the
+# fault is fixed, and then communication must pick up again and work
+# correctly.
 #
 # That is not a robustness detail, it is the designed way out. §6.8 separates
 # two kinds of deviation, and they have different cures:
@@ -749,7 +750,7 @@ def test_restart_resumes_communication(lang):
 
 @pytest.mark.slow
 def test_rotation_after_restart_resumes():
-    """A8 (decided by Roger 2026-08-14): the pair rotates again after a
+    """A8 (decided 2026-08-14): the pair rotates again after a
     restart-with-loss + re-anchoring.
 
     The receiver's state governs fully: holding only an anchor, it verifies
@@ -793,9 +794,9 @@ def test_rotation_after_restart_resumes():
 
 # ── The reach of a fault (§6.8) ───────────────────────────────────────────── #
 #
-# Roger: "a fault on one node affects only that node, plus the neighbours it
-# has, i.e. at minimum a pair. No other node in a system knows anything about
-# the state of anyone but its own neighbours."
+# A fault on one node affects only that node and the neighbours it has, i.e.
+# at minimum a pair. No other node in a system knows anything about the state
+# of anyone but its own neighbours.
 #
 # That is an invariant, not a hope — and it is the real reason §6 has no
 # global state, no gossip and no coordinator. Knowledge is strictly local:

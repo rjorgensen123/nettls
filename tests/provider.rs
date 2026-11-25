@@ -60,7 +60,7 @@ fn provider_gives_ring_suites_and_same_arc_every_time() {
 
 /// The fence against the provider trap sneaking back in.
 ///
-/// Case L2-014 ch. 2.2.7 proposes this as a CI check. It lives here as a
+/// This could have been a CI check. It lives here as a
 /// **test** instead, so it follows the crate and runs for everyone who builds
 /// it — not just in one CI configuration someone can forget to copy.
 ///

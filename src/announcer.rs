@@ -1188,7 +1188,7 @@ mod mode_tests {
         // The value goes on the wire in /v1/tls/identity (§6.9b) and is part
         // of the contract — it must not be able to change through a Rust rename.
         // (0.7.0 switched the wire value rullerende→rolling BEFORE first
-        // adoption — a deliberate, Roger-approved wire change, 2026-08-15.)
+        // adoption — a deliberate wire change, 2026-08-15.)
         assert_eq!(
             serde_json::to_string(&Mode::Rolling).unwrap(),
             "\"rolling\""

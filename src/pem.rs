@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Minimal PEM encoding (DER → PEM) and safe writing to disk.
 //!
-//! We *read* PEM with `rustls-pki-types` (its `pem` feature — 0.8.1, wish #3);
-//! writing lives here. The base64 body is `krypto::base64` (0.8.1, wish #1's
-//! consequence: own variants go away once krypto has the building block).
+//! We *read* PEM with `rustls-pki-types` (its `pem` feature, 0.8.1); writing
+//! lives here. The base64 body is `krypto::base64` (0.8.1: own variants go
+//! away once krypto has the building block).
 //!
 //! The module also owns the rule that matters when private keys hit disk:
 //! **write atomically, and never leave a file more open than it should be.**
@@ -18,7 +18,7 @@ use crate::error::TlsError;
 
 /// Encodes DER as a PEM block with the given label, 64 chars per line (RFC 7468).
 ///
-/// **Public since 0.8.1 (wish #2):** PEM is TLS domain, so building it lives
+/// **Public since 0.8.1:** PEM is TLS domain, so building it lives
 /// here — consumers that used to build PEM by hand use this instead. The
 /// base64 body is the canonical `krypto::base64`. The intermediate is
 /// zeroized: the DER may be a private key. (The returned buffer is the
