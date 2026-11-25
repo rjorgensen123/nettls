@@ -1259,7 +1259,7 @@ on anyone's behalf.
 
 **Breaking 0.x shifts that have happened** *(precedent)*: 0.3.0 deprecated the §5 model; 0.6.x
 absorbed the recovery calls into `Announcer::new`; **0.7.0 switched the whole API surface to
-English** without touching the wire format;
+English**, and the JSON names on the wire with it; the signed canonical bytes were unchanged;
 **0.8.0 removed the crate's own primitives in favour of krypto** (hex/Ed25519 out of the
 surface, seeds as `SecretBuf`) — still without touching the wire format; **0.8.2 removed the
 retired §5 model entirely** (`chain` + `rotation`: `TrustChain`, `RotationProof`,
