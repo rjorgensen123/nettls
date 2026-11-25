@@ -1401,3 +1401,49 @@ fn a_previous_key_for_another_certificate_is_refused_at_start() {
     assert!(matches!(err, nettls::TlsError::Chain(_)), "{err:?}");
     assert!(err.to_string().contains("but the material in"), "{err}");
 }
+
+#[test]
+fn a_previous_key_file_with_an_unknown_key_is_refused_at_start() {
+    let err = restart_after_editing_previous_key("prev-unknown-key", |m| {
+        m.insert("extra".into(), 1.into());
+    })
+    .err()
+    .expect("a previous key file with an unknown key is refused");
+    assert!(matches!(err, nettls::TlsError::Chain(_)), "{err:?}");
+    assert!(err.to_string().contains("unknown field `extra`"), "{err}");
+}
+
+#[test]
+fn a_pending_file_with_an_unknown_key_is_refused_at_start() {
+    use nettls::announcer::{Announcer, OwnMaterial, Schedule};
+
+    nettls::install_crypto_provider();
+    let c0 = generation();
+    let dir = dir_with("pending-unknown-key", &c0);
+    let resolver = Arc::new(nettls::RotatingResolver::new(&c0.material).unwrap());
+    announcer_in(&dir, &c0, &resolver).prepare(100).unwrap();
+
+    let file = dir.join(nettls::announcer::PENDING_FILE);
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    json["extra"] = 1.into();
+    std::fs::write(&file, serde_json::to_vec(&json).unwrap()).unwrap();
+
+    let err = Announcer::new(
+        "gateway",
+        &dir,
+        SelfSignedParams::new("localhost", ["localhost"]),
+        resolver,
+        OwnMaterial {
+            previous: None,
+            current: (c0.fp_bar(), c0.key()),
+        },
+        Schedule::new(vec!["service".to_string()], 0),
+        None,
+    )
+    .err()
+    .expect("a pending file with an unknown key is refused");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(matches!(err, nettls::TlsError::Proof(_)), "{err:?}");
+    assert!(err.to_string().contains("unknown field `extra`"), "{err}");
+}

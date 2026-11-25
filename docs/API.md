@@ -38,7 +38,7 @@ it is breaking regardless of semver:**
 |---|---|
 | Canonical prefixes | `nettls-approve/v1` · `nettls-rotate/v2` · `nettls-rotate-ack/v2` · `nettls-pairsecret/v1` · `nettls-algsupport/v1` *(additive, 0.8.2)* · `nettls-rotate-handled/v1` *(additive, 0.12.0)* |
 | Canonical form | UTF-8, LF between lines, **no** trailing LF; `prev` serializes as `-` when absent |
-| JSON field names | all English: `approved_by`, `timestamp`, `mode`, `announcement`, … |
+| JSON field names | all English: `approved_by`, `timestamp`, `mode`, `announcement`, …; a key the type does not know is refused when the JSON is read *(0.12.0)* |
 | Mode values | `"pinning"` and `"rolling"` |
 | File names on disk | `cert.pem` · `key.pem` · `pending-rotation.json` · `announcements.jsonl` · `material.locked` (the material, locked with the password) · `previous-key.locked`, or `previous-key.json` without a password (the previous key) · `new/` (the next identity, before the switch) |
 | Blob magics | `NETTLS\x01\x00` (lockbox) · `NETENV\x01\x00` (envelope) · FAFN (krypto) |
@@ -848,7 +848,8 @@ it builds the announcement, after it has written `new/`.
 | `pending-rotation.json` | the promise; `save_pending` removes it when nothing is pending | 0600 |
 | `new/` | the announced pair: `material.locked`, or `cert.pem` + `key.pem` | 0700 |
 
-The locked and JSON files are written through a temp file beside each (`material.tmp`,
+The previous-key file and `pending-rotation.json` refuse a JSON key they do not know when they are
+read at start *(0.12.0)*. The locked and JSON files are written through a temp file beside each (`material.tmp`,
 `previous-key.tmp`, `pending-rotation.tmp`, `new/material.tmp`), created 0600; a leftover one is
 removed before the next write. `cert.pem` and `key.pem` go through `cert.tmp` and `key.tmp`, as
 under `save_pem`. A directory a save creates is made 0700. After a switch, `pending-rotation.json`

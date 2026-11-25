@@ -57,8 +57,10 @@ pub fn alg_from_token(token: &str) -> Result<Alg, TlsError> {
 ///
 /// Serialize it as JSON and send it however your surfaces talk; the receiver
 /// calls [`SupportStatement::verify`] with the name of the component it
-/// expects *(0.12.0)* and the signer's pinned certificate.
+/// expects *(0.12.0)* and the signer's pinned certificate. A key the type
+/// does not know is refused when the JSON is read *(0.12.0)*.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SupportStatement {
     /// Who declares (component name, validated like every §6 name).
     pub component: String,

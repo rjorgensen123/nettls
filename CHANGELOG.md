@@ -175,6 +175,11 @@ AEGIS note keeps its date, with its issue and internal case number.
 `docs/API.md` and `docs/Home.md` are corrected and brought up to date
 with the code.
 
+### ⚠ Changed — an unknown JSON key is refused *(2026-11-25)*
+
+A key a message or a state file does not know was ignored. It is now
+refused, with an error that names it.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

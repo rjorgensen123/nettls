@@ -33,8 +33,10 @@ use crate::canonical;
 use crate::error::{TlsError, to_hex};
 use crate::signature::from_hex;
 
-/// Serialized operator approval (§6.4).
+/// Serialized operator approval (§6.4). A key the type does not know is
+/// refused when the JSON is read *(0.12.0)*.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ApprovalJson {
     /// Always `"nettls-approve/v1"`.
     pub v: String,
@@ -384,6 +386,15 @@ mod tests {
         let read_back: ApprovalJson = serde_json::from_str(&t).unwrap();
         assert_eq!(Approval::from_json(&read_back).unwrap(), g);
         assert_eq!(g.timestamp(), 1_700_000_000);
+    }
+
+    #[test]
+    fn an_approval_with_an_unknown_key_is_refused() {
+        let g = Approval::new("gateway", FP, "operator", 100, "portal", &seed()).unwrap();
+        let mut j = serde_json::to_value(g.to_json().unwrap()).unwrap();
+        j["extra"] = 1.into();
+        let err = serde_json::from_str::<ApprovalJson>(&j.to_string()).unwrap_err();
+        assert!(err.to_string().contains("unknown field `extra`"), "{err}");
     }
 
     // --- the ONE code path (M-9) ---------------------------------------------- //

@@ -61,8 +61,10 @@ pub fn der_from_pem(pem: &str) -> Result<Vec<u8>, TlsError> {
     found.ok_or_else(|| TlsError::Pem("found no CERTIFICATE block in the PEM".into()))
 }
 
-/// Serialized form (§6.5). The field names are part of the contract.
+/// Serialized form (§6.5). The field names are part of the contract. A key
+/// the type does not know is refused when the JSON is read *(0.12.0)*.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AnnouncementJson {
     /// Always `"nettls-rotate/v2"`.
     pub v: String,
@@ -360,7 +362,7 @@ mod tests {
     pub(super) struct Gen {
         pub(super) pem: String,
         der: Vec<u8>,
-        pkcs8: krypto::SecretBuf,
+        pub(super) pkcs8: krypto::SecretBuf,
         pub(super) fp: String,
     }
 
@@ -600,14 +602,27 @@ mod tests {
         assert!(!text.contains("prev_fingerprint"), "{text}");
         assert!(!text.contains("sig_prev"), "{text}");
     }
+
+    #[test]
+    fn an_announcement_with_an_unknown_key_is_refused() {
+        let c0 = generation("c0");
+        let c1 = generation("c1");
+        let k = Announcement::new("gateway", None, (&c0.fp, &c0.pkcs8), &c1.pem, 100).unwrap();
+        let mut j = serde_json::to_value(k.to_json().unwrap()).unwrap();
+        j["extra"] = 1.into();
+        let err = serde_json::from_str::<AnnouncementJson>(&j.to_string()).unwrap_err();
+        assert!(err.to_string().contains("unknown field `extra`"), "{err}");
+    }
 }
 
 // --------------------------------------------------------------------------- //
 // The receipt (§6.6)
 // --------------------------------------------------------------------------- //
 
-/// Serialized receipt (§6.6).
+/// Serialized receipt (§6.6). A key the type does not know is refused when
+/// the JSON is read *(0.12.0)*.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReceiptJson {
     /// Always `"nettls-rotate-ack/v2"`.
     pub v: String,
@@ -828,14 +843,25 @@ mod receipt_tests {
         assert_eq!(Receipt::from_json(&read_back).unwrap(), k);
         assert_eq!(k.announcer(), "gateway");
     }
+
+    #[test]
+    fn a_receipt_with_an_unknown_key_is_refused() {
+        let k = Receipt::new("service", "gateway", FP, 100, &seed()).unwrap();
+        let mut j = serde_json::to_value(k.to_json().unwrap()).unwrap();
+        j["extra"] = 1.into();
+        let err = serde_json::from_str::<ReceiptJson>(&j.to_string()).unwrap_err();
+        assert!(err.to_string().contains("unknown field `extra`"), "{err}");
+    }
 }
 
 // --------------------------------------------------------------------------- //
 // The handled message (0.12.0)
 // --------------------------------------------------------------------------- //
 
-/// Serialized handled message *(0.12.0)*.
+/// Serialized handled message *(0.12.0)*. A key the type does not know is
+/// refused when the JSON is read.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HandledJson {
     /// Always `"nettls-rotate-handled/v1"`.
     pub v: String,
@@ -1079,6 +1105,15 @@ mod handled_tests {
         );
         h.verify("service", &pk, FP).expect("its own acker");
     }
+
+    #[test]
+    fn a_handled_message_with_an_unknown_key_is_refused() {
+        let h = Handled::new("service", "gateway", FP, 100, &seed()).unwrap();
+        let mut j = serde_json::to_value(h.to_json().unwrap()).unwrap();
+        j["extra"] = 1.into();
+        let err = serde_json::from_str::<HandledJson>(&j.to_string()).unwrap_err();
+        assert!(err.to_string().contains("unknown field `extra`"), "{err}");
+    }
 }
 
 // --------------------------------------------------------------------------- //
@@ -1280,7 +1315,8 @@ mod archive_tests {
 /// Deserializing requires `fingerprint`, written as lowercase hex with or
 /// without its `sha256:` prefix, to be the SHA-256 of the one certificate in
 /// `cert_pem`. A mismatch, or a `cert_pem` that is not exactly one X.509
-/// certificate, fails the read *(0.12.0)*.
+/// certificate, fails the read *(0.12.0)*. So does a key the type does not
+/// know, in `announcement` as well *(0.12.0)*.
 #[derive(Debug, Clone, Serialize)]
 pub struct IdentityJson {
     /// The fingerprint being served right now, with the `sha256:` prefix.
@@ -1337,6 +1373,7 @@ impl IdentityJson {
 /// fingerprint is checked against the certificate.
 #[derive(Deserialize)]
 #[serde(rename = "IdentityJson")]
+#[serde(deny_unknown_fields)]
 struct IdentityJsonWire {
     fingerprint: String,
     cert_pem: String,
@@ -1471,5 +1508,36 @@ mod identity_tests {
                 .contains("cert_pem is not exactly one X.509 certificate"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn an_identity_with_an_unknown_key_is_refused() {
+        let c = generation("gateway");
+        let i =
+            IdentityJson::new(c.fp.clone(), c.pem.clone(), None, Mode::Rolling, 5, None).unwrap();
+        let mut j = serde_json::to_value(&i).unwrap();
+        j["extra"] = 1.into();
+        let err = serde_json::from_str::<IdentityJson>(&j.to_string()).unwrap_err();
+        assert!(err.to_string().contains("unknown field `extra`"), "{err}");
+    }
+
+    #[test]
+    fn an_identity_whose_announcement_has_an_unknown_key_is_refused() {
+        let c = generation("gateway");
+        let next = generation("next");
+        let k = Announcement::new("gateway", None, (&c.fp, &c.pkcs8), &next.pem, 5).unwrap();
+        let i = IdentityJson::new(
+            c.fp.clone(),
+            c.pem.clone(),
+            None,
+            Mode::Rolling,
+            5,
+            Some(&k),
+        )
+        .unwrap();
+        let mut j = serde_json::to_value(&i).unwrap();
+        j["announcement"]["extra"] = 1.into();
+        let err = serde_json::from_str::<IdentityJson>(&j.to_string()).unwrap_err();
+        assert!(err.to_string().contains("unknown field `extra`"), "{err}");
     }
 }

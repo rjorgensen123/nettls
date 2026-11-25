@@ -59,6 +59,22 @@ fn a_statement_from_another_component_is_refused() {
 }
 
 #[test]
+fn a_statement_with_an_unknown_key_is_refused() {
+    let m = identity("service");
+    let s = SupportStatement::signed(
+        "service",
+        &[Alg::Aes256Gcm],
+        1_760_000_000,
+        &m.anchor_pkcs8().unwrap(),
+    )
+    .unwrap();
+    let mut j = serde_json::to_value(&s).unwrap();
+    j["extra"] = 1.into();
+    let err = serde_json::from_str::<SupportStatement>(&j.to_string()).unwrap_err();
+    assert!(err.to_string().contains("unknown field `extra`"), "{err}");
+}
+
+#[test]
 fn choose_implements_the_decided_pattern() {
     // No statement → the requested algorithm stands (AEGIS default flow).
     assert_eq!(choose(Alg::Aegis256, None).unwrap(), Alg::Aegis256);

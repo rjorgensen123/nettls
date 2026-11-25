@@ -620,8 +620,10 @@ impl Announcer {
     }
 }
 
-/// The previous generation's key, as it lies on disk.
+/// The previous generation's key, as it lies on disk. A JSON key the type
+/// does not know is refused when the file is read *(0.12.0)*.
 #[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PreviousOnDisk {
     fingerprint: String,
     pkcs8: Vec<u8>,
@@ -1952,6 +1954,7 @@ mod lifetime_tests {
 pub const PENDING_FILE: &str = "pending-rotation.json";
 
 #[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PendingOnDisk {
     announcement: crate::announcement::AnnouncementJson,
     new_cert_pem: String,

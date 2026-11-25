@@ -167,6 +167,13 @@ def test_invalid_json_is_a_value_error():
         AnnouncementJson.loads('{"v": 1}')
 
 
+def test_an_unknown_key_is_a_value_error_that_names_it():
+    data = json.loads(Handled.new("service", "gateway", FP_B, 100, SEED).to_json().dumps())
+    data["extra"] = 1
+    with pytest.raises(ValueError, match="invalid JSON: unknown field `extra`"):
+        HandledJson.loads(json.dumps(data))
+
+
 def test_receipt_rejects_replay():
     pk = ed25519_public(SEED)
     r = Receipt.new("service", "gateway", FP_B, 100, SEED)
