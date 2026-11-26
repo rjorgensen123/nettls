@@ -28,10 +28,9 @@ the [README](README.md) and under [`docs/`](docs/Home.md).
   second provider must not enter the lock file. Guard: `no_other_crypto_provider_in_cargo_lock` in
   `tests/provider.rs`, which fails when `aws-lc-rs` or `aws-lc-sys` is in `Cargo.lock`.
 - **No async runtime and no web framework in the library.** It returns configurations and facts;
-  the consumer binds, schedules and logs. nettls's own code does not log, with one exception: a
-  note on stderr when an `Announcer` is created without a password (`warn_cleartext`,
-  `src/announcer.rs`). rustls is built with its `logging` feature, so it writes `log` records
-  when the consumer installs a logger.
+  the consumer binds, schedules and logs. nettls's own code does not log and writes nothing to
+  stdout or stderr. rustls is built with its `logging` feature, so it writes `log` records when
+  the consumer installs a logger.
 - **Fail-closed.** What cannot be done as promised is an error, never a weaker result.
 - **Private keys the crate holds are in krypto's locked memory** and wiped when dropped. The
   exceptions are stated in `src/secret.rs`: rustls' copy of the key is not locked, short-lived

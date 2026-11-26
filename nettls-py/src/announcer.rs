@@ -450,6 +450,12 @@ impl Announcer {
             .map_err(err)
     }
 
+    /// Whether the private keys the announcer stores in its directory are
+    /// locked with a password (0.12.0).
+    fn keys_locked(&self) -> bool {
+        self.inner.keys_locked()
+    }
+
     fn own_trio(&self) -> PyResult<OwnTrio> {
         self.inner.own_trio().map(OwnTrio::from_rust).map_err(err)
     }

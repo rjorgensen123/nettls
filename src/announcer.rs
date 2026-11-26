@@ -709,18 +709,6 @@ impl Drop for PreviousOnDisk {
     }
 }
 
-/// Logs that the keys are stored in cleartext, once at setup.
-fn warn_cleartext() {
-    // A silent cleartext storage is worse than a loud one: whoever reads the
-    // code a year from now sees no difference between "deliberate choice" and
-    // "forgotten".
-    eprintln!(
-        "nettls: NOTE — the Announcer is configured WITHOUT a password. The private keys are \
-         stored in cleartext on disk. That is correct for mode 1 where the operator owns the \
-         certificate, but for mode 2 the material must be locked."
-    );
-}
-
 /// An announcement we have published and are awaiting acknowledgement for.
 ///
 /// Not `Clone` since 0.8.3: it carries a private key (`SecretBuf`), and a key
@@ -1375,6 +1363,12 @@ impl Announcer {
     /// A password over `krypto::password::MAX_PASSWORD_BYTES` is
     /// [`TlsError::Params`], refused before anything on disk is read or
     /// written *(0.12.0)*.
+    ///
+    /// Without a password the announcer stores its private keys in cleartext.
+    /// That is right for mode 1, where the operator owns the certificate;
+    /// for mode 2 the material must be locked. nettls prints and logs nothing
+    /// about it *(0.12.0)*: [`keys_locked`](Self::keys_locked) gives the
+    /// fact, for the consumer to show in its own log or status.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         name: impl Into<String>,
@@ -1387,9 +1381,6 @@ impl Announcer {
     ) -> Result<Self, TlsError> {
         if let Some(pw) = &password {
             crate::lockbox::check_password_len(pw)?;
-        }
-        if password.is_none() {
-            warn_cleartext();
         }
         let s = Self {
             name: name.into(),
@@ -1408,6 +1399,14 @@ impl Announcer {
         s.restore_material()?;
         s.restore_pending()?;
         Ok(s)
+    }
+
+    /// Whether the private keys the announcer stores in its directory are
+    /// locked with a password *(0.12.0)*: `true` when it was given one,
+    /// `false` when it stores them in cleartext. It says nothing about the
+    /// anchor the consumer keeps itself.
+    pub fn keys_locked(&self) -> bool {
+        self.password.is_some()
     }
 
     /// A read-only view of our own generation triple — fingerprints, never

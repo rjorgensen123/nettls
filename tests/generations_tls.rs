@@ -1115,6 +1115,22 @@ fn announcer_for(dir: &std::path::Path, c0: &Gen, peers: &[&str]) -> nettls::ann
 }
 
 #[test]
+fn the_announcer_says_whether_its_keys_are_locked() {
+    // 0.12.0: the fact comes from a call.
+    let c0 = generation();
+    let locked = std::env::temp_dir().join(format!("nettls-keys-locked-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&locked);
+    assert!(announcer_for(&locked, &c0, &["service"]).keys_locked());
+
+    let open = dir_with("keys-open", &c0);
+    let resolver = Arc::new(nettls::RotatingResolver::new(&c0.material).unwrap());
+    assert!(!announcer_in(&open, &c0, &resolver).keys_locked());
+
+    let _ = std::fs::remove_dir_all(&locked);
+    let _ = std::fs::remove_dir_all(&open);
+}
+
+#[test]
 fn a_password_over_krypto_limit_is_refused_at_construction() {
     // 0.12.0: refused before anything on disk is read or written, with the
     // answer the lockbox gives for it.

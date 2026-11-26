@@ -836,6 +836,7 @@ impl Announcer {
         // load-or-init, fail-closed: disk state overrides the anchor; unreadable state = error
         // the restored certificate is put into the resolver (0.12.0)
 
+    pub fn keys_locked(&self) -> bool;   // whether the keys it stores in `dir` are locked with a password (0.12.0)
     pub fn own_trio(&self) -> Result<OwnTrio, TlsError>;
     pub fn prepare(&self, now: i64) -> Result<Announcement, TlsError>;   // create + persist + announce; idempotent
     pub fn acked(&self, peer: &str, receipt: &Receipt, pinned_pubkey: &[u8])
@@ -908,11 +909,12 @@ and `new/` are removed; a failure there is `Io`, saying the switch is done. `Ann
 removes the `.tmp-material` staging directories in `dir` and `new/`, and removes the promise and
 `new/` when the promised certificate is already the current one.
 
-`password: None` means **key material in cleartext on disk**. Legitimate (mode 1 with an
-operator-uploaded certificate), but it is a choice, and it must be visible as one: each
-`Announcer::new` without a password writes a note saying so to stderr. *(0.12.0)* A
-password over `krypto::password::MAX_PASSWORD_BYTES` is `Params`, refused before anything on disk
-is read or written.
+`password: None` means **key material in cleartext on disk**. That is right for mode 1, where the
+operator owns the certificate; for mode 2 the material must be locked. It is a choice, and it must
+be visible as one: nettls prints and logs nothing about it, and `keys_locked()` says whether the
+keys the announcer stores in `dir` are locked, for the consumer to show in its own log or status
+*(0.12.0)*. A password over `krypto::password::MAX_PASSWORD_BYTES` is `Params`, refused before
+anything on disk is read or written *(0.12.0)*.
 
 ### Deviation and downgrade
 

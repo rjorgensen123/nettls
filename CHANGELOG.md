@@ -187,6 +187,11 @@ lists and certificate names are refused above a bound, before they are read
 or parsed; `docs/API.md` gives each bound. `Schedule::new` and
 `Schedule::add_peer` now return a `Result`.
 
+### Changed — nettls writes nothing to stderr *(2026-11-26)*
+
+An `Announcer` made without a password printed a note to stderr. The note
+is gone, and `Announcer::keys_locked()` gives the fact instead.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

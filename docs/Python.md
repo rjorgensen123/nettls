@@ -174,7 +174,8 @@ changing nothing: that is why the receipt goes first *(0.12.0)*.
 
 **The side that rotates** binds a `RotatingResolver` once and lets the `Announcer` drive it. The
 announcer keeps its own keys on disk, locked with the password, and picks up where it was after a
-restart:
+restart. With `None` for the password it stores them in cleartext, and `keys_locked()` says which
+*(0.12.0)*:
 
 ```python
 from nettls_py import announcer as an

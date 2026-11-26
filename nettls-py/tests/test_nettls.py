@@ -671,6 +671,24 @@ def test_a_restart_does_not_wait_for_a_peer_taken_out_of_the_list(tmp_path):
     assert b.roll_if_ready(200) == anchor.fingerprint_sha256()
 
 
+def test_the_announcer_says_whether_its_keys_are_locked(tmp_path, capfd):
+    # 0.12.0: the fact comes from a call; nothing is written to stderr.
+    anchor = anchor_material()
+    assert announcer_in(tmp_path / "locked", anchor).keys_locked() is True
+    own = A.OwnMaterial(None, (anchor.fingerprint_sha256(), anchor.anchor_pkcs8()))
+    cleartext = A.Announcer.new(
+        "gw",
+        tmp_path / "open",
+        A.mode2_params("gw", ["gw"]),
+        nettls.RotatingResolver(anchor),
+        own,
+        A.Schedule(["peer"], 0),
+        None,
+    )
+    assert cleartext.keys_locked() is False
+    assert capfd.readouterr().err == ""
+
+
 def test_the_announcer_survives_a_restart(tmp_path):
     anchor = anchor_material()
     fp = anchor.fingerprint_sha256()
