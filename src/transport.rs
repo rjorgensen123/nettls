@@ -157,9 +157,89 @@ impl TransportPolicy {
     }
 }
 
+/// The most entries an ALPN list given to a config builder may hold
+/// *(0.12.0)*.
+const MAX_ALPN_ENTRIES: usize = 16;
+/// The longest ALPN entry, in bytes: the length TLS can carry for one
+/// protocol name *(0.12.0)*.
+const MAX_ALPN_ENTRY_LEN: usize = 255;
+
+/// Refuses an ALPN list of more than [`MAX_ALPN_ENTRIES`] entries, or with an
+/// entry that is empty or over [`MAX_ALPN_ENTRY_LEN`] bytes, with
+/// [`TlsError::Params`] *(0.12.0)*. The number of entries is checked before
+/// any entry is looked at. Every config builder that takes an `alpn` list
+/// calls it, once, where the config is built.
+pub(crate) fn check_alpn(alpn: &[Vec<u8>]) -> Result<(), TlsError> {
+    if alpn.len() > MAX_ALPN_ENTRIES {
+        return Err(TlsError::Params(format!(
+            "the ALPN list has {} entries, over the bound of {MAX_ALPN_ENTRIES}",
+            alpn.len()
+        )));
+    }
+    for (i, entry) in alpn.iter().enumerate() {
+        if entry.is_empty() || entry.len() > MAX_ALPN_ENTRY_LEN {
+            return Err(TlsError::Params(format!(
+                "ALPN entry {i} is {} bytes; an entry is 1 to {MAX_ALPN_ENTRY_LEN} bytes",
+                entry.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_alpn_list_over_16_entries_or_with_an_entry_outside_1_to_255_bytes_is_params() {
+        // 0.12.0: every config builder that takes an ALPN list refuses it.
+        let material = crate::TlsMaterial::load(&crate::CertSource::self_signed(
+            crate::SelfSignedParams::default(),
+        ))
+        .unwrap();
+        let resolver = crate::RotatingResolver::new(&material).unwrap();
+        let trust = crate::generations::Trust::from_approval(
+            crate::generations::Generation::from_der(material.cert_chain()[0].as_ref().to_vec())
+                .unwrap(),
+        );
+        let fp = material.fingerprint_sha256();
+        let policy = TransportPolicy::default();
+        let enforce = crate::pin::Expiry::Enforce;
+        let builders = |alpn: &[Vec<u8>]| {
+            [
+                material.server_config_with_alpn(alpn).err(),
+                material.server_config_with(alpn, &policy).err(),
+                resolver.server_config_with_alpn(alpn).err(),
+                resolver.server_config_with(alpn, &policy).err(),
+                trust.client_config_with_alpn(alpn).err(),
+                trust.client_config_with(alpn, &policy, enforce).err(),
+                crate::pinned_client_config_with_alpn(&fp, alpn).err(),
+                crate::pinned_client_config_with(&fp, alpn, &policy, enforce).err(),
+                crate::unverified_client_config_with(alpn, &policy).err(),
+            ]
+        };
+
+        let at_bound = vec![vec![b'x'; MAX_ALPN_ENTRY_LEN]; MAX_ALPN_ENTRIES];
+        assert!(builders(&at_bound).iter().all(Option::is_none));
+        let over = vec![b"h2".to_vec(); MAX_ALPN_ENTRIES + 1];
+        for err in builders(&over) {
+            let err = err.expect("refused");
+            assert!(matches!(err, TlsError::Params(_)), "{err:?}");
+            assert!(
+                err.to_string()
+                    .contains("the ALPN list has 17 entries, over the bound of 16"),
+                "{err}"
+            );
+        }
+        for entry in [Vec::new(), vec![b'x'; MAX_ALPN_ENTRY_LEN + 1]] {
+            let err = check_alpn(&[entry]).unwrap_err();
+            assert!(
+                err.to_string().contains("an entry is 1 to 255 bytes"),
+                "{err}"
+            );
+        }
+    }
 
     #[test]
     fn empty_and_repeated_are_rejected() {

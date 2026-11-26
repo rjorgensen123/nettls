@@ -94,6 +94,23 @@ pub(crate) fn json_err(e: serde_json::Error) -> PyErr {
     pyo3::exceptions::PyValueError::new_err(format!("invalid JSON: {e}"))
 }
 
+/// The longest JSON text a `loads` takes, in bytes (0.12.0).
+const MAX_JSON_TEXT_LEN: usize = 1024 * 1024;
+
+/// Refuses a JSON text for `loads` over `MAX_JSON_TEXT_LEN` bytes with a
+/// `ValueError`, the class `loads` gives for JSON it does not take, before the
+/// text is parsed (0.12.0).
+pub(crate) fn check_json_text(s: &str) -> PyResult<()> {
+    if s.len() > MAX_JSON_TEXT_LEN {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "the JSON text is {} bytes, over the bound of {MAX_JSON_TEXT_LEN} bytes; it was not \
+             parsed",
+            s.len()
+        )));
+    }
+    Ok(())
+}
+
 /// The guard of `m`, or `LockPoisonedError` when `m` is poisoned: a thread
 /// then panicked while holding the lock, so the state behind it may be
 /// half-updated. A poisoned lock is reported, never used (0.12.0).

@@ -44,8 +44,39 @@ const SALT_LEN: usize = 32;
 /// from the password, and no key rotation at this layer.
 const KEY_ID: [u8; 16] = *b"nettls-local-st1";
 /// The longest file [`unlock`] takes: header, salt and the largest blob krypto
-/// opens *(0.12.0)*.
-const MAX_FILE_LEN: usize = MAGIC.len() + SALT_LEN + crate::KRYPTO_MAX_BLOB_BYTES;
+/// opens *(0.12.0)*. A locked file the announcer reads is checked against it
+/// before it is read, through [`read_locked_file`].
+pub(crate) const MAX_FILE_LEN: usize = MAGIC.len() + SALT_LEN + crate::KRYPTO_MAX_BLOB_BYTES;
+
+/// Reads the open locked file `f`, found at `path`, for [`unlock`]. A file
+/// longer than [`MAX_FILE_LEN`] is [`TlsError::Envelope`], refused before it is
+/// read, as `unlock` would refuse it after; one that grows past the bound while
+/// it is read is refused too *(0.12.0)*. A failed read is [`TlsError::Io`].
+pub(crate) fn read_locked_file(
+    f: &mut std::fs::File,
+    path: &std::path::Path,
+) -> Result<Vec<u8>, TlsError> {
+    crate::pem::read_capped(
+        f,
+        MAX_FILE_LEN,
+        |e| TlsError::io(path, e),
+        |len| {
+            TlsError::Envelope(match len {
+                Some(len) => format!(
+                    "the locked file {} is too long: {len} bytes, at most {MAX_FILE_LEN} \
+                     (header, salt and krypto's largest blob); it was not read",
+                    path.display()
+                ),
+                None => format!(
+                    "the locked file {} grew past {MAX_FILE_LEN} bytes, the most it can hold \
+                     (header, salt and krypto's largest blob), while it was read; what was read \
+                     was not used",
+                    path.display()
+                ),
+            })
+        },
+    )
+}
 
 /// Locks content with a password — with the default AEAD,
 /// **AEGIS-256** (SPEC-nettls §6.0b: at rest there is no cross-reading —

@@ -58,7 +58,8 @@ impl Generation {
     /// certificate, of any key type; anything else, bytes left over after the
     /// certificate included, is a [`TlsError::Certificate`] *(0.12.0)*. Fails
     /// with [`TlsError::Encode`] when the fingerprint cannot be encoded as hex
-    /// *(0.12.0)*.
+    /// *(0.12.0)*. More than 1 MiB of DER is [`TlsError::Params`], refused
+    /// before it is parsed *(0.12.0)*.
     pub fn from_der(der: impl Into<Vec<u8>>) -> Result<Self, TlsError> {
         let der = der.into();
         crate::material::read_certificate(&der)?;
@@ -67,7 +68,10 @@ impl Generation {
     }
 
     /// From PEM: the one CERTIFICATE block, read as [`Generation::from_der`]
-    /// reads it *(0.12.0)*.
+    /// reads it *(0.12.0)*. A PEM over
+    /// [`MAX_CERT_PEM_LEN`](crate::announcement::MAX_CERT_PEM_LEN) bytes is
+    /// [`TlsError::Params`], as [`der_from_pem`](crate::announcement::der_from_pem)
+    /// refuses it *(0.12.0)*.
     pub fn from_pem(pem: &str) -> Result<Self, TlsError> {
         Self::from_der(crate::announcement::der_from_pem(pem)?)
     }
@@ -340,6 +344,23 @@ mod tests {
     }
 
     #[test]
+    fn a_certificate_der_over_1_mib_is_refused_before_it_is_parsed() {
+        // 0.12.0: without the bound these bytes would be refused as a
+        // certificate that cannot be parsed.
+        let c0 = new_gen("c0");
+        assert_eq!(Generation::from_der(c0.g.der().to_vec()).unwrap(), c0.g);
+        let err = Generation::from_der(vec![0u8; 1024 * 1024 + 1]).unwrap_err();
+        assert!(matches!(err, TlsError::Params(_)), "{err:?}");
+        assert!(
+            err.to_string().contains(
+                "the certificate DER is 1048577 bytes, over the bound of 1048576 bytes; it was \
+                 not parsed"
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn the_two_roles_are_not_the_same() {
         // The core of the module: previous verifies announcements, but lets
         // no one into a handshake.
@@ -569,7 +590,8 @@ impl Trust {
         self.client_config_with_alpn(&[])
     }
 
-    /// Like [`Trust::client_config`], but with ALPN.
+    /// Like [`Trust::client_config`], but with ALPN, checked as
+    /// [`Trust::client_config_with`] checks it.
     pub fn client_config_with_alpn(&self, alpn: &[Vec<u8>]) -> Result<Arc<ClientConfig>, TlsError> {
         self.client_config_with(
             alpn,
@@ -583,12 +605,16 @@ impl Trust {
     /// explicit [`Expiry`](crate::pin::Expiry) (0.11.0). Without a policy, the
     /// client offers the default: **AES-256-GCM only**; the short forms use
     /// `Expiry::Enforce`, so an expired or not yet valid certificate is refused.
+    ///
+    /// The ALPN list holds at most 16 entries of 1 to 255 bytes each; any
+    /// other list is [`TlsError::Params`] *(0.12.0)*.
     pub fn client_config_with(
         &self,
         alpn: &[Vec<u8>],
         transport: &crate::transport::TransportPolicy,
         expiry: crate::pin::Expiry,
     ) -> Result<Arc<ClientConfig>, TlsError> {
+        crate::transport::check_alpn(alpn)?;
         let provider = transport.provider();
         let verifier = GenerationVerifier {
             state: self.state.clone(),

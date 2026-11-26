@@ -36,17 +36,24 @@ use serde::{Deserialize, Serialize};
 use crate::canonical;
 use crate::error::{TlsError, to_hex};
 use crate::fingerprint::same_fingerprint;
-use crate::signature::{from_hex, p256_public_key, verify_p256};
+use crate::signature::{p256_public_key, signature_from_hex, verify_p256};
 use krypto::sha256;
 
 /// The fingerprint of a PEM certificate: SHA-256 over DER, hex without prefix.
+/// The PEM is bounded as [`der_from_pem`] bounds it *(0.12.0)*.
 pub fn fingerprint_from_pem(pem: &str) -> Result<String, TlsError> {
     to_hex("the certificate fingerprint", &sha256(&der_from_pem(pem)?))
 }
 
 /// PEM → DER. Fail-closed on anything that is not exactly one CERTIFICATE block.
+///
+/// A PEM over [`MAX_CERT_PEM_LEN`] bytes is [`TlsError::Params`], refused
+/// before it is parsed *(0.12.0)*. Every certificate PEM nettls parses for an
+/// announcement, an identity or a [`Generation`](crate::generations::Generation)
+/// goes through here.
 pub fn der_from_pem(pem: &str) -> Result<Vec<u8>, TlsError> {
     use rustls_pki_types::pem::PemObject;
+    check_cert_pem_len("the certificate PEM", pem)?;
     let mut found: Option<Vec<u8>> = None;
     for cert in rustls_pki_types::CertificateDer::pem_slice_iter(pem.as_bytes()) {
         let cert = cert.map_err(|e| TlsError::Pem(format!("invalid PEM: {e}")))?;
@@ -59,6 +66,18 @@ pub fn der_from_pem(pem: &str) -> Result<Vec<u8>, TlsError> {
         found = Some(cert.as_ref().to_vec());
     }
     found.ok_or_else(|| TlsError::Pem("found no CERTIFICATE block in the PEM".into()))
+}
+
+/// Refuses a certificate PEM (`what`) over [`MAX_CERT_PEM_LEN`] bytes with
+/// [`TlsError::Params`] *(0.12.0)*.
+pub(crate) fn check_cert_pem_len(what: &str, pem: &str) -> Result<(), TlsError> {
+    if pem.len() > MAX_CERT_PEM_LEN {
+        return Err(TlsError::Params(format!(
+            "{what} is {} bytes, over the bound of {MAX_CERT_PEM_LEN} bytes; it was not parsed",
+            pem.len()
+        )));
+    }
+    Ok(())
 }
 
 /// Serialized form (§6.5). The field names are part of the contract. A key
@@ -108,6 +127,9 @@ impl Announcement {
     /// `prev` is `None` at the very first rotation. If it is `Some`, both
     /// signatures **must** be made — it is not optional, and an announcement that
     /// could have been double-signed but is not, is a weakened announcement.
+    ///
+    /// A `new_cert_pem` over [`MAX_CERT_PEM_LEN`] bytes is [`TlsError::Params`],
+    /// refused before it is parsed *(0.12.0)*.
     pub fn new(
         announcer: &str,
         prev: Option<(&str, &krypto::SecretBuf)>,
@@ -169,6 +191,9 @@ impl Announcement {
     /// Right after it, `new_cert_pem` must be an X.509 certificate with a P-256
     /// key, the key the next announcement is signed with; a certificate of
     /// another kind is refused before the rest is checked *(0.12.0)*.
+    ///
+    /// The receiver's certificates are read with [`verify_p256`], so each is
+    /// at most 1 MiB of DER *(0.12.0)*.
     pub fn verify(
         &self,
         expected_announcer: &str,
@@ -326,8 +351,12 @@ impl Announcement {
             new_fp: j.new_fingerprint.clone(),
             new_cert_pem: j.new_cert_pem.clone(),
             sent_at: j.sent_at,
-            sig_prev: j.sig_prev.as_deref().map(from_hex).transpose()?,
-            sig_curr: from_hex(&j.sig_curr)?,
+            sig_prev: j
+                .sig_prev
+                .as_deref()
+                .map(|s| signature_from_hex(s, "sig_prev"))
+                .transpose()?,
+            sig_curr: signature_from_hex(&j.sig_curr, "sig_curr")?,
         })
     }
 
@@ -604,6 +633,65 @@ mod tests {
     }
 
     #[test]
+    fn a_certificate_pem_over_the_bound_is_refused_before_it_is_parsed() {
+        // 0.12.0: `der_from_pem` bounds every PEM parsed for an announcement or
+        // an identity; `IdentityJson::new` stores its PEM and is bounded itself.
+        let c = generation("c");
+        let at_bound = format!("{}{}", c.pem, "\n".repeat(MAX_CERT_PEM_LEN - c.pem.len()));
+        assert_eq!(der_from_pem(&at_bound).unwrap(), c.der);
+
+        let over = format!("{at_bound}\n");
+        let text = "is 16385 bytes, over the bound of 16384 bytes";
+        for err in [
+            der_from_pem(&over).unwrap_err(),
+            IdentityJson::new(
+                &c.fp,
+                over.clone(),
+                None,
+                crate::announcer::Mode::Rolling,
+                5,
+                None,
+            )
+            .unwrap_err(),
+        ] {
+            assert!(matches!(err, TlsError::Params(_)), "{err:?}");
+            assert!(err.to_string().contains(text), "{err}");
+        }
+        let mut read = serde_json::to_value(
+            IdentityJson::new(
+                &c.fp,
+                c.pem.clone(),
+                None,
+                crate::announcer::Mode::Rolling,
+                5,
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        read["cert_pem"] = over.into();
+        let err = serde_json::from_value::<IdentityJson>(read).unwrap_err();
+        assert!(err.to_string().contains(text), "{err}");
+    }
+
+    #[test]
+    fn a_signature_over_144_hex_characters_is_refused_before_it_is_decoded() {
+        // 0.12.0: 146 characters of valid lowercase hex, 73 bytes.
+        let c0 = generation("c0");
+        let c1 = generation("c1");
+        let k = Announcement::new("gateway", None, (&c0.fp, &c0.pkcs8), &c1.pem, 100).unwrap();
+        let mut j = k.to_json().unwrap();
+        j.sig_curr = "00".repeat(73);
+        let err = Announcement::from_json(&j).unwrap_err();
+        assert!(matches!(err, TlsError::Proof(_)), "{err:?}");
+        assert!(
+            err.to_string()
+                .contains("sig_curr is 146 bytes of hex, over the bound of 144 for a signature"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn an_announcement_with_an_unknown_key_is_refused() {
         let c0 = generation("c0");
         let c1 = generation("c1");
@@ -748,7 +836,7 @@ impl Receipt {
             announcer: j.announcer.clone(),
             new_fp: j.new_fingerprint.clone(),
             sent_at: j.sent_at,
-            sig: from_hex(&j.sig)?,
+            sig: signature_from_hex(&j.sig, "sig")?,
         })
     }
 
@@ -995,7 +1083,7 @@ impl Handled {
             announcer: j.announcer.clone(),
             new_fp: j.new_fingerprint.clone(),
             sent_at: j.sent_at,
-            sig: from_hex(&j.sig)?,
+            sig: signature_from_hex(&j.sig, "sig")?,
         })
     }
 
@@ -1147,10 +1235,20 @@ pub const ARCHIVE_FILE: &str = "announcements.jsonl";
 /// The file is created for the owner only (0600), like the other state files;
 /// a file that exists keeps the mode it has. Each record is written in one
 /// call, so two calls at the same time give two whole lines *(0.12.0)*.
+///
+/// A record longer than [`read_archive`] reads, 64 KiB, is [`TlsError::Params`],
+/// and nothing is written; the file is not even opened *(0.12.0)*.
 pub fn archive(dir: &std::path::Path, k: &Announcement) -> Result<(), TlsError> {
     use std::io::Write;
     let mut line = serde_json::to_string(&k.to_json()?)
         .map_err(|e| TlsError::Proof(format!("could not serialize the announcement: {e}")))?;
+    if line.len() > MAX_ARCHIVE_LINE_LEN {
+        return Err(TlsError::Params(format!(
+            "the archive record is {} bytes, over the bound of {MAX_ARCHIVE_LINE_LEN} bytes a \
+             line may have to be read back; nothing was written",
+            line.len()
+        )));
+    }
     line.push('\n');
     let path = dir.join(ARCHIVE_FILE);
     let mut open = std::fs::OpenOptions::new();
@@ -1168,6 +1266,11 @@ pub fn archive(dir: &std::path::Path, k: &Announcement) -> Result<(), TlsError> 
     Ok(())
 }
 
+/// The longest archive [`read_archive`] reads, in bytes *(0.12.0)*.
+const MAX_ARCHIVE_LEN: usize = 64 * 1024 * 1024;
+/// The longest line [`read_archive`] parses, in bytes *(0.12.0)*.
+const MAX_ARCHIVE_LINE_LEN: usize = 64 * 1024;
+
 /// Read the archive, oldest first.
 ///
 /// **Skips lines that cannot be parsed**, and reports how many. An archive is an
@@ -1177,19 +1280,33 @@ pub fn archive(dir: &std::path::Path, k: &Announcement) -> Result<(), TlsError> 
 ///
 /// What comes back is checked for form only, as [`Announcement::from_json`]
 /// does: no signature is verified. [`Announcement::verify`] is the call for that.
+///
+/// An archive over 64 MiB is [`TlsError::Io`], refused before it is read, and
+/// so is one that grows past 64 MiB while it is read. A line over 64 KiB is
+/// skipped and counted without being parsed *(0.12.0)*.
 pub fn read_archive(dir: &std::path::Path) -> Result<(Vec<Announcement>, usize), TlsError> {
     let path = dir.join(ARCHIVE_FILE);
-    let bytes = match std::fs::read(&path) {
-        Ok(b) => b,
+    let mut file = match std::fs::File::open(&path) {
+        Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0)),
         Err(e) => return Err(TlsError::io(&path, e)),
     };
+    let bytes = crate::pem::read_capped(
+        &mut file,
+        MAX_ARCHIVE_LEN,
+        |e| TlsError::io(&path, e),
+        |len| crate::pem::over_bound(&path, "the archive", MAX_ARCHIVE_LEN, len),
+    )?;
     let mut out = Vec::new();
     let mut skipped = 0usize;
     for line in bytes
         .split(|b| *b == b'\n')
         .filter(|l| !l.iter().all(u8::is_ascii_whitespace))
     {
+        if line.len() > MAX_ARCHIVE_LINE_LEN {
+            skipped += 1;
+            continue;
+        }
         match std::str::from_utf8(line)
             .ok()
             .and_then(|l| serde_json::from_str::<AnnouncementJson>(l).ok())
@@ -1293,6 +1410,79 @@ mod archive_tests {
         assert_eq!(skipped, 2, "and the broken ones must be counted");
         let _ = std::fs::remove_dir_all(&d);
     }
+
+    #[test]
+    fn a_record_over_the_line_bound_is_not_archived_and_the_file_is_not_created() {
+        // 0.12.0: control characters after the certificate block keep the PEM
+        // under its own bound, and JSON writes each as six bytes.
+        let m =
+            TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::new("a", ["a"]))).unwrap();
+        let der = m.cert_chain()[0].as_ref().to_vec();
+        let pkcs8 = crate::pkcs8::pkcs8_p256(m.key_der(), &der).unwrap();
+        let fp = krypto::hex::encode(&sha256(&der)).unwrap();
+        let fresh = TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::new(
+            "fresh",
+            ["fresh"],
+        )))
+        .unwrap();
+        let mut pem = String::from_utf8(
+            crate::pem::encode("CERTIFICATE", fresh.cert_chain()[0].as_ref()).unwrap(),
+        )
+        .unwrap();
+        pem.push_str(&"\u{1}".repeat(MAX_CERT_PEM_LEN - pem.len()));
+        let k = Announcement::new("gateway", None, (&fp, &pkcs8), &pem, 1).unwrap();
+
+        let d = tmpdir("record-over-bound");
+        let err = archive(&d, &k).unwrap_err();
+        assert!(matches!(err, TlsError::Params(_)), "{err:?}");
+        assert!(
+            err.to_string().contains(
+                "over the bound of 65536 bytes a line may have to be read back; nothing was written"
+            ),
+            "{err}"
+        );
+        assert!(!d.join(ARCHIVE_FILE).exists());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn an_archive_over_64_mib_is_refused_and_a_line_over_64_kib_is_skipped() {
+        // 0.12.0: a valid record padded with spaces to the line bound is read;
+        // one byte more and it is skipped and counted without being parsed.
+        use std::io::Write;
+        let d = tmpdir("bounds");
+        let record = serde_json::to_string(&announcement("a").to_json().unwrap()).unwrap();
+        let padded = |len: usize| format!("{record}{}\n", " ".repeat(len - record.len()));
+        std::fs::File::create(d.join(ARCHIVE_FILE))
+            .unwrap()
+            .write_all(
+                format!(
+                    "{}{}",
+                    padded(MAX_ARCHIVE_LINE_LEN),
+                    padded(MAX_ARCHIVE_LINE_LEN + 1)
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        let (v, skipped) = read_archive(&d).unwrap();
+        assert_eq!((v.len(), skipped), (1, 1));
+
+        // The file is made longer with a hole, without writing data.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(d.join(ARCHIVE_FILE))
+            .unwrap()
+            .set_len(MAX_ARCHIVE_LEN as u64 + 1)
+            .unwrap();
+        let err = read_archive(&d).unwrap_err();
+        assert!(matches!(err, TlsError::Io { .. }), "{err:?}");
+        assert!(
+            err.to_string()
+                .contains("the archive is 67108865 bytes, over the bound of 67108864 bytes"),
+            "{err}"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }
 
 // --------------------------------------------------------------------------- //
@@ -1316,7 +1506,8 @@ mod archive_tests {
 /// without its `sha256:` prefix, to be the SHA-256 of the one certificate in
 /// `cert_pem`. A mismatch, or a `cert_pem` that is not exactly one X.509
 /// certificate, fails the read *(0.12.0)*. So does a key the type does not
-/// know, in `announcement` as well *(0.12.0)*.
+/// know, in `announcement` as well *(0.12.0)*, and a `cert_pem` over
+/// [`MAX_CERT_PEM_LEN`] bytes *(0.12.0)*.
 #[derive(Debug, Clone, Serialize)]
 pub struct IdentityJson {
     /// The fingerprint being served right now, with the `sha256:` prefix.
@@ -1349,7 +1540,8 @@ impl IdentityJson {
     /// exactly that.)
     ///
     /// Fails with [`TlsError::Encode`] when the announcement's signatures
-    /// cannot be encoded as hex *(0.12.0)*.
+    /// cannot be encoded as hex *(0.12.0)*. A `cert_pem` over
+    /// [`MAX_CERT_PEM_LEN`] bytes is [`TlsError::Params`] *(0.12.0)*.
     pub fn new(
         fingerprint: impl Into<String>,
         cert_pem: impl Into<String>,
@@ -1358,9 +1550,11 @@ impl IdentityJson {
         sent_at: i64,
         announcement: Option<&Announcement>,
     ) -> Result<Self, TlsError> {
+        let cert_pem = cert_pem.into();
+        check_cert_pem_len("cert_pem", &cert_pem)?;
         Ok(Self {
             fingerprint: fingerprint.into(),
-            cert_pem: cert_pem.into(),
+            cert_pem,
             not_after,
             mode,
             sent_at,
@@ -1403,7 +1597,8 @@ impl<'de> Deserialize<'de> for IdentityJson {
 
 /// Requires `fingerprint`, as lowercase hex with or without its `sha256:`
 /// prefix, to be the SHA-256 of the one certificate in `cert_pem`. The error
-/// says which of the two is wrong.
+/// says which of the two is wrong. A `cert_pem` over [`MAX_CERT_PEM_LEN`]
+/// bytes is refused by [`der_from_pem`] before it is parsed *(0.12.0)*.
 fn require_served_fingerprint(fingerprint: &str, cert_pem: &str) -> Result<(), String> {
     let not_one = |e: TlsError| format!("cert_pem is not exactly one X.509 certificate: {e}");
     let der = der_from_pem(cert_pem).map_err(not_one)?;

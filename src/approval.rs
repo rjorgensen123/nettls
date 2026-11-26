@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use crate::announcement::Announcement;
 use crate::canonical;
 use crate::error::{TlsError, to_hex};
-use crate::signature::from_hex;
+use crate::signature::signature_from_hex;
 
 /// Serialized operator approval (§6.4). A key the type does not know is
 /// refused when the JSON is read *(0.12.0)*.
@@ -201,7 +201,7 @@ impl Approval {
             approved_by: j.approved_by.clone(),
             timestamp: j.timestamp,
             key_id: j.key_id.clone(),
-            sig: from_hex(&j.sig)?,
+            sig: signature_from_hex(&j.sig, "sig")?,
         })
     }
 }

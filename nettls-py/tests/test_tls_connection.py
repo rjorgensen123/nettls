@@ -131,6 +131,18 @@ def test_a_wrong_pin_is_refused_and_leaves_an_alert_to_send(server_identity):
         client.read()
 
 
+def test_receive_holds_at_most_16_mib_and_takes_nothing_over_it(server_identity):
+    # 0.12.0: had the zero bytes been taken, rustls would refuse them as a
+    # record; the start of a record header that follows is taken quietly.
+    client = TlsConnection.client(
+        nettls.pinned_client_config(server_identity.fingerprint_sha256()), "localhost"
+    )
+    with pytest.raises(ValueError, match=r"at most 16777216 bytes .*: 0 are waiting and 16777217"):
+        client.receive(bytes(16 * 1024 * 1024 + 1))
+    client.receive(b"\x16\x03\x03")
+    assert client.is_handshaking()
+
+
 def test_garbage_instead_of_a_client_hello_is_refused(server_identity):
     server = TlsConnection.server(server_identity.server_config())
     with pytest.raises(OSError) as e:

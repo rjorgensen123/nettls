@@ -63,6 +63,37 @@ pyo3::create_exception!(
 /// The most `read` returns in one call.
 const MAX_READ: usize = 16 * 1024 * 1024;
 
+/// The most ciphertext `TlsConnection` holds that rustls has not taken yet
+/// (0.12.0).
+const MAX_QUEUED: usize = 16 * 1024 * 1024;
+
+/// The most entries of the ALPN list `TlsConnection.client` takes, the bound
+/// nettls's config builders put on theirs (0.12.0).
+const MAX_ALPN_ENTRIES: usize = 16;
+/// The longest entry of that list, in bytes (0.12.0).
+const MAX_ALPN_ENTRY_LEN: usize = 255;
+
+/// Refuses an ALPN list for `TlsConnection.client` by the rule and with the
+/// text of nettls's config builders, as `ParamsError` (0.12.0). The list goes
+/// to rustls directly, past those builders, so it is checked here.
+fn check_alpn(alpn: &[Vec<u8>]) -> PyResult<()> {
+    if alpn.len() > MAX_ALPN_ENTRIES {
+        return Err(err(nettls::TlsError::Params(format!(
+            "the ALPN list has {} entries, over the bound of {MAX_ALPN_ENTRIES}",
+            alpn.len()
+        ))));
+    }
+    for (i, entry) in alpn.iter().enumerate() {
+        if entry.is_empty() || entry.len() > MAX_ALPN_ENTRY_LEN {
+            return Err(err(nettls::TlsError::Params(format!(
+                "ALPN entry {i} is {} bytes; an entry is 1 to {MAX_ALPN_ENTRY_LEN} bytes",
+                entry.len()
+            ))));
+        }
+    }
+    Ok(())
+}
+
 /// A rustls client config, from `Trust.client_config()` or
 /// `pinned_client_config()`. `Stream.connect` and `TlsConnection.client`
 /// take it.
@@ -523,7 +554,8 @@ impl TlsConnection {
 #[pymethods]
 impl TlsConnection {
     /// The client side. `alpn`, when given, replaces the config's protocols
-    /// for this connection; an empty list offers none.
+    /// for this connection; an empty list offers none. It holds at most 16
+    /// entries of 1 to 255 bytes each, else `ParamsError` (0.12.0).
     #[staticmethod]
     #[pyo3(signature = (config, server_name, alpn = None))]
     fn client(
@@ -531,6 +563,9 @@ impl TlsConnection {
         server_name: &str,
         alpn: Option<Vec<Vec<u8>>>,
     ) -> PyResult<Self> {
+        if let Some(alpn) = &alpn {
+            check_alpn(alpn)?;
+        }
         let name = to_server_name(server_name)?;
         let conn = match alpn {
             Some(alpn) => ClientConnection::new_with_alpn(config.inner.clone(), name, alpn),
@@ -547,9 +582,19 @@ impl TlsConnection {
         Ok(Self::wrap(conn.into()))
     }
 
-    /// Ciphertext from the peer; what rustls cannot take yet waits here.
+    /// Ciphertext from the peer; what rustls cannot take yet waits here. At
+    /// most `MAX_QUEUED` (16 MiB) waits: data that would make more wait is a
+    /// `ValueError`, and none of it is taken (0.12.0).
     fn receive(&self, data: &[u8]) -> PyResult<()> {
         let mut inner = lock(&self.inner)?;
+        let waiting = inner.queue.len();
+        if waiting.saturating_add(data.len()) > MAX_QUEUED {
+            return Err(PyValueError::new_err(format!(
+                "receive holds at most {MAX_QUEUED} bytes of ciphertext not yet taken by rustls: \
+                 {waiting} are waiting and {} were given; none of them was taken",
+                data.len()
+            )));
+        }
         inner.queue.extend(data);
         inner.feed_behind_plaintext().map_err(io_err)
     }

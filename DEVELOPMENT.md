@@ -54,13 +54,27 @@ the [README](README.md) and under [`docs/`](docs/Home.md).
 `docs/API.md` states this rule at its top.
 
 **An input a change adds gets an upper bound,** an error that says so, and a line in
-`docs/API.md`. Bounded today: certificate names (SANs and the common name), fingerprints in
-messages, the certificate PEM in an announcement, the validity in days, the locked file and the
-envelope, and passwords; whatever reaches krypto is bounded by krypto's limits.
+`docs/API.md`. Bounded: certificate names (SANs and the common name) and their number,
+fingerprints in messages and the pin an operator writes, signatures read from messages, a
+certificate as PEM wherever nettls parses one for an announcement, an identity or a `Generation`, a
+certificate as DER wherever nettls parses one and the DER `cert_fingerprint_sha256` hashes, the size
+of a certificate nettls generates, the validity in days, certificate and key files and PEM given
+directly, the files the announcer keeps, the archive and its lines, peer names and their number,
+ALPN lists, PEM labels, the JSON text `loads` takes in Python, the ciphertext a Python
+`TlsConnection` holds, the locked file and the envelope, and passwords; whatever reaches krypto is
+bounded by krypto's limits. A file is checked against its bound before it is read, and no more than
+one byte past the bound is ever read.
 
-Not every existing input has a bound. Among those without one: files are read whole before they
-are checked, and a certificate given directly as PEM or DER, the number of names in a certificate
-and the names of peers have no limit.
+Not every existing input has a bound. Among those without one: the names, fingerprints and list of
+peers the status report takes (`PeerReport`, `Report::collect`); the `fingerprint` given to
+`IdentityJson::new`, and the `not_after` of an `IdentityJson`; the `supported` list of a
+`SupportStatement`, which `verify` joins before it checks it; the text the `message` calls of
+`Status`, `ModeCheck`, `ClockDrift` and `Deviation` put into their messages; the announcer's `name`
+and the fingerprints in its `OwnMaterial`, which `Announcer::new` keeps unchecked until `prepare`;
+the list `Schedule::restore_announced` takes; and text that is only compared, such as the name a
+`verify` expects, the peer given to `remove_peer` and the fingerprint given to
+`Generations::observed`. `Announcement::verify` hashes the receiver's own certificates
+(`prev_cert_der`, `curr_cert_der`) before the 1 MiB bound applies to them.
 
 **No input makes the crate panic.** Guard, for the announcement, the receipt and the approval, and
 the cases in the corpus (the handled message *(0.12.0)* is not in it): the error corpus

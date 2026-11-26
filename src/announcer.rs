@@ -118,24 +118,56 @@ pub struct Schedule {
     last_rolled: Option<i64>,
 }
 
+/// The most peers a [`Schedule`] holds *(0.12.0)*.
+const MAX_PEERS: usize = 1024;
+
 impl Schedule {
     /// New state machine. `attempt_at` is drawn with
     /// [`draw_roll_time`] from the certificate's issuance.
-    pub fn new(peers: impl IntoIterator<Item = String>, attempt_at: i64) -> Self {
-        Self {
-            state: ChainState::Idle { attempt_at },
-            peers: peers.into_iter().collect(),
-            last_rolled: None,
+    ///
+    /// Each peer name must be a component name, by
+    /// [`canonical::require_component_name`](crate::canonical::require_component_name),
+    /// and there are at most 1024 different peers. A name outside the rule, or
+    /// a list that goes over the bound, is [`TlsError::Params`], refused as soon
+    /// as it is met *(0.12.0)*.
+    pub fn new(peers: impl IntoIterator<Item = String>, attempt_at: i64) -> Result<Self, TlsError> {
+        let mut set = BTreeSet::new();
+        for (i, name) in peers.into_iter().enumerate() {
+            crate::canonical::require_component_name(&name, &format!("peer {i}"))?;
+            if set.len() == MAX_PEERS && !set.contains(&name) {
+                return Err(TlsError::Params(format!(
+                    "more than {MAX_PEERS} peers were given; a schedule holds at most {MAX_PEERS}"
+                )));
+            }
+            set.insert(name);
         }
+        Ok(Self {
+            state: ChainState::Idle { attempt_at },
+            peers: set,
+            last_rolled: None,
+        })
     }
 
     /// Register a peer. From now on it, too, must ack before we roll.
-    pub fn add_peer(&mut self, name: impl Into<String>) {
+    ///
+    /// The name must be a component name, and a schedule holds at most 1024
+    /// peers; a name outside the rule, or a new peer beyond the bound, is
+    /// [`TlsError::Params`], and nothing is changed *(0.12.0)*.
+    pub fn add_peer(&mut self, name: impl Into<String>) -> Result<(), TlsError> {
         let name = name.into();
+        crate::canonical::require_component_name(&name, "peer")?;
+        if self.peers.len() >= MAX_PEERS && !self.peers.contains(&name) {
+            return Err(TlsError::Params(format!(
+                "the schedule already holds {} peers, the bound is {MAX_PEERS}; the peer was not \
+                 added",
+                self.peers.len()
+            )));
+        }
         if let ChainState::Announced { waiting_for, .. } = &mut self.state {
             waiting_for.insert(name.clone());
         }
         self.peers.insert(name);
+        Ok(())
     }
 
     /// Remove a peer.
@@ -353,7 +385,9 @@ impl Announcer {
     /// Read the material back, locked or not.
     ///
     /// Without a password, what an interrupted save left in `dir` is settled
-    /// first, by the rule of [`CertSource::auto`] *(0.12.0)*.
+    /// first, by the rule of [`CertSource::auto`] *(0.12.0)*. With one, a
+    /// `material.locked` longer than [`lockbox::unlock`](crate::lockbox::unlock)
+    /// takes is refused before it is read *(0.12.0)*.
     fn load(&self, dir: &std::path::Path) -> Result<TlsMaterial, TlsError> {
         let Some(pw) = &self.password else {
             crate::material::settle_interrupted_save(dir)?;
@@ -362,8 +396,9 @@ impl Announcer {
                 dir.join(crate::material::KEY_FILE),
             ));
         };
-        let file = std::fs::read(dir.join(Self::LOCKED_FILE))
-            .map_err(|e| TlsError::io(dir.join(Self::LOCKED_FILE), e))?;
+        let path = dir.join(Self::LOCKED_FILE);
+        let mut f = std::fs::File::open(&path).map_err(|e| TlsError::io(&path, e))?;
+        let file = crate::lockbox::read_locked_file(&mut f, &path)?;
         let out = crate::lockbox::unlock(pw, &file)?;
         out.expose(|b| {
             // Split on the raw bytes — no `String` copy of the key on the way.
@@ -525,10 +560,19 @@ impl Announcer {
     }
 
     /// Reads the previous-key file. `None` when there is none.
+    ///
+    /// The file is checked against its bound before it is read *(0.12.0)*:
+    /// `previous-key.locked` against the longest file
+    /// [`lockbox::unlock`](crate::lockbox::unlock) takes, with
+    /// [`TlsError::Envelope`], and `previous-key.json` against
+    /// [`MAX_STATE_FILE_LEN`], with [`TlsError::Io`].
     fn read_previous(&self) -> Result<Option<PreviousOnDisk>, TlsError> {
         let path = self.previous_path();
-        let raw = match std::fs::read(&path) {
-            Ok(f) => f,
+        let raw = match std::fs::File::open(&path) {
+            Ok(mut f) => match &self.password {
+                Some(_) => crate::lockbox::read_locked_file(&mut f, &path)?,
+                None => read_state_file(&mut f, &path, "the previous-key file")?,
+            },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // If the OTHER form is there, the setup has changed under our
                 // feet — a password added or removed. Then the chain is
@@ -618,6 +662,27 @@ impl Announcer {
         }
         Ok(())
     }
+}
+
+/// The longest cleartext state file the announcer reads, `previous-key.json`
+/// and `pending-rotation.json`, in bytes *(0.12.0)*.
+const MAX_STATE_FILE_LEN: usize = 1024 * 1024;
+
+/// Reads the open cleartext state file `f`, found at `path` and named `what`.
+/// A file over [`MAX_STATE_FILE_LEN`] is [`TlsError::Io`], refused before it
+/// is read, and so is one that grows past the bound while it is read
+/// *(0.12.0)*.
+fn read_state_file(
+    f: &mut std::fs::File,
+    path: &std::path::Path,
+    what: &str,
+) -> Result<Vec<u8>, TlsError> {
+    crate::pem::read_capped(
+        f,
+        MAX_STATE_FILE_LEN,
+        |e| TlsError::io(path, e),
+        |len| crate::pem::over_bound(path, what, MAX_STATE_FILE_LEN, len),
+    )
 }
 
 /// The previous generation's key, as it lies on disk. A JSON key the type
@@ -729,7 +794,7 @@ mod tests {
 
     #[test]
     fn does_not_roll_until_everyone_has_acked() {
-        let mut r = Schedule::new(peers(), 100);
+        let mut r = Schedule::new(peers(), 100).unwrap();
         assert!(r.should_announce(100));
         r.announced(100);
 
@@ -750,7 +815,7 @@ mod tests {
     #[test]
     fn a_valid_receipt_strikes_the_name_and_an_invalid_one_does_not() {
         // 0.12.0: the state machine verifies the receipt before it strikes.
-        let mut r = Schedule::new(peers(), 0);
+        let mut r = Schedule::new(peers(), 0).unwrap();
         let (rc, key) = receipt("service");
         // Before anything is announced a receipt has nothing to acknowledge.
         assert!(r.acked("service", &rc, &key, FP).is_err());
@@ -779,7 +844,7 @@ mod tests {
     #[test]
     fn at_most_one_rotation_per_day() {
         // M-22. Caps the vector that amounts to forcing rotations.
-        let mut r = Schedule::new(vec!["service".to_string()], 0);
+        let mut r = Schedule::new(vec!["service".to_string()], 0).unwrap();
         r.announced(0);
         let (rc, key) = receipt("service");
         r.acked("service", &rc, &key, FP).unwrap();
@@ -799,7 +864,7 @@ mod tests {
 
     #[test]
     fn rolling_schedules_the_next_round() {
-        let mut r = Schedule::new(vec!["service".to_string()], 0);
+        let mut r = Schedule::new(vec!["service".to_string()], 0).unwrap();
         r.announced(0);
         let (rc, key) = receipt("service");
         r.acked("service", &rc, &key, FP).unwrap();
@@ -818,7 +883,7 @@ mod tests {
     fn announced_is_idempotent() {
         // The announcement is republished until everyone has acked (§6.8a) —
         // and that must not reset who has already answered.
-        let mut r = Schedule::new(peers(), 0);
+        let mut r = Schedule::new(peers(), 0).unwrap();
         r.announced(0);
         let (rc, key) = receipt("service");
         r.acked("service", &rc, &key, FP).unwrap();
@@ -949,7 +1014,7 @@ mod retry_tests {
     use super::*;
 
     fn r() -> Schedule {
-        let mut r = Schedule::new(vec!["service".to_string(), "portal".to_string()], 0);
+        let mut r = Schedule::new(vec!["service".to_string(), "portal".to_string()], 0).unwrap();
         r.announced(0);
         r
     }
@@ -1526,11 +1591,16 @@ impl Announcer {
     ///
     /// nettls keeps no register of its own: the consumer's list, which goes
     /// into [`Schedule::new`] at start, must change too.
+    ///
+    /// The name is checked as [`Schedule::add_peer`] checks it: a name that is
+    /// not a component name, or a new peer beyond 1024, is
+    /// [`TlsError::Params`], and neither the schedule nor the saved promise
+    /// changes *(0.12.0)*.
     pub fn add_peer(&self, name: impl Into<String>) -> Result<(), TlsError> {
         self.schedule
             .write()
             .map_err(|_| TlsError::poisoned("the rotation lock"))?
-            .add_peer(name);
+            .add_peer(name)?;
         self.save_pending()
     }
 
@@ -2019,15 +2089,34 @@ impl Announcer {
     /// key lies where it was written in `prepare`. A promise whose certificate
     /// is already the current one was switched before the restart; only its
     /// cleanup is left, and that is done here *(0.10.0)*.
+    ///
+    /// A file over [`MAX_STATE_FILE_LEN`] is [`TlsError::Io`], refused before
+    /// it is read, and a `new_cert_pem` in it over
+    /// [`MAX_CERT_PEM_LEN`](crate::announcement::MAX_CERT_PEM_LEN) bytes is
+    /// [`TlsError::Params`] *(0.12.0)*.
     fn restore_pending(&self) -> Result<bool, TlsError> {
         let path = self.dir.join(PENDING_FILE);
-        let text = match std::fs::read_to_string(&path) {
-            Ok(t) => t,
+        let mut file = match std::fs::File::open(&path) {
+            Ok(f) => f,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(e) => return Err(TlsError::io(&path, e)),
         };
+        let text = String::from_utf8(read_state_file(&mut file, &path, "the pending file")?)
+            .map_err(|_| {
+                TlsError::io(
+                    &path,
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "stream did not contain valid UTF-8",
+                    ),
+                )
+            })?;
         let on_disk: PendingOnDisk = serde_json::from_str(&text)
             .map_err(|e| TlsError::Proof(format!("the pending file could not be parsed: {e}")))?;
+        crate::announcement::check_cert_pem_len(
+            "new_cert_pem in the pending file",
+            &on_disk.new_cert_pem,
+        )?;
 
         let k = Announcement::from_json(&on_disk.announcement)?;
         let current = self
@@ -2183,7 +2272,7 @@ mod restart_and_deviation_tests {
     fn restore_preserves_who_has_acked() {
         // Without this a restart would reset who has answered, and a peer
         // would have to ack again for no reason.
-        let mut r = Schedule::new(vec!["service".to_string(), "portal".to_string()], 0);
+        let mut r = Schedule::new(vec!["service".to_string(), "portal".to_string()], 0).unwrap();
         r.restore_announced(vec!["portal".to_string()], 500);
         assert_eq!(r.waiting_for(), vec!["portal"]);
         assert_eq!(r.first_announced(), Some(500));
@@ -2193,7 +2282,7 @@ mod restart_and_deviation_tests {
     fn restore_preserves_the_alarm_clock() {
         // M-26, and the part that is easy to get wrong: restart often enough,
         // with the clock reset every time, and the alarm NEVER fires.
-        let mut r = Schedule::new(vec!["service".to_string()], 0);
+        let mut r = Schedule::new(vec!["service".to_string()], 0).unwrap();
         r.restore_announced(vec!["service".to_string()], 0);
         assert!(
             r.alarm(ALARM_AFTER_S),
@@ -2310,7 +2399,7 @@ mod poisoned_tests {
                     material.anchor_pkcs8().unwrap(),
                 ),
             },
-            Schedule::new(vec!["service".to_string()], 0),
+            Schedule::new(vec!["service".to_string()], 0).unwrap(),
             None,
         )
         .unwrap();
@@ -2332,5 +2421,199 @@ mod poisoned_tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod bound_tests {
+    use super::*;
+    use crate::announcement::MAX_CERT_PEM_LEN;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let d =
+            std::env::temp_dir().join(format!("nettls-announcer-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// Makes the file at `path` `len` bytes long without writing data: the
+    /// file is created if missing and extended with a hole of zero bytes.
+    fn set_len(path: &std::path::Path, len: usize) {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .unwrap()
+            .set_len(len as u64)
+            .unwrap();
+    }
+
+    fn anchor() -> TlsMaterial {
+        TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::new(
+            "localhost",
+            ["localhost"],
+        )))
+        .unwrap()
+    }
+
+    /// An announcer named "gateway" over `dir`, anchored in `anchor` and
+    /// waiting for "service".
+    fn announcer(
+        dir: &std::path::Path,
+        anchor: &TlsMaterial,
+        password: Option<&str>,
+    ) -> Result<Announcer, TlsError> {
+        Announcer::new(
+            "gateway",
+            dir,
+            SelfSignedParams::new("localhost", ["localhost"]),
+            Arc::new(RotatingResolver::new(anchor).unwrap()),
+            OwnMaterial {
+                previous: None,
+                current: (anchor.fingerprint_sha256(), anchor.anchor_pkcs8().unwrap()),
+            },
+            Schedule::new(vec!["service".to_string()], 0).unwrap(),
+            password.map(|p| krypto::SecretString::from_string(p.to_string()).unwrap()),
+        )
+    }
+
+    fn refused(made: Result<Announcer, TlsError>) -> TlsError {
+        match made {
+            Ok(_) => panic!("the announcer was made"),
+            Err(e) => e,
+        }
+    }
+
+    #[test]
+    fn a_locked_file_over_the_bound_is_refused_before_it_is_read() {
+        // 0.12.0: `lockbox::unlock` refuses such a file too, but only once it
+        // has been read whole; this refusal says it was not read.
+        let d = scratch("locked");
+        let anchor = anchor();
+        let max = crate::lockbox::MAX_FILE_LEN;
+        let text = format!("is too long: {} bytes, at most {max}", max + 1);
+
+        let previous = d.join(Announcer::PREVIOUS_LOCKED_FILE);
+        set_len(&previous, max + 1);
+        let err = refused(announcer(&d, &anchor, Some("secret")));
+        assert!(matches!(err, TlsError::Envelope(_)), "{err:?}");
+        assert!(err.to_string().contains(&text), "{err}");
+        assert!(err.to_string().contains("it was not read"), "{err}");
+        std::fs::remove_file(&previous).unwrap();
+
+        // The locked pair in `new/` is read when a promised rotation is
+        // restored.
+        announcer(&d, &anchor, Some("secret"))
+            .unwrap()
+            .prepare(100)
+            .unwrap();
+        set_len(&d.join("new").join(Announcer::LOCKED_FILE), max + 1);
+        let err = refused(announcer(&d, &anchor, Some("secret")));
+        assert!(err.to_string().contains(&text), "{err}");
+        assert!(err.to_string().contains("it was not read"), "{err}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_cleartext_state_file_over_1_mib_is_refused_before_it_is_read() {
+        // 0.12.0
+        let d = scratch("cleartext");
+        let anchor = anchor();
+        let over = MAX_STATE_FILE_LEN + 1;
+
+        // At the bound the file is read, and refused as JSON it cannot parse.
+        let previous = d.join(Announcer::PREVIOUS_CLEARTEXT_FILE);
+        set_len(&previous, MAX_STATE_FILE_LEN);
+        let err = refused(announcer(&d, &anchor, None));
+        assert!(matches!(err, TlsError::Chain(_)), "{err:?}");
+        set_len(&previous, over);
+        let err = refused(announcer(&d, &anchor, None));
+        assert!(matches!(err, TlsError::Io { .. }), "{err:?}");
+        assert!(
+            err.to_string().contains(
+                "the previous-key file is 1048577 bytes, over the bound of 1048576 bytes"
+            ),
+            "{err}"
+        );
+        std::fs::remove_file(&previous).unwrap();
+
+        set_len(&d.join(PENDING_FILE), over);
+        let err = refused(announcer(&d, &anchor, None));
+        assert!(matches!(err, TlsError::Io { .. }), "{err:?}");
+        assert!(
+            err.to_string()
+                .contains("the pending file is 1048577 bytes, over the bound of 1048576 bytes"),
+            "{err}"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_pending_file_whose_new_cert_pem_is_over_the_bound_is_refused() {
+        // 0.12.0: the announcement in the file is left as it was written.
+        let d = scratch("pending-pem");
+        let anchor = anchor();
+        announcer(&d, &anchor, None).unwrap().prepare(100).unwrap();
+        let path = d.join(PENDING_FILE);
+        let mut on_disk: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let pem = on_disk["new_cert_pem"].as_str().unwrap().to_string();
+        on_disk["new_cert_pem"] =
+            format!("{pem}{}", "\n".repeat(MAX_CERT_PEM_LEN + 1 - pem.len())).into();
+        std::fs::write(&path, on_disk.to_string()).unwrap();
+
+        let err = refused(announcer(&d, &anchor, None));
+        assert!(matches!(err, TlsError::Params(_)), "{err:?}");
+        assert!(
+            err.to_string().contains(
+                "new_cert_pem in the pending file is 16385 bytes, over the bound of 16384 bytes"
+            ),
+            "{err}"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_peer_outside_the_name_rule_or_beyond_1024_is_refused_and_nothing_changes() {
+        // 0.12.0
+        let err = Schedule::new(vec!["service".to_string(), "Portal".to_string()], 0).unwrap_err();
+        assert!(matches!(err, TlsError::Params(_)), "{err:?}");
+        assert!(
+            err.to_string()
+                .contains("peer 1: the character 'P' is outside [a-z0-9-]"),
+            "{err}"
+        );
+
+        let names = |n: usize| (0..n).map(|i| format!("p{i}")).collect::<Vec<_>>();
+        let err = Schedule::new(names(MAX_PEERS + 1), 0).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("more than 1024 peers were given; a schedule holds at most 1024"),
+            "{err}"
+        );
+        let mut full = Schedule::new(names(MAX_PEERS), 0).unwrap();
+        full.announced(0);
+        let before = full.state().clone();
+        let err = full.add_peer("p-new").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("the schedule already holds 1024 peers, the bound is 1024"),
+            "{err}"
+        );
+        assert!(full.add_peer("Portal").is_err());
+        assert_eq!(full.state(), &before);
+
+        // The announcer refuses the same, and the saved promise is left as it was.
+        let d = scratch("peers");
+        let a = announcer(&d, &anchor(), None).unwrap();
+        a.prepare(100).unwrap();
+        let saved = std::fs::read(d.join(PENDING_FILE)).unwrap();
+        let err = a.add_peer("Portal").unwrap_err();
+        assert!(matches!(err, TlsError::Params(_)), "{err:?}");
+        assert_eq!(std::fs::read(d.join(PENDING_FILE)).unwrap(), saved);
+        assert_eq!(a.status(0, 0).unwrap().waiting_for, vec!["service"]);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

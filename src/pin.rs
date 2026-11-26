@@ -59,7 +59,8 @@ use krypto::{ct_eq, sha256};
 /// `fingerprint_sha256` is the value [`crate::TlsMaterial::fingerprint_sha256`]
 /// gives. The format is tolerant (colons, uppercase and a `sha256:` prefix are
 /// fine), but the length is not — a typo yields an error, never a config that
-/// accepts more than it should.
+/// accepts more than it should. A text over 256 bytes is
+/// [`TlsError::Fingerprint`], refused before it is read *(0.12.0)*.
 ///
 /// No ALPN is set. If you need that, use
 /// [`pinned_client_config_with_alpn`].
@@ -67,7 +68,8 @@ pub fn pinned_client_config(fingerprint_sha256: &str) -> Result<Arc<ClientConfig
     pinned_client_config_with_alpn(fingerprint_sha256, &[])
 }
 
-/// Like [`pinned_client_config`], but with an ALPN list.
+/// Like [`pinned_client_config`], but with an ALPN list, checked as
+/// [`pinned_client_config_with`] checks it.
 pub fn pinned_client_config_with_alpn(
     fingerprint_sha256: &str,
     alpn: &[Vec<u8>],
@@ -84,6 +86,9 @@ pub fn pinned_client_config_with_alpn(
 /// [`TransportPolicy`](crate::transport::TransportPolicy) (0.8.3) and an
 /// explicit [`Expiry`] (0.11.0). Without a policy, the client offers the
 /// default: **AES-256-GCM only**; the short forms use [`Expiry::Enforce`].
+///
+/// The ALPN list holds at most 16 entries of 1 to 255 bytes each; any other
+/// list is [`TlsError::Params`] *(0.12.0)*.
 pub fn pinned_client_config_with(
     fingerprint_sha256: &str,
     alpn: &[Vec<u8>],
@@ -123,6 +128,9 @@ pub fn unverified_client_config() -> Result<Arc<ClientConfig>, TlsError> {
 /// Like [`unverified_client_config`], with ALPN and an explicit
 /// [`TransportPolicy`](crate::transport::TransportPolicy), for a peer that
 /// does not use the default cipher *(0.11.0)*.
+///
+/// The ALPN list is checked as [`pinned_client_config_with`] checks it
+/// *(0.12.0)*.
 pub fn unverified_client_config_with(
     alpn: &[Vec<u8>],
     transport: &crate::transport::TransportPolicy,
@@ -135,12 +143,14 @@ pub fn unverified_client_config_with(
 }
 
 /// A client config over `verifier`: TLS 1.3 and 1.2, no client
-/// authentication, no resumption.
+/// authentication, no resumption. The ALPN list is checked by
+/// `transport::check_alpn` first *(0.12.0)*.
 fn build(
     provider: Arc<CryptoProvider>,
     verifier: Arc<dyn ServerCertVerifier>,
     alpn: &[Vec<u8>],
 ) -> Result<Arc<ClientConfig>, TlsError> {
+    crate::transport::check_alpn(alpn)?;
     let mut cfg = ClientConfig::builder_with_provider(provider)
         .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
         .map_err(|e| TlsError::Rustls(e.to_string()))?

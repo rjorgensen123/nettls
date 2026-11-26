@@ -305,7 +305,7 @@ async fn announcer_rolls_only_when_receipt_is_in() {
             previous: None,
             current: (c0.fp_bar(), c0.key()),
         },
-        Schedule::new(vec!["service".to_string()], 0),
+        Schedule::new(vec!["service".to_string()], 0).unwrap(),
         None,
     )
     .unwrap();
@@ -404,7 +404,7 @@ async fn the_promise_survives_a_restart() {
                 previous: None,
                 current: (c0.fp_bar(), c0.key()),
             },
-            Schedule::new(vec!["service".to_string()], 0),
+            Schedule::new(vec!["service".to_string()], 0).unwrap(),
             None,
         )
         .unwrap();
@@ -425,7 +425,7 @@ async fn the_promise_survives_a_restart() {
             previous: None,
             current: (c0.fp_bar(), c0.key()),
         },
-        Schedule::new(vec!["service".to_string()], 0),
+        Schedule::new(vec!["service".to_string()], 0).unwrap(),
         None,
     )
     .unwrap();
@@ -505,7 +505,7 @@ async fn keys_are_locked_when_password_is_set() {
             previous: None,
             current: (c0.fp_bar(), c0.key()),
         },
-        Schedule::new(vec!["service".to_string()], 0),
+        Schedule::new(vec!["service".to_string()], 0).unwrap(),
         Some(pw),
     )
     .unwrap();
@@ -612,7 +612,7 @@ async fn previous_key_survives_restart_after_two_rotations() {
             params.clone(),
             resolver.clone(),
             material,
-            Schedule::new(vec!["service".to_string()], 0),
+            Schedule::new(vec!["service".to_string()], 0).unwrap(),
             None,
         )
     };
@@ -679,7 +679,7 @@ async fn the_gate_postpones_the_switch_without_side_effects() {
             previous: None,
             current: (c0.fp_bar(), c0.key()),
         },
-        Schedule::new(vec!["service".to_string()], 0),
+        Schedule::new(vec!["service".to_string()], 0).unwrap(),
         None,
     )
     .unwrap();
@@ -819,7 +819,7 @@ fn announcer_in(
             previous: None,
             current: (c0.fp_bar(), c0.key()),
         },
-        Schedule::new(vec!["service".to_string()], 0),
+        Schedule::new(vec!["service".to_string()], 0).unwrap(),
         None,
     )
     .unwrap()
@@ -1108,7 +1108,7 @@ fn announcer_for(dir: &std::path::Path, c0: &Gen, peers: &[&str]) -> nettls::ann
             previous: None,
             current: (c0.fp_bar(), c0.key()),
         },
-        Schedule::new(peers.iter().map(|p| p.to_string()).collect::<Vec<_>>(), 0),
+        Schedule::new(peers.iter().map(|p| p.to_string()).collect::<Vec<_>>(), 0).unwrap(),
         Some(krypto::SecretString::from_string("secret".into()).unwrap()),
     )
     .unwrap()
@@ -1136,7 +1136,7 @@ fn a_password_over_krypto_limit_is_refused_at_construction() {
             previous: None,
             current: (c0.fp_bar(), c0.key()),
         },
-        Schedule::new(vec!["service".to_string()], 0),
+        Schedule::new(vec!["service".to_string()], 0).unwrap(),
         Some(krypto::SecretString::from_string("p".repeat(max + 1)).unwrap()),
     )
     .err()
@@ -1353,7 +1353,7 @@ fn restart_after_editing_previous_key(
             previous: None,
             current: (c0.fp_bar(), c0.key()),
         },
-        Schedule::new(vec!["service".to_string()], 0),
+        Schedule::new(vec!["service".to_string()], 0).unwrap(),
         None,
     );
     let _ = std::fs::remove_dir_all(&dir);
@@ -1438,7 +1438,7 @@ fn a_pending_file_with_an_unknown_key_is_refused_at_start() {
             previous: None,
             current: (c0.fp_bar(), c0.key()),
         },
-        Schedule::new(vec!["service".to_string()], 0),
+        Schedule::new(vec!["service".to_string()], 0).unwrap(),
         None,
     )
     .err()

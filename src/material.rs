@@ -33,6 +33,16 @@ pub const KEY_FILE: &str = "key.pem";
 /// surprise in the browser months later.
 pub const MAX_VALID_DAYS: u32 = 397;
 
+/// The most bytes nettls reads or takes for a certificate or a key: a
+/// certificate or key file, PEM given to [`CertSource::pem`], the DER given to
+/// [`cert_fingerprint_sha256`], and a certificate given as DER to be parsed
+/// *(0.12.0)*.
+pub(crate) const MAX_MATERIAL_LEN: usize = 1024 * 1024;
+
+/// The most names [`SelfSignedParams::sans`] may hold when a certificate is
+/// generated *(0.12.0)*.
+const MAX_SANS: usize = 100;
+
 /// Where the material came from. Pure information for the consumer — in
 /// particular [`CertOrigin::Ephemeral`], which the consumer **should log as a
 /// warning**.
@@ -80,6 +90,7 @@ pub struct SelfSignedParams {
     pub common_name: String,
     /// SAN list: DNS names **and** IP addresses. Strings that parse as an
     /// IP address automatically become IP SANs, the rest become DNS SANs.
+    /// At most 100 names *(0.12.0)*.
     ///
     /// **Without an IP SAN, `https://<ip>:8080` fails** with
     /// `ERR_CERT_COMMON_NAME_INVALID`, which is considerably harder for the
@@ -187,6 +198,10 @@ impl CertSource {
     /// not build the chain itself — with the intermediate missing, some
     /// clients fail and others don't, which is the classic "works on my
     /// machine" trap.
+    ///
+    /// Each file is at most 1 MiB: a longer one is [`TlsError::Io`] at
+    /// [`TlsMaterial::load`], refused before it is read, and a file that grows
+    /// past 1 MiB while it is read is refused too *(0.12.0)*.
     pub fn files(cert_path: impl Into<PathBuf>, key_path: impl Into<PathBuf>) -> Self {
         Self {
             kind: Kind::Files {
@@ -207,6 +222,10 @@ impl CertSource {
     /// `load` does not compare the validity dates with the clock, so an expired
     /// certificate loads: [`TlsMaterial::is_valid_now`] and
     /// [`TlsMaterial::days_until_expiry`] are the calls for the dates.
+    ///
+    /// The certificate PEM and the key PEM are each at most 1 MiB: a longer
+    /// one is [`TlsError::Params`] at `load`, refused before it is parsed
+    /// *(0.12.0)*.
     pub fn pem(cert_pem: impl Into<Vec<u8>>, key_pem: impl Into<Vec<u8>>) -> Self {
         Self {
             kind: Kind::Pem {
@@ -305,10 +324,17 @@ impl TlsMaterial {
                 cert_path,
                 key_path,
             } => {
-                let cert_pem = fs::read(cert_path).map_err(|e| TlsError::io(cert_path, e))?;
-                // Straight into locked memory; `from_vec` zeroizes the read buffer.
-                let key_pem =
-                    secret::hold(fs::read(key_path).map_err(|e| TlsError::io(key_path, e))?)?;
+                let cert_pem = read_cert_file(cert_path)?;
+                // Straight into locked memory, through a buffer that is never
+                // reallocated and is wiped.
+                let mut key_file =
+                    fs::File::open(key_path).map_err(|e| TlsError::io(key_path, e))?;
+                let key_pem = pem::read_capped_secret(
+                    &mut key_file,
+                    MAX_MATERIAL_LEN,
+                    |e| TlsError::io(key_path, e),
+                    |len| pem::over_bound(key_path, "the key file", MAX_MATERIAL_LEN, len),
+                )?;
                 key_pem
                     .expose(|k| Self::from_pem(&cert_pem, k, CertOrigin::Files))
                     .map_err(|e| match e {
@@ -384,8 +410,21 @@ impl TlsMaterial {
         Ok(m)
     }
 
+    /// Parses the chain and the key. Either PEM over [`MAX_MATERIAL_LEN`] is
+    /// [`TlsError::Params`], refused before it is parsed *(0.12.0)*.
     fn from_pem(cert_pem: &[u8], key_pem: &[u8], origin: CertOrigin) -> Result<Self, TlsError> {
         use rustls_pki_types::pem::PemObject;
+        for (what, len) in [
+            ("the certificate PEM", cert_pem.len()),
+            ("the key PEM", key_pem.len()),
+        ] {
+            if len > MAX_MATERIAL_LEN {
+                return Err(TlsError::Params(format!(
+                    "{what} is {len} bytes, over the bound of {MAX_MATERIAL_LEN} bytes; it was not \
+                     parsed"
+                )));
+            }
+        }
         let chain: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(cert_pem)
             .collect::<Result<_, _>>()
             .map_err(|e| TlsError::Pem(format!("could not read CERTIFICATE blocks: {e}")))?;
@@ -559,17 +598,23 @@ impl TlsMaterial {
     /// Pass an empty list to turn ALPN off. To serve HTTP/1.1 without h2, use
     /// `&[b"http/1.1".to_vec()]` — but always keep `http/1.1` in the list if
     /// browsers are to reach the service.
+    ///
+    /// The list is checked as [`TlsMaterial::server_config_with`] checks it.
     pub fn server_config_with_alpn(&self, alpn: &[Vec<u8>]) -> Result<Arc<ServerConfig>, TlsError> {
         self.server_config_with(alpn, &TransportPolicy::default())
     }
 
     /// Like [`TlsMaterial::server_config_with_alpn`], with an explicit
     /// [`TransportPolicy`](crate::transport::TransportPolicy) (0.8.3).
+    ///
+    /// The ALPN list holds at most 16 entries of 1 to 255 bytes each; any
+    /// other list is [`TlsError::Params`] *(0.12.0)*.
     pub fn server_config_with(
         &self,
         alpn: &[Vec<u8>],
         transport: &TransportPolicy,
     ) -> Result<Arc<ServerConfig>, TlsError> {
+        crate::transport::check_alpn(alpn)?;
         // `builder_with_provider`, NEVER `builder()`: that keeps the provider
         // choice local and explicit instead of depending on process-global
         // state that a transitive dependency may have broken.
@@ -600,10 +645,25 @@ impl TlsMaterial {
     /// in place, its key is left in the temp file, and the error says so. What
     /// an earlier, interrupted save left in `dir` is settled first, by the rule
     /// of [`CertSource::auto`].
+    ///
+    /// A chain or a key whose PEM would be over 1 MiB, which the next load
+    /// refuses, is [`TlsError::Params`], and nothing is written or changed on
+    /// disk *(0.12.0)*.
     pub fn save_pem(&self, dir: &Path) -> Result<(), TlsError> {
         // Both PEMs are built before the directory or either file is touched,
         // so a failure here leaves the stored pair as it was.
         let (cert_pem, key_pem) = self.pem_pair()?;
+        for (what, len) in [
+            ("the certificate chain", cert_pem.len()),
+            ("the key", key_pem.len()),
+        ] {
+            if len > MAX_MATERIAL_LEN {
+                return Err(TlsError::Params(format!(
+                    "{what} is {len} bytes as PEM, over the bound of {MAX_MATERIAL_LEN} bytes; \
+                     nothing was written"
+                )));
+            }
+        }
         pem::create_private_dir(dir)?;
         settle_interrupted_save(dir)?;
         key_pem.expose(|k| {
@@ -679,8 +739,9 @@ fn present(path: &Path) -> Result<bool, TlsError> {
 /// A temp entry that is a symbolic link is removed and never read through. A
 /// temp entry that is not a regular file, or that cannot be read or removed, is
 /// an error that names it, and so is a certificate in place that cannot be
-/// read. Called before every save of the pair, and wherever nettls loads a pair
-/// from a directory it writes to itself.
+/// read. A temp key, or a certificate in place, over 1 MiB is such an error
+/// too, and is not read *(0.12.0)*. Called before every save of the pair, and
+/// wherever nettls loads a pair from a directory it writes to itself.
 pub(crate) fn settle_interrupted_save(dir: &Path) -> Result<(), TlsError> {
     let cert_path = dir.join(CERT_FILE);
     let key_path = dir.join(KEY_FILE);
@@ -729,15 +790,33 @@ fn temp_key_belongs(
     key_tmp: &Path,
     seen: &fs::Metadata,
 ) -> Result<bool, TlsError> {
-    let cert_pem = match fs::read(cert_path) {
-        Ok(b) => b,
+    let mut cert_file = match fs::File::open(cert_path) {
+        Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(TlsError::io(cert_path, e)),
     };
+    let cert_pem = read_open_cert_file(&mut cert_file, cert_path)?;
     let key_pem = pem::read_temp(key_tmp, seen)?;
     Ok(key_pem
         .expose(|k| TlsMaterial::from_pem(&cert_pem, k, CertOrigin::Files))
         .is_ok())
+}
+
+/// Reads the certificate file at `path`. A file over [`MAX_MATERIAL_LEN`] is
+/// [`TlsError::Io`] and is not read *(0.12.0)*.
+fn read_cert_file(path: &Path) -> Result<Vec<u8>, TlsError> {
+    let mut f = fs::File::open(path).map_err(|e| TlsError::io(path, e))?;
+    read_open_cert_file(&mut f, path)
+}
+
+/// [`read_cert_file`] for a file already opened.
+fn read_open_cert_file(f: &mut fs::File, path: &Path) -> Result<Vec<u8>, TlsError> {
+    pem::read_capped(
+        f,
+        MAX_MATERIAL_LEN,
+        |e| TlsError::io(path, e),
+        |len| pem::over_bound(path, "the certificate file", MAX_MATERIAL_LEN, len),
+    )
 }
 
 /// [`TlsError::KeyMismatch`] with rustls' reason and the SHA-256 fingerprint of
@@ -784,9 +863,20 @@ fn now_unix() -> i64 {
 
 /// Reads `der` as exactly one X.509 certificate. Bytes that do not parse, and
 /// bytes left over after the certificate, are a [`TlsError::Certificate`].
+///
+/// More than [`MAX_MATERIAL_LEN`] bytes is [`TlsError::Params`], refused before
+/// they are parsed *(0.12.0)*. Every public call that takes a certificate as
+/// DER and parses it comes through here.
 pub(crate) fn read_certificate(
     der: &[u8],
 ) -> Result<x509_parser::certificate::X509Certificate<'_>, TlsError> {
+    if der.len() > MAX_MATERIAL_LEN {
+        return Err(TlsError::Params(format!(
+            "the certificate DER is {} bytes, over the bound of {MAX_MATERIAL_LEN} bytes; it was \
+             not parsed",
+            der.len()
+        )));
+    }
     let (rest, cert) = x509_parser::certificate::X509Certificate::from_der(der)
         .map_err(|e| TlsError::Certificate(e.to_string()))?;
     if !rest.is_empty() {
@@ -873,6 +963,11 @@ fn format_ip(bytes: &[u8]) -> String {
 }
 
 /// Generates a self-signed ECDSA P-256 certificate.
+///
+/// More than [`MAX_SANS`] names is [`TlsError::Params`], refused before a name
+/// is looked at, and so is a certificate whose PEM would be over
+/// [`MAX_CERT_PEM_LEN`](crate::announcement::MAX_CERT_PEM_LEN), the most an
+/// announcement carries *(0.12.0)*.
 fn generate(
     params: &SelfSignedParams,
 ) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>), TlsError> {
@@ -882,6 +977,12 @@ fn generate(
              certificate would be rejected. Include every name and every IP the operators use."
                 .to_string(),
         ));
+    }
+    if params.sans.len() > MAX_SANS {
+        return Err(TlsError::Params(format!(
+            "the SAN list has {} names, over the bound of {MAX_SANS}",
+            params.sans.len()
+        )));
     }
     if params.valid_days == 0 || params.valid_days > MAX_VALID_DAYS {
         return Err(TlsError::Params(format!(
@@ -921,6 +1022,16 @@ fn generate(
     let cert = p
         .self_signed(&key)
         .map_err(|e| TlsError::Generate(e.to_string()))?;
+    // A certificate nettls generates must fit in the announcement that carries
+    // it at a rotation, as the PEM `Announcer::prepare` builds.
+    let max_pem = crate::announcement::MAX_CERT_PEM_LEN;
+    let pem_len = pem::encode("CERTIFICATE", cert.der())?.len();
+    if pem_len > max_pem {
+        return Err(TlsError::Params(format!(
+            "the generated certificate is {pem_len} bytes as PEM, over the bound of {max_pem} \
+             bytes an announcement carries; use fewer or shorter names"
+        )));
+    }
 
     let chain = vec![cert.der().clone()];
     let key_der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key.serialize_der()));
@@ -1095,8 +1206,16 @@ fn validate_common_name(cn: &str) -> Result<(), TlsError> {
 /// the certificate is sent in cleartext in every handshake anyway).
 ///
 /// Fails with [`TlsError::Encode`] when the fingerprint cannot be encoded as
-/// hex *(0.12.0)*.
+/// hex *(0.12.0)*. More than 1 MiB of DER is [`TlsError::Params`], refused
+/// before it is hashed *(0.12.0)*.
 pub fn cert_fingerprint_sha256(cert_der: &[u8]) -> Result<String, TlsError> {
+    if cert_der.len() > MAX_MATERIAL_LEN {
+        return Err(TlsError::Params(format!(
+            "the certificate DER is {} bytes, over the bound of {MAX_MATERIAL_LEN} bytes; it was \
+             not hashed",
+            cert_der.len()
+        )));
+    }
     to_hex("the certificate fingerprint", &sha256(cert_der))
 }
 
@@ -1113,6 +1232,199 @@ mod tests {
         let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
         let cert = p.self_signed(&key).unwrap();
         CertSource::pem(cert.pem(), key.serialize_pem())
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("nettls-material-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// Makes the file at `path` `len` bytes long without writing data: a file
+    /// that grows is extended with a hole of zero bytes.
+    fn set_len(path: &Path, len: usize) {
+        fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_len(len as u64)
+            .unwrap();
+    }
+
+    #[test]
+    fn a_certificate_or_key_over_1_mib_is_refused_before_it_is_read() {
+        // 0.12.0: the two files of a pair, the temp key an interrupted save
+        // left and the certificate it is checked against, and PEM given
+        // directly.
+        let d = scratch("over-1-mib");
+        let m = TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::default())).unwrap();
+        m.save_pem(&d).unwrap();
+        let (cert, key) = (d.join(CERT_FILE), d.join(KEY_FILE));
+        let key_pem = fs::read(&key).unwrap();
+        let files = CertSource::files(&cert, &key);
+        let over = MAX_MATERIAL_LEN + 1;
+        let refused = |err: TlsError, what: &str| {
+            let text =
+                format!("{what} is {over} bytes, over the bound of {MAX_MATERIAL_LEN} bytes");
+            assert!(err.to_string().contains(&text), "{err}");
+            err
+        };
+
+        // At the bound the file is read; the hole after the PEM is not a block.
+        set_len(&cert, MAX_MATERIAL_LEN);
+        TlsMaterial::load(&files).unwrap();
+        set_len(&cert, over);
+        let err = refused(
+            TlsMaterial::load(&files).unwrap_err(),
+            "the certificate file",
+        );
+        assert!(matches!(err, TlsError::Io { .. }), "{err:?}");
+
+        m.save_pem(&d).unwrap();
+        set_len(&key, over);
+        let err = refused(TlsMaterial::load(&files).unwrap_err(), "the key file");
+        assert!(matches!(err, TlsError::Io { .. }), "{err:?}");
+
+        // A temp key alone is read when the pair is settled, and so is the
+        // certificate in place.
+        let auto = CertSource::auto(&d, SelfSignedParams::default());
+        fs::write(&key, &key_pem).unwrap();
+        let key_tmp = pem::temp_path(&key);
+        fs::write(&key_tmp, &key_pem).unwrap();
+        set_len(&key_tmp, over);
+        refused(
+            TlsMaterial::load(&auto).unwrap_err(),
+            "the temp key file an interrupted save left",
+        );
+        fs::write(&key_tmp, &key_pem).unwrap();
+        set_len(&cert, over);
+        refused(
+            TlsMaterial::load(&auto).unwrap_err(),
+            "the certificate file",
+        );
+
+        let (cert_pem, _) = m.pem_pair().unwrap();
+        let err = refused(
+            TlsMaterial::load(&CertSource::pem(vec![b'\n'; over], key_pem.clone())).unwrap_err(),
+            "the certificate PEM",
+        );
+        assert!(matches!(err, TlsError::Params(_)), "{err:?}");
+        let err = refused(
+            TlsMaterial::load(&CertSource::pem(cert_pem, vec![b'\n'; over])).unwrap_err(),
+            "the key PEM",
+        );
+        assert!(matches!(err, TlsError::Params(_)), "{err:?}");
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_chain_over_1_mib_as_pem_is_not_saved_and_nothing_changes_on_disk() {
+        // 0.12.0: only the leaf of a chain is checked against the key, so a
+        // filler block after it makes the chain as long as the test needs.
+        let (mut chain, key) = generate(&SelfSignedParams::default()).unwrap();
+        let leaf_len = pem::encode("CERTIFICATE", chain[0].as_ref()).unwrap().len();
+        // What `pem::encode` writes for `n` bytes of DER: the base64, a newline
+        // after every 64 characters of it, and the two label lines.
+        let block = |n: usize| {
+            let b64 = n.div_ceil(3) * 4;
+            b64 + b64.div_ceil(64) + 2 * "CERTIFICATE".len() + 32
+        };
+        let (mut lo, mut hi) = (0, MAX_MATERIAL_LEN);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            if leaf_len + block(mid) > MAX_MATERIAL_LEN {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        let total = leaf_len + block(lo);
+        assert!(total > MAX_MATERIAL_LEN && total <= MAX_MATERIAL_LEN + 5);
+        chain.push(CertificateDer::from(vec![0u8; lo]));
+        let long = TlsMaterial::from_der(chain, key, CertOrigin::Generated).unwrap();
+
+        let d = scratch("save-over-1-mib");
+        TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::default()))
+            .unwrap()
+            .save_pem(&d)
+            .unwrap();
+        let on_disk = || {
+            let mut names = fs::read_dir(&d)
+                .unwrap()
+                .map(|e| e.unwrap().file_name())
+                .collect::<Vec<_>>();
+            names.sort();
+            (
+                names,
+                fs::read(d.join(CERT_FILE)).unwrap(),
+                fs::read(d.join(KEY_FILE)).unwrap(),
+            )
+        };
+        let before = on_disk();
+        let err = long.save_pem(&d).unwrap_err();
+        assert!(matches!(err, TlsError::Params(_)), "{err:?}");
+        assert!(
+            err.to_string().contains(&format!(
+                "the certificate chain is {total} bytes as PEM, over the bound of 1048576 bytes; \
+                 nothing was written"
+            )),
+            "{err}"
+        );
+        assert_eq!(on_disk(), before);
+        let missing = d.join("missing");
+        long.save_pem(&missing).unwrap_err();
+        assert!(!missing.exists());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn more_than_100_names_or_a_pem_over_the_announcement_bound_is_refused_at_generation() {
+        // 0.12.0
+        let generated = |sans: Vec<String>| {
+            TlsMaterial::load(&CertSource::self_signed(SelfSignedParams::new("x", sans)))
+        };
+        let short = |n: usize| (0..n).map(|i| format!("n{i}.example.test")).collect();
+        generated(short(MAX_SANS)).unwrap();
+        let err = generated(short(MAX_SANS + 1)).unwrap_err();
+        assert!(matches!(err, TlsError::Params(_)), "{err:?}");
+        assert!(
+            err.to_string()
+                .contains("the SAN list has 101 names, over the bound of 100"),
+            "{err}"
+        );
+
+        // Sixty names of 253 bytes make a certificate of about 21 KiB as PEM.
+        let long = (0..60)
+            .map(|i| {
+                format!(
+                    "{}.{}.{}.{i:0>61}",
+                    "a".repeat(63),
+                    "b".repeat(63),
+                    "c".repeat(63)
+                )
+            })
+            .collect();
+        let err = generated(long).unwrap_err();
+        assert!(matches!(err, TlsError::Params(_)), "{err:?}");
+        assert!(
+            err.to_string()
+                .contains("as PEM, over the bound of 16384 bytes"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn der_over_1_mib_is_not_fingerprinted() {
+        // 0.12.0
+        cert_fingerprint_sha256(&vec![0u8; MAX_MATERIAL_LEN]).unwrap();
+        let err = cert_fingerprint_sha256(&vec![0u8; MAX_MATERIAL_LEN + 1]).unwrap_err();
+        assert!(matches!(err, TlsError::Params(_)), "{err:?}");
+        assert!(
+            err.to_string()
+                .contains("the certificate DER is 1048577 bytes, over the bound of 1048576 bytes"),
+            "{err}"
+        );
     }
 
     #[test]

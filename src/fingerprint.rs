@@ -16,6 +16,10 @@
 
 use crate::error::TlsError;
 
+/// The longest fingerprint text [`parse_fingerprint`] takes, in bytes: the
+/// characters a fingerprint is written with are ASCII *(0.12.0)*.
+const MAX_FINGERPRINT_TEXT_LEN: usize = 256;
+
 /// Parses a fingerprint string the operator may have clipped from anywhere.
 ///
 /// Deliberately tolerant on format: upper/lowercase, colons, spaces and a
@@ -29,7 +33,16 @@ use crate::error::TlsError;
 /// one is for values HUMANS transcribe. The two must not be merged — loosening
 /// the wire form is a protocol hole, and hardening the operator form is a
 /// usability trap.
+///
+/// A text over 256 bytes is [`TlsError::Fingerprint`], refused before a
+/// character is looked at *(0.12.0)*.
 pub(crate) fn parse_fingerprint(s: &str) -> Result<[u8; 32], TlsError> {
+    if s.len() > MAX_FINGERPRINT_TEXT_LEN {
+        return Err(TlsError::Fingerprint(format!(
+            "the fingerprint text is {} bytes, over the bound of {MAX_FINGERPRINT_TEXT_LEN} bytes",
+            s.len()
+        )));
+    }
     let trimmed = s.trim();
     let body = trimmed
         .strip_prefix("sha256:")
@@ -90,6 +103,24 @@ mod tests {
         assert_eq!(parse_fingerprint(&decorated).unwrap(), raw);
         assert_eq!(parse_fingerprint(&format!("sha256:{hex}")).unwrap(), raw);
         assert_eq!(parse_fingerprint(&format!("  {hex}  ")).unwrap(), raw);
+    }
+
+    #[test]
+    fn a_fingerprint_text_over_256_bytes_is_refused() {
+        // 0.12.0: the 64 digits padded with spaces to the bound are accepted;
+        // one byte more is refused by its length.
+        let raw = [0xabu8; 32];
+        let hex = krypto::hex::encode(&raw).unwrap();
+        let at_bound = format!("{hex}{}", " ".repeat(MAX_FINGERPRINT_TEXT_LEN - hex.len()));
+        assert_eq!(parse_fingerprint(&at_bound).unwrap(), raw);
+
+        let err = parse_fingerprint(&format!("{at_bound} ")).unwrap_err();
+        assert!(matches!(err, TlsError::Fingerprint(_)), "{err:?}");
+        assert!(
+            err.to_string()
+                .contains("is 257 bytes, over the bound of 256 bytes"),
+            "{err}"
+        );
     }
 
     #[test]

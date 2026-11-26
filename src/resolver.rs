@@ -114,18 +114,23 @@ impl RotatingResolver {
         self.server_config_with_alpn(&[b"h2".to_vec(), b"http/1.1".to_vec()])
     }
 
-    /// Like [`RotatingResolver::server_config`], but with a custom ALPN list.
+    /// Like [`RotatingResolver::server_config`], but with a custom ALPN list,
+    /// checked as [`RotatingResolver::server_config_with`] checks it.
     pub fn server_config_with_alpn(&self, alpn: &[Vec<u8>]) -> Result<Arc<ServerConfig>, TlsError> {
         self.server_config_with(alpn, &crate::transport::TransportPolicy::default())
     }
 
     /// Like [`RotatingResolver::server_config_with_alpn`], with an explicit
     /// [`TransportPolicy`](crate::transport::TransportPolicy) (0.8.3).
+    ///
+    /// The ALPN list holds at most 16 entries of 1 to 255 bytes each; any
+    /// other list is [`TlsError::Params`] *(0.12.0)*.
     pub fn server_config_with(
         &self,
         alpn: &[Vec<u8>],
         transport: &crate::transport::TransportPolicy,
     ) -> Result<Arc<ServerConfig>, TlsError> {
+        crate::transport::check_alpn(alpn)?;
         let mut cfg = ServerConfig::builder_with_provider(transport.provider())
             .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
             .map_err(|e| TlsError::Rustls(e.to_string()))?

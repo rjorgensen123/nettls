@@ -30,6 +30,10 @@ __all__ = ["SSLContext"]
 # output by default.
 _CHUNK = 64 * 1024
 
+# The most protocols `set_alpn_protocols` takes, the bound nettls's config
+# builders put on an ALPN list (0.12.0).
+_MAX_ALPN_PROTOCOLS = 16
+
 
 class _UntrustedPeerSSLError(ssl.SSLCertVerificationError, UntrustedPeerError):
     pass
@@ -516,6 +520,12 @@ class SSLContext(ssl.SSLContext):
             )
         protocols = []
         for protocol in alpn_protocols:
+            # Refused at the first protocol over the bound, so an iterable
+            # without an end is never walked further than that.
+            if len(protocols) == _MAX_ALPN_PROTOCOLS:
+                raise ValueError(
+                    f"set_alpn_protocols was given more than {_MAX_ALPN_PROTOCOLS} protocols"
+                )
             name = protocol.encode("ascii")
             if not 1 <= len(name) <= 255:
                 raise ValueError("ALPN protocols must be 1 to 255 bytes long")

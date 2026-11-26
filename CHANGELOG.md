@@ -180,6 +180,13 @@ with the code.
 A key a message or a state file does not know was ignored. It is now
 refused, with an error that names it.
 
+### ⚠ Changed — what nettls reads or parses has an upper bound *(2026-11-26)*
+
+Files, PEM and DER, JSON text, signatures, fingerprints, peer names, ALPN
+lists and certificate names are refused above a bound, before they are read
+or parsed; `docs/API.md` gives each bound. `Schedule::new` and
+`Schedule::add_peer` now return a `Result`.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

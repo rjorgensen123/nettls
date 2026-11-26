@@ -109,7 +109,9 @@ impl Node {
             current: Mutex::new(m),
             previous: Mutex::new(None),
             pending: Mutex::new(None),
-            schedule: Mutex::new(Schedule::new(Vec::<String>::new(), 0)),
+            schedule: Mutex::new(
+                Schedule::new(Vec::<String>::new(), 0).expect("an empty peer list"),
+            ),
             peers: Mutex::new(HashMap::new()),
             peer_keys: Mutex::new(HashMap::new()),
             rotations: Mutex::new(0),
@@ -379,7 +381,9 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
                 return json!({"error": "require_ack_from: «name» is missing or not a string"});
             };
             let name = name.to_string();
-            node.schedule.lock().unwrap().add_peer(name.clone());
+            if let Err(e) = node.schedule.lock().unwrap().add_peer(name.clone()) {
+                return json!({"error": format!("require_ack_from: {e}")});
+            }
             node.ackers.lock().unwrap().push(name);
             json!({"ok": true})
         }
@@ -704,7 +708,8 @@ fn control(node: &Arc<Node>, m: &Value) -> Value {
                     .collect::<Result<_, String>>()?;
 
                 let ackers = strings(&t["ackers"], "ackers")?;
-                let mut r = Schedule::new(ackers.clone(), 0);
+                let mut r = Schedule::new(ackers.clone(), 0)
+                    .map_err(|e| format!("import: «ackers»: {e}"))?;
                 if node.pending.lock().unwrap().is_some() {
                     // The promise is binding: the peer may already have acked.
                     r.restore_announced(

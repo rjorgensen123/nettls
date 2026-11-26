@@ -119,9 +119,11 @@ impl ApprovalJson {
         serde_json::to_string(&self.to_rust()).map_err(json_err)
     }
 
-    /// Reads the JSON serde reads in Rust.
+    /// Reads the JSON serde reads in Rust. A text over 1 MiB is a
+    /// `ValueError`, refused before it is parsed (0.12.0).
     #[staticmethod]
     fn loads(s: &str) -> PyResult<Self> {
+        crate::check_json_text(s)?;
         serde_json::from_str(s)
             .map(Self::from_rust)
             .map_err(json_err)

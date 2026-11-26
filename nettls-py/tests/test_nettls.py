@@ -167,6 +167,12 @@ def test_invalid_json_is_a_value_error():
         AnnouncementJson.loads('{"v": 1}')
 
 
+def test_a_json_text_over_1_mib_is_a_value_error_before_it_is_parsed():
+    # 0.12.0: the text is not JSON at all; the bound refuses it before serde.
+    with pytest.raises(ValueError, match="is 1048577 bytes, over the bound of 1048576 bytes"):
+        AnnouncementJson.loads("x" * (1024 * 1024 + 1))
+
+
 def test_an_unknown_key_is_a_value_error_that_names_it():
     data = json.loads(Handled.new("service", "gateway", FP_B, 100, SEED).to_json().dumps())
     data["extra"] = 1
@@ -433,6 +439,17 @@ def receipt_for(peer, new_fp):
     """A receipt from `peer` to "gw" for the announcement of `new_fp`, which
     verifies against PEER_KEY."""
     return Receipt.new(peer, "gw", new_fp, 100, SEED)
+
+
+def test_a_peer_name_outside_the_component_rule_is_refused():
+    # 0.12.0
+    with pytest.raises(nettls.ParamsError, match=r"peer 0: the character 'S' is outside \[a-z0-9-\]"):
+        A.Schedule(["Service"], 0)
+    r = A.Schedule(["service"], 0)
+    with pytest.raises(nettls.ParamsError, match="outside"):
+        r.add_peer("Portal")
+    r.announced(0)
+    assert r.waiting_for() == ["service"]
 
 
 def test_alarm_fires_after_twelve_hours_not_before():

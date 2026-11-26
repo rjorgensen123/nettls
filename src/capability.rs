@@ -117,7 +117,9 @@ impl SupportStatement {
     /// refused before anything else ([`TlsError::ProofInvalid`]) *(0.12.0)*.
     /// Fail-closed the whole way: unknown tokens, non-canonical order and a
     /// bad signature all reject — an unverifiable statement authorizes
-    /// nothing ([`TlsError::ProofInvalid`]).
+    /// nothing ([`TlsError::ProofInvalid`]). A signer's certificate over 1 MiB
+    /// of DER is refused before it is parsed, as such a [`TlsError::ProofInvalid`]
+    /// whose text names the bound *(0.12.0)*.
     pub fn verify(
         &self,
         expected_component: &str,
@@ -143,7 +145,7 @@ impl SupportStatement {
 }
 
 fn canonical_hex(s: &str) -> Result<Vec<u8>, TlsError> {
-    crate::signature::from_hex(s)
+    crate::signature::signature_from_hex(s, "signature")
 }
 
 /// The fallback rule (the decided pattern, verbatim):

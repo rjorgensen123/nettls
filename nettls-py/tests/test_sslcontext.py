@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import os
 import socket
 import ssl
@@ -499,6 +500,20 @@ def test_configuring_the_unused_openssl_context_is_refused():
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.options == ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).options
     assert context
+
+
+def test_more_than_16_alpn_protocols_are_refused():
+    # 0.12.0: by the config builders in Rust, by `TlsConnection.client`, and
+    # by `set_alpn_protocols`.
+    with pytest.raises(nettls.ParamsError, match="has 17 entries, over the bound of 16"):
+        SERVER.server_config_with_alpn([b"h2"] * 17)
+    with pytest.raises(nettls.ParamsError, match="has 17 entries, over the bound of 16"):
+        TlsConnection.client(nettls.pinned_client_config(PIN), "localhost", [b"h2"] * 17)
+    context = client_context()
+    context.set_alpn_protocols(["http/1.1"] * 16)
+    # An iterable without an end shows that the refusal comes at the 17th.
+    with pytest.raises(ValueError, match="was given more than 16 protocols"):
+        context.set_alpn_protocols(itertools.repeat("http/1.1"))
 
 
 def test_each_context_keeps_its_side_and_a_server_its_alpn():

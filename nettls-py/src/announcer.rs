@@ -81,18 +81,22 @@ impl Schedule {
 #[pymethods]
 impl Schedule {
     #[new]
-    fn py_new(peers: Vec<String>, attempt_at: i64) -> Self {
+    fn py_new(peers: Vec<String>, attempt_at: i64) -> PyResult<Self> {
         Self::new(peers, attempt_at)
     }
 
+    /// Each peer is a component name, and there are at most 1024 (0.12.0).
     #[staticmethod]
-    fn new(peers: Vec<String>, attempt_at: i64) -> Self {
-        Self::wrap(an::Schedule::new(peers, attempt_at))
+    fn new(peers: Vec<String>, attempt_at: i64) -> PyResult<Self> {
+        an::Schedule::new(peers, attempt_at)
+            .map(Self::wrap)
+            .map_err(err)
     }
 
+    /// Checked as `Schedule.new` checks a peer; nothing changes on an error
+    /// (0.12.0).
     fn add_peer(&self, name: String) -> PyResult<()> {
-        lock(&self.inner)?.add_peer(name);
-        Ok(())
+        lock(&self.inner)?.add_peer(name).map_err(err)
     }
 
     fn remove_peer(&self, name: &str) -> PyResult<()> {

@@ -33,6 +33,11 @@
 
 use crate::error::TlsError;
 
+/// The longest signature a message read from JSON may carry, in hex: 144
+/// characters, the 72 bytes of the longest DER-encoded ECDSA P-256 signature.
+/// An Ed25519 signature, 64 bytes, fits under it *(0.12.0)*.
+const MAX_SIGNATURE_HEX_LEN: usize = 144;
+
 /// Hex → bytes for a §6 message field (a signature or a key).
 ///
 /// The wire form is normative (§6.5): **lowercase**, even length — and a §6
@@ -54,6 +59,21 @@ pub fn from_hex(s: &str) -> Result<Vec<u8>, TlsError> {
     })
 }
 
+/// [`from_hex`] for the signature field `field` of a message read from JSON.
+/// A text over [`MAX_SIGNATURE_HEX_LEN`] bytes is [`TlsError::Proof`], refused
+/// before it is decoded *(0.12.0)*. Every signature field nettls reads from a
+/// message is decoded here.
+pub(crate) fn signature_from_hex(s: &str, field: &str) -> Result<Vec<u8>, TlsError> {
+    if s.len() > MAX_SIGNATURE_HEX_LEN {
+        return Err(TlsError::Proof(format!(
+            "{field} is {} bytes of hex, over the bound of {MAX_SIGNATURE_HEX_LEN} for a signature; \
+             it was not decoded",
+            s.len()
+        )));
+    }
+    from_hex(s)
+}
+
 // --------------------------------------------------------------------------- //
 // ECDSA P-256 — the certificate lineage
 // --------------------------------------------------------------------------- //
@@ -66,6 +86,8 @@ pub fn from_hex(s: &str) -> Result<Vec<u8>, TlsError> {
 ///
 /// The bytes must be exactly one certificate, nothing after it, and the key's
 /// parameters must name the curve P-256 (OID 1.2.840.10045.3.1.7) *(0.12.0)*.
+/// More than 1 MiB of DER is [`TlsError::Params`], refused before it is parsed
+/// *(0.12.0)*.
 pub fn p256_public_key(cert_der: &[u8]) -> Result<Vec<u8>, TlsError> {
     let cert = crate::material::read_certificate(cert_der)?;
     let spki = cert.public_key();
@@ -117,7 +139,8 @@ pub fn p256_public_key(cert_der: &[u8]) -> Result<Vec<u8>, TlsError> {
 /// the whole reason the announcement carries the certificate in full (§6.5).
 ///
 /// The key is read with [`p256_public_key`], so the certificate must be
-/// exactly one certificate with a P-256 key *(0.12.0)*.
+/// exactly one certificate with a P-256 key *(0.12.0)*, of at most 1 MiB
+/// *(0.12.0)*.
 pub fn verify_p256(cert_der: &[u8], message: &[u8], signature: &[u8]) -> Result<(), TlsError> {
     let key = p256_public_key(cert_der)?;
     krypto::sign::ecdsa_p256_verify(&key, message, signature).map_err(|_| {

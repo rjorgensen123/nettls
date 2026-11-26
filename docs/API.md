@@ -81,7 +81,9 @@ to protect; `save_pem` holds a key's PEM in a `SecretBuf` until it is on disk (0
 unmaintained).
 
 `encode` fails with `TlsError::Encode` when the DER is over krypto's size limit, or the memory for
-the base64 or the PEM text could not be reserved *(0.12.0)*.
+the base64 or the PEM text could not be reserved *(0.12.0)*. The label is 1 to 64 characters:
+capital letters `A`–`Z`, digits and single spaces, with no space first or last; any other label is
+`Params`, refused before the DER is encoded *(0.12.0)*.
 
 **Traits of the public types:**
 
@@ -144,12 +146,15 @@ sets 365 days. Strings that parse as IP addresses become IP SANs, the rest DNS S
 
 The parameters are checked when a certificate is generated (`self_signed`, `auto` when it
 generates, `Announcer::prepare`); a stored pair that loads is reused without them being checked.
-Each failure is `Params`: the SAN list is empty; `valid_days` is outside 1 to 397; the common name
+Each failure is `Params`: the SAN list is empty, or has more than 100 names *(0.12.0)*;
+`valid_days` is outside 1 to 397; the common name
 is empty or only whitespace, longer than 64 characters, or has a control character. A SAN that
 parses as an IP address is taken as it is. A DNS name is at most 253 bytes, a trailing dot
 counted, may end in one dot, has no empty part, and each part is at most 63 bytes of ASCII letters
 (either case), digits and hyphens, with no hyphen first or last; the wildcard rule is under
-`is_valid_san`. A failure inside rcgen is `Generate`.
+`is_valid_san`. A failure inside rcgen is `Generate`. A generated certificate whose PEM is over
+`MAX_CERT_PEM_LEN` (16 KiB), the most an announcement carries, is refused with `Params`
+*(0.12.0)*.
 
 ### `CertSource`
 
@@ -167,6 +172,11 @@ impl CertSource {
 against, and a PRIVATE KEY, RSA PRIVATE KEY or EC PRIVATE KEY block; a missing or unreadable
 block is `Pem` at `load`. A key that does not belong to the leaf, or that the provider does not
 take, is `KeyMismatch`.
+
+Each file of `files` is at most 1 MiB: a longer one is `Io` at `load`, refused before it is read,
+and so is a file that grows past 1 MiB while it is read. The certificate PEM and the key PEM given
+to `pem` are each at most 1 MiB; a longer one is `Params` at `load`, refused before it is parsed
+*(0.12.0)*.
 
 ### `TlsMaterial`
 
@@ -212,9 +222,11 @@ every save, and before `auto`, or an `Announcer` without a password, loads the p
 with or without `key.tmp`, means nothing was put in place, and both are removed; `key.tmp` alone
 is put in place when it belongs to the certificate in place, by the same check `load` makes, and
 removed when it does not. A temp file that is a symbolic link is removed and never read; one that
-is not a regular file, or cannot be read or removed, is an error that names it. `save_pem` creates
+is not a regular file, or cannot be read or removed, is an error that names it. A `key.tmp`, or the
+certificate in place it is checked against, over 1 MiB is `Io` and is not read *(0.12.0)*. `save_pem` creates
 `dir` and any missing parent with mode 0700; an existing directory keeps its mode. A private key
-form it cannot write as PEM is `Pem`.
+form it cannot write as PEM is `Pem`. A chain or a key whose PEM would be over 1 MiB, which the
+next load refuses, is `Params`, and nothing is written or changed on disk *(0.12.0)*.
 
 **`anchor_pkcs8` (0.8.1)** is the ONE documented place the key crosses from the TLS domain into
 the §6 domain: it feeds `Announcer::new`'s anchor, so announcements are signed with the same
@@ -264,7 +276,8 @@ to the operator (the certificate is sent in cleartext in every handshake anyway)
 retired `rotation` module before 0.8.2.)*
 
 It fails with `TlsError::Encode` when the fingerprint cannot be encoded as hex *(0.12.0)*. It
-hashes the bytes it is given and does not check that they are a certificate.
+hashes the bytes it is given and does not check that they are a certificate. More than 1 MiB of
+DER is `Params`, refused before it is hashed *(0.12.0)*.
 
 Every fingerprint nettls gives out (`TlsMaterial::fingerprint_sha256`, `Generation::fingerprint`,
 `cert_fingerprint_sha256`) is 64 lowercase hex characters, with no prefix and no separators. Where
@@ -315,14 +328,18 @@ check its own dates: it serves what it has, and the status report warns.
 **The pin.** `fingerprint_sha256` is 64 hex digits, either case. Whitespace around it is trimmed,
 one prefix `sha256:`, `SHA256:` or `sha256-` is dropped, and colons, spaces, hyphens, tabs and line
 breaks between the digits are skipped; any other character, or another number of digits, is
-`TlsError::Fingerprint`.
+`TlsError::Fingerprint`. A text over 256 bytes is `Fingerprint` too, refused before it is read
+*(0.12.0)*.
 
 **What is checked.** The pinned and `Trust` verifiers ignore the server name and any intermediate
 certificates: the identity is the SHA-256 of the leaf alone. `RotatingResolver` ignores SNI. A poisoned lock
 during a handshake makes `Trust` refuse the certificate as untrusted, and the resolver offer no
 certificate. The client configs without an `alpn` argument (`pinned_client_config`,
 `unverified_client_config`, `Trust::client_config`) set no ALPN, and an empty `alpn` list turns
-ALPN off in every config builder that takes one.
+ALPN off in every config builder that takes one. Every call that takes an ALPN list, each
+`_with_alpn` and `_with` builder of `TlsMaterial`, `RotatingResolver`, `Trust` and `pin`, and
+`TlsConnection.client` in Python, takes at most 16 entries of 1 to 255 bytes each; any other list is
+`Params` *(0.12.0)*.
 
 ### `transport` — the channel's cipher is the consumer's choice *(new in 0.8.3)*
 
@@ -427,10 +444,19 @@ pub enum Received { Stored, Known }   // Known = idempotent re-receipt, not an e
 A `Generation` is always exactly one X.509 certificate, of any key type: `from_der`, and `from_pem`
 after reading the one CERTIFICATE block, refuse anything else, bytes left over after the
 certificate included, with `TlsError::Certificate` *(0.12.0)*. `from_pem` refuses PEM that has
-not exactly one CERTIFICATE block with `Pem`.
+not exactly one CERTIFICATE block with `Pem`, and PEM over `MAX_CERT_PEM_LEN` with `Params`, as
+`der_from_pem` does *(0.12.0)*.
 
 `Generation::from_der` fails with `TlsError::Encode` when the fingerprint cannot be encoded as hex
 *(0.12.0)*.
+
+A certificate given as DER is at most 1 MiB wherever nettls parses it *(0.12.0)*:
+`Generation::from_der`, `p256_public_key` and `verify_p256`, and the verify calls that read a key
+from a certificate with them, `Announcement::verify` (the receiver's certificates, also through
+`Recognition::verify` and `Context`) and `SupportStatement::verify` (the signer's certificate).
+More is `Params`, refused before it is parsed. `Announcement::verify` compares the receiver's
+fingerprints before it reads a key, and `SupportStatement::verify` gives every failure of its
+signature check as `ProofInvalid`, the bound's text included.
 
 ### `Generations` — the state for ONE peer
 
@@ -500,10 +526,21 @@ pub const MAX_CERT_PEM_LEN: usize = 16 * 1024;      // DoS cap on incoming PEM
 pub const ARCHIVE_FILE: &str = "announcements.jsonl";
 pub fn archive(dir: &Path, k: &Announcement) -> Result<(), TlsError>;             // append-only audit
         // created 0600; one write per record (0.12.0); Proof if it cannot be serialized
+        // a record over 64 KiB → Params; nothing is written, the file is not opened (0.12.0)
 pub fn read_archive(dir: &Path) -> Result<(Vec<Announcement>, usize), TlsError>;  // → (read, skipped)
         // form-checked only, nothing verified; a line that is not UTF-8 is skipped too (0.12.0)
         // no file → (empty, 0); a line of only ASCII whitespace is ignored and not counted
+        // over 64 MiB → Io, not read; a line over 64 KiB is skipped and counted (0.12.0)
 ```
+
+`der_from_pem` refuses a PEM over `MAX_CERT_PEM_LEN` (16 KiB) with `Params`, before it is parsed
+*(0.12.0)*. Every certificate PEM nettls parses for an announcement, an identity or a `Generation`
+goes through it: `fingerprint_from_pem`, `Announcement::new` and `verify`, `Generation::from_pem`
+and the reading of an `IdentityJson`. `read_archive` refuses an archive over 64 MiB, and one that
+grows past 64 MiB while it is read, with `Io`. `archive` refuses a record longer than the 64 KiB
+`read_archive` reads with `Params`, and writes nothing, so it never writes a line `read_archive`
+skips *(0.12.0)*. The file itself has no bound when written, so the consumer replaces it before it
+reaches 64 MiB.
 
 ### `Announcement`
 
@@ -633,12 +670,13 @@ impl IdentityJson {
 
 Read `fingerprint`/`cert_pem` **from what is actually served** (the resolver), never from a
 cached startup value. `new` fails with `TlsError::Encode` when the announcement's signatures cannot
-be encoded as hex *(0.12.0)*.
+be encoded as hex *(0.12.0)*, and with `Params` for a `cert_pem` over `MAX_CERT_PEM_LEN`
+*(0.12.0)*.
 
 Reading an `IdentityJson` (serde, and `loads` in Python) requires `fingerprint`, written as
 lowercase hex with or without its `sha256:` prefix, to be the SHA-256 of the one certificate in
 `cert_pem`. A mismatch, or a `cert_pem` that is not exactly one X.509 certificate, fails the read
-*(0.12.0)*.
+*(0.12.0)*, and so does a `cert_pem` over `MAX_CERT_PEM_LEN`, before it is parsed *(0.12.0)*.
 
 ---
 
@@ -721,8 +759,9 @@ pub fn mode1_should_warn(now: i64, expires: i64) -> bool;                       
 pub enum ChainState { Idle { attempt_at: i64 }, Announced { waiting_for: BTreeSet<String>, first_announced: i64 } }
 
 impl Schedule {
-    pub fn new(peers: impl IntoIterator<Item = String>, attempt_at: i64) -> Self;
-    pub fn add_peer(&mut self, name: impl Into<String>);
+    pub fn new(peers: impl IntoIterator<Item = String>, attempt_at: i64)
+        -> Result<Self, TlsError>;               // peers checked (0.12.0)
+    pub fn add_peer(&mut self, name: impl Into<String>) -> Result<(), TlsError>;   // checked (0.12.0)
     pub fn remove_peer(&mut self, name: &str);   // no proof: the operator's named way out (0.12.0)
     pub fn should_announce(&self, now: i64) -> bool;
     pub fn announced(&mut self, now: i64);
@@ -755,9 +794,12 @@ fingerprint. A peer that has already acknowledged and acknowledges again with a 
 `Ok`, and nothing changes. A refusal is `TlsError::ProofInvalid` and changes nothing. `remove_peer`
 takes no proof: it is the operator's named way out, not an acknowledgement.
 
-Peer names are not checked when they are given (`Schedule::new`, `add_peer`, `Announcer::add_peer`). The
-acker of a receipt or handled message must be a component name and equal to the peer's name, so a
-peer listed under another form of name is never acknowledged.
+Peer names are checked when they are given (`Schedule::new`, `add_peer`, `Announcer::add_peer`)
+*(0.12.0)*: each must be a component name, by `require_component_name` (`[a-z0-9-]{1,32}`), and a
+schedule holds at most 1024 different peers. A name outside the rule, or a peer beyond the bound, is
+`Params`, and nothing changes; `Schedule::new` gives the place in the list of a name it refuses. A
+peer already in the schedule can be added again at the bound. The acker of a receipt or handled
+message must be a component name and equal to the peer's name.
 
 ### `Status` — for alerting
 
@@ -801,6 +843,7 @@ impl Announcer {
     pub fn acked_handled(&self, peer: &str, handled: &Handled, pinned_pubkey: &[u8])
         -> Result<(), TlsError>;   // the same, for a Handled (0.12.0)
     pub fn add_peer(&self, name: impl Into<String>) -> Result<(), TlsError>;   // persists (0.11.0)
+        // the name is checked as Schedule::add_peer checks it; nothing changes on an error (0.12.0)
     pub fn remove_peer(&self, name: &str) -> Result<(), TlsError>;             // persists (0.11.0)
         // no proof: the operator's named way out (0.12.0)
     pub fn roll_if_ready(&self, now: i64) -> Result<Option<String>, TlsError>;
@@ -849,7 +892,15 @@ it builds the announcement, after it has written `new/`.
 | `new/` | the announced pair: `material.locked`, or `cert.pem` + `key.pem` | 0700 |
 
 The previous-key file and `pending-rotation.json` refuse a JSON key they do not know when they are
-read at start *(0.12.0)*. The locked and JSON files are written through a temp file beside each (`material.tmp`,
+read at start *(0.12.0)*. Each file is checked against its bound before it is read *(0.12.0)*:
+`material.locked` and `previous-key.locked` against the longest file `lockbox::unlock` takes
+(header, salt and krypto's largest blob), with `Envelope`, saying the file was not read;
+`previous-key.json` and `pending-rotation.json` against 1 MiB, with `Io`. A file that grows past
+its bound while it is read is refused the same way. The pair in `new/` read while a promised
+rotation is restored at start is the exception: as for any error loading it there, the caller gets
+`Chain`, carrying the `Envelope` text of `new/material.locked` or the `Io` text of `new/cert.pem` or
+`new/key.pem`. A `new_cert_pem` in `pending-rotation.json`
+over `MAX_CERT_PEM_LEN` is `Params`. The locked and JSON files are written through a temp file beside each (`material.tmp`,
 `previous-key.tmp`, `pending-rotation.tmp`, `new/material.tmp`), created 0600; a leftover one is
 removed before the next write. `cert.pem` and `key.pem` go through `cert.tmp` and `key.tmp`, as
 under `save_pem`. A directory a save creates is made 0700. After a switch, `pending-rotation.json`
@@ -917,7 +968,8 @@ impl SupportStatement {
         // an empty list, an algorithm twice or a component name that breaks the rule → Params; the order is normalised
     pub fn verify(&self, expected_component: &str, signer_cert_der: &[u8]) -> Result<Vec<Alg>, TlsError>;
         // expected_component (0.12.0)
-        // then: a token list or component that breaks the rules → Params, a signature that is empty or not lowercase hex → Proof,
+        // then: a token list or component that breaks the rules → Params, a signature that is empty or not lowercase hex,
+        // or over 144 hex characters, refused before it is decoded (0.12.0) → Proof,
         // anything from the signature check, the certificate included → ProofInvalid
 }
 
@@ -1019,7 +1071,8 @@ pub fn verify_p256(cert_der: &[u8], message: &[u8], signature: &[u8]) -> Result<
 `p256_public_key` refuses bytes left over after the certificate, and a key whose parameters do not
 name the curve P-256 (OID 1.2.840.10045.3.1.7) *(0.12.0)*. It needs an EC key (id-ecPublicKey)
 with an uncompressed point of 65 bytes: another key kind is `ProofInvalid`, and bytes that are not
-exactly one certificate are `Certificate`. `verify_p256` reads the key the same way.
+exactly one certificate are `Certificate`. More than 1 MiB of DER is `Params`, refused before it
+is parsed *(0.12.0)*. `verify_p256` reads the key the same way.
 
 ## `canonical` — what actually gets signed
 
@@ -1062,7 +1115,9 @@ pub fn require_name(v: &str, field: &str, max: usize) -> Result<(), TlsError>; /
 `from_json` of `Announcement`, `Receipt`, `Handled` and `Approval` checks the fields by these rules
 (`Params`), and `new_cert_pem` against `MAX_CERT_PEM_LEN` (`Params`). It refuses with `Proof` a
 `v` that is not exactly the form's first line, a `prev_fingerprint` without `sig_prev` or the
-reverse, and a signature that is empty or not lowercase hex. `Announcement::from_json` does not
+reverse, and a signature that is empty or not lowercase hex, or longer than 144 hex characters, the
+72 bytes of the longest DER-encoded ECDSA P-256 signature, refused before it is decoded
+*(0.12.0)*. `Announcement::from_json` does not
 check that the fingerprints differ, that `new_cert_pem` is a certificate, or that
 `new_fingerprint` is its hash; `verify` does, and gives `Params` for an announcement that names one
 certificate twice.
@@ -1162,7 +1217,7 @@ pub enum TlsError {
 
 | Variant | When |
 |---|---|
-| `Io` | file/directory |
+| `Io` | file/directory; also a file over its bound, refused before it is read *(0.12.0)* |
 | `Pem` | the PEM could not be read |
 | `KeyMismatch` | the key does not belong to the certificate; the message gives the certificate's SHA-256 fingerprint, and both file names when the pair was read from files *(0.12.0)* |
 | `Certificate` | the certificate could not be parsed |
@@ -1306,7 +1361,7 @@ How the Rust forms read in Python:
 | `krypto::Alg` | `nettls_py.Alg`: `Aegis256`, `XChaCha20Poly1305`, `Aes256Gcm` |
 | A closure (`roll_if_ready_gated`, an approval's key lookup) | A function. An exception it raises fails the call closed, and is raised afterwards. The gate must return a `bool` (PyO3 also takes NumPy's), and a key lookup `None` or what a `Vec<u8>` argument takes; anything else fails the call closed the same way, with the `TypeError` (or `OverflowError`) the conversion gives: nothing is switched, and the key counts as unknown |
 | A value taken by value (`OwnMaterial` into `Announcer::new`) | The `OwnMaterial` is taken; using it afterwards is a `ValueError`. It is taken before `Announcer::new` runs, so a constructor that then fails leaves it used up. A `Schedule` given to `Announcer.new` and `Generations` given to `Trust.from_state` are copied and stay usable, and every other object a call takes by value is copied in |
-| `serde_json` on the JSON types and the status report | `x.dumps()`, and `X.loads(s)` where Rust can read it back. What serde refuses in `loads`, the fingerprint check of `IdentityJson` included, is `ValueError("invalid JSON: …")` |
+| `serde_json` on the JSON types and the status report | `x.dumps()`, and `X.loads(s)` where Rust can read it back. What serde refuses in `loads`, the fingerprint check of `IdentityJson` included, is `ValueError("invalid JSON: …")`. A text over 1 MiB is a `ValueError` too, refused before it is parsed *(0.12.0)* |
 | `Debug` | `repr()`: the Rust `Debug` text, keys `[REDACTED]` as in Rust (`TlsMaterial`, `CertSource`, `RecipientKey`). `ClientConfig`, `ServerConfig` and `Stream` give a short name of their own, a plain enum `Class.Variant`. `OwnMaterial`, `Announcer`, `TlsConnection`, `Context` and the enums with data (`ChainState`, `ModeCheck`, `Deviation`, `Recognition`) have Python's default |
 | `PartialEq` | `==` by value for `Announcement`, `Receipt`, `Handled`, `Approval`, `Recognition`, `Generation`, `Generations`, `TransportPolicy`, `Status`, `ChainState`, `ModeCheck`, `Deviation`, `FallToMode1` and `OwnTrio`, which are therefore not hashable. Other classes, the plain enums aside, compare by identity |
 | rustls `ClientConfig`, `ServerConfig` | Objects that `nettls_py.stream` and `nettls_py.sslcontext` take |
@@ -1382,7 +1437,8 @@ The caller moves the ciphertext; nothing waits, and nothing calls back into Pyth
 replaces the config's protocols for that connection, and an empty list offers none; an invalid
 `server_name` is `ParamsError`. While rustls holds plaintext, ciphertext that arrives
 waits in the connection until `read` has taken that plaintext, and `pending()` counts it; that
-queue has no limit. `write` can take less than it is given: take the output, then write the rest. A transport that ended
+queue holds at most 16 MiB *(0.12.0)*: a `receive` that would make more wait is `ValueError`,
+saying how much waits, how much was given and the bound, and none of it is taken. `write` can take less than it is given: take the output, then write the rest. A transport that ended
 without `close_notify` is `ConnectionResetError` once the plaintext that arrived has been read.
 Other failures are the stream's exceptions, a refused certificate included. A handshake or
 certificate failure is raised by `receive` or `receive_eof`; a failure that arrives behind
@@ -1398,7 +1454,8 @@ ctx.wrap_bio(incoming, outgoing, server_side=False, server_hostname=None, sessio
 ctx.wrap_socket(sock, server_side=False, do_handshake_on_connect=True,
                 suppress_ragged_eofs=True, server_hostname=None, session=None)
 ctx.set_alpn_protocols(alpn_protocols)   # client only, else ValueError; an iterable (else TypeError)
-                                         # of str of 1 to 255 ASCII characters: another length is
+                                         # of at most 16 (else ValueError, 0.12.0)
+                                         # str of 1 to 255 ASCII characters: another length is
                                          # ValueError, a non-ASCII str UnicodeEncodeError, an item
                                          # that is not a str (bytes too) AttributeError; a bare str
                                          # such as "h2" is itself such an iterable: "h" and "2"
@@ -1448,7 +1505,9 @@ size (`read` when it is given no buffer) with `ValueError`.
   end during the handshake stays `ssl.SSLEOFError`. On the socket form, socket errors pass through
   unchanged: a timeout is `TimeoutError`, a reset `ConnectionResetError`. The wrong side
   (`server_side=True` on a client context, or the reverse) is `ssl.SSLError`; a client without
-  `server_hostname`, and any `session`, are `ValueError`.
+  `server_hostname`, and any `session`, are `ValueError`. When `TlsConnection.receive` refuses
+  ciphertext for its 16 MiB bound, its `ValueError` passes through on both forms *(0.12.0)*; the
+  bytes already read from `incoming` or from the socket are not put back.
 - **The socket form.** `wrap_socket` refuses a non-blocking socket with `ValueError` and leaves it
   to the caller, and closes the socket after a failed handshake; with
   `do_handshake_on_connect=False` the first `recv` or `send` does the handshake. One thread can
