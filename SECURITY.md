@@ -101,7 +101,8 @@ you ask not to be.
 ## Scope
 
 This crate builds on established libraries — rustls, rcgen, x509-parser, and `krypto`
-for every cryptographic primitive.
+for every cryptographic primitive except the cipher of the AEGIS-256 TLS suite, which is the
+`aegis` crate.
 
 **A flaw in one of those is not this crate's to fix.** Report it to that project —
 that is where a fix can be made, and where every other user of it is waiting.

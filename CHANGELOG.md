@@ -192,6 +192,12 @@ or parsed; `docs/API.md` gives each bound. `Schedule::new` and
 An `Announcer` made without a password printed a note to stderr. The note
 is gone, and `Announcer::keys_locked()` gives the fact instead.
 
+### Fixed — README and SECURITY.md agree with the code *(2026-11-27)*
+
+They now name the AEGIS-256 TLS suite as the one place that calls a
+primitive outside krypto, the platform, and the locked memory the tests
+need.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

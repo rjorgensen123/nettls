@@ -21,8 +21,10 @@ continuity, signed receipts, generation pairs and an operator anchor.
 - **Dependencies:** rustls 0.23 (ring provider), rcgen 0.14, rustls-pki-types, x509-parser,
   serde/serde_json, time, aegis, zeroize, krypto 0.9. **No `axum`, no async runtime, no logging** —
   the crate returns `ServerConfig`/`ClientConfig` and facts; the consumer binds and logs.
-  **No direct `ring` or `x25519-dalek`** since 0.8.0 — every primitive is krypto's.
+  **No direct `ring` or `x25519-dalek`** since 0.8.0 — every primitive is krypto's, except in the
+  AEGIS-256 TLS suite, which calls the `aegis` crate directly.
 - **In use:** already carrying traffic in more than one application.
+- **Platform:** Linux. CI builds and tests on Linux, and the Python package declares Linux.
 - **Python:** the same crate, run from Python through PyO3: [`nettls-py`](nettls-py/) (module
   `nettls_py`, Python 3.11 or newer). One implementation, two languages *(0.11.0)* — see
   [`docs/Python.md`](docs/Python.md).
@@ -56,12 +58,16 @@ self-signed certificates instead of a CA chain, a fingerprint as the identity ra
 signature from a third party, and the §6 rotation protocol so that identity can change without
 the recognition breaking. Secure transport is the subject, not a feature.
 
-**The cryptography is not this crate's.** Every primitive — AEAD, key derivation, signatures,
-key exchange, constant-time comparison — lives in [`krypto`](https://crates.io/crates/krypto),
-and since 0.8.0 nothing here reaches a primitive directly. That was a decision, not an accident
-of layering: writing the same handful of primitives a second time, in a crate whose subject is
-transport, is how two implementations of the same thing end up disagreeing about it. What stays
-here is the TLS end — X.509, PEM, fingerprints, and the rotation protocol.
+**The cryptography is not this crate's.** Every primitive nettls itself calls — AEAD, key
+derivation, signatures, key exchange, constant-time comparison — lives in
+[`krypto`](https://crates.io/crates/krypto), and since 0.8.0 nothing here reaches a primitive
+directly. That was a decision, not an accident of layering: writing the same handful of primitives
+a second time, in a crate whose subject is transport, is how two implementations of the same thing
+end up disagreeing about it. What stays here is the TLS end — X.509, PEM, fingerprints, and the
+rotation protocol. TLS itself is rustls with the ring provider, and certificates are generated
+with rcgen. The one exception to the rule about primitives is the AEGIS-256 TLS suite: it calls
+the `aegis` crate, the same crate krypto uses for AEGIS at rest, because rustls needs the bare
+record cipher and krypto offers AEGIS only as sealing.
 
 ## The provider trap — the crate's most important job
 
@@ -183,6 +189,9 @@ VIRTUAL_ENV=.venv .venv/bin/maturin develop --locked -m nettls-py/Cargo.toml
 PYO3_PYTHON=.venv/bin/python cargo test -p nettls-py   # the Python API is the Rust API
 .venv/bin/pytest nettls-py/tests -q                    # vectors, error corpus, stream, the ring
 ```
+
+The tests hold secrets in locked memory. CI runs them under a memlock limit of 1 MiB;
+`ulimit -l 1024` sets the same locally.
 
 ## Reviews
 
