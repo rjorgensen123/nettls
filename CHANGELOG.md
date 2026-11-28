@@ -198,6 +198,11 @@ They now name the AEGIS-256 TLS suite as the one place that calls a
 primitive outside krypto, the platform, and the locked memory the tests
 need.
 
+### Added — a test that corrupted input does not make the crate panic *(2026-11-28)*
+
+`tests/corrupted_input.rs` corrupts a valid instance of each kind of input
+nettls reads and requires that every call returns.
+
 ## [0.12.0-rc1] — 2026-11-21
 
 *A pre-release, made to test two new things in real use before 0.12.0. Python

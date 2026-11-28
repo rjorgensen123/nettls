@@ -80,6 +80,19 @@ the cases in the corpus (the handled message *(0.12.0)* is not in it): the error
 `testvectors/errors.json`, run by `incoming_announcement_is_rejected`,
 `incoming_receipt_is_rejected` and `incoming_approval_is_rejected` in `tests/errors.rs`, and by
 the same tests with a `test_` prefix in `nettls-py/tests/test_errors.py`. A panic fails them.
+Guard, for corrupted input: `tests/corrupted_input.rs` takes one valid instance of the
+announcement, the receipt, the handled message, the approval, the identity (`IdentityJson`), the
+support statement, a certificate as PEM and as DER, the certificate and key PEM `CertSource::pem`
+takes, the pin, the envelope, the locked file, the announcer's `pending-rotation.json`,
+`previous-key.json`, `cert.pem` and `key.pem`, and the archive. It replaces, cuts off, inserts and
+repeats bytes in it, each corruption drawn from a fixed seed, and hands the corrupted instance to
+the public call that reads it. A panic fails the test; what a call answers to a corrupted instance
+is not checked. A valid instance made with a fresh key, salt or signature differs from run to run,
+so a panic is reported with the corrupted input. The locked file is corrupted only in what
+`lockbox::unlock` checks before it derives a key from the password (the header, and that the file
+holds header and salt), and an instance that would pass those checks is not handed on. The
+announcer's files are read without a password, so its locked files are not covered, and neither is
+the pair in `new/`, which is loaded by the same code as `cert.pem` and `key.pem`.
 
 ## Answers
 
